@@ -69,14 +69,12 @@ pub fn replicate_pg_table_and_create_parquet(
     output_dir: &str,
 ) -> MooncakeTableMetadata {
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let metadata = rt
-        .block_on(replicate_pg_table_and_create_parquet_async(
-            table_name, output_dir,
-        ));
+    let metadata = rt.block_on(replicate_pg_table_and_create_parquet_async(
+        table_name, output_dir,
+    ));
     if let Err(e) = metadata {
         panic!("Error: {:?}", e)
-    }
-    else {
+    } else {
         metadata.unwrap()
     }
 }
