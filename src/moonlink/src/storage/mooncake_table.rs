@@ -6,8 +6,8 @@ use crate::storage::delete_vector::BatchDeletionVector;
 use crate::storage::disk_slice::DiskSliceWriter;
 use crate::storage::mem_slice::MemSlice;
 use crate::storage::table_utils::{ProcessedDeletionRecord, RawDeletionRecord, RecordLocation};
-use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
+use arrow_schema::Schema;
 use parquet::arrow::ArrowWriter;
 use std::collections::{BTreeMap, HashMap};
 use std::mem::{swap, take};
@@ -41,17 +41,17 @@ impl TableConfig {
     }
 }
 
-struct TableMetadata {
+pub struct TableMetadata {
     /// table name
-    name: String,
+    pub(crate) name: String,
     /// table id
-    id: u64,
+    pub(crate) id: u64,
     /// table schema
-    schema: Arc<Schema>,
+    pub(crate) schema: Arc<Schema>,
     /// table config
-    config: TableConfig,
+    pub(crate) config: TableConfig,
     /// storage path
-    path: PathBuf,
+    pub(crate) path: PathBuf,
     /// function to get lookup key from row
     pub(crate) get_lookup_key: fn(&MoonlinkRow) -> i64,
 }
@@ -61,9 +61,11 @@ struct TableMetadata {
 ///
 pub struct Snapshot {
     /// table metadata
-    metadata: Arc<TableMetadata>,
+    pub(crate) metadata: Arc<TableMetadata>,
     /// datafile and their deletion vectors
-    disk_files: HashMap<PathBuf, BatchDeletionVector>,
+    ///
+    /// TODO(hjiang): Check if we can or should write parquet files directly to destination.
+    pub(crate) disk_files: HashMap<PathBuf, BatchDeletionVector>,
     /// Current snapshot version
     snapshot_version: u64,
     /// indices
@@ -71,7 +73,7 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    fn new(metadata: Arc<TableMetadata>) -> Self {
+    pub fn new(metadata: Arc<TableMetadata>) -> Self {
         Self {
             metadata,
             disk_files: HashMap::new(),

@@ -12,6 +12,8 @@ parquet.workspace = true
 uuid.workspace = true
 futures.workspace = true
 multimap.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
 iceberg.workspace = true
 iceberg-catalog-memory.workspace = true
 

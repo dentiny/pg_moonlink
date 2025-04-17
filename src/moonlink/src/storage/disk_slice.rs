@@ -2,8 +2,8 @@ use crate::error::{Error, Result};
 use crate::storage::data_batches::BatchEntry;
 use crate::storage::index::{FileIndex, MemIndex, ParquetFileIndex};
 use crate::storage::table_utils::{FileId, ProcessedDeletionRecord, RecordLocation};
-use arrow::datatypes::Schema;
-use arrow::record_batch::RecordBatch;
+use arrow_array::RecordBatch;
+use arrow_schema::Schema;
 use parquet::arrow::ArrowWriter;
 use std::collections::HashMap;
 use std::fs::File;
@@ -181,7 +181,8 @@ mod tests {
     use crate::row::{MoonlinkRow, RowValue};
     use crate::storage::mem_slice::MemSlice;
     use crate::storage::table_utils::RawDeletionRecord;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field};
+    use arrow_schema::Schema;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use tempfile::tempdir;
 

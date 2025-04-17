@@ -4,7 +4,7 @@ use crate::storage::column_array_builder::ColumnArrayBuilder;
 use crate::storage::delete_vector::BatchDeletionVector;
 use crate::storage::table_utils::RecordLocation;
 use arrow::array::{ArrayRef, RecordBatch};
-use arrow::datatypes::Schema;
+use arrow_schema::Schema;
 use std::sync::Arc;
 
 #[derive(Debug)]
