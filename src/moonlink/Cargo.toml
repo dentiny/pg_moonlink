@@ -12,5 +12,8 @@ parquet.workspace = true
 uuid.workspace = true
 futures.workspace = true
 multimap.workspace = true
+iceberg.workspace = true
+iceberg-catalog-memory.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
