@@ -17,12 +17,19 @@ async-trait = "0.1"
 pg_replicate = { git = "https://github.com/Mooncake-Labs/pg_replicate", rev = "b80f6905239e04a150bb788ba0f5b1f1ae0b9b15" }
 tokio.version = "1.38"
 tokio-postgres = { git = "https://github.com/imor/rust-postgres", rev = "20265ef38e32a06f76b6f9b678e2077fc2211f6b" }
-arrow = "54.2.1"
+arrow = "54.0.0"
 thiserror = "2.0.12"
-parquet = "54.2.1"
+parquet = "54.0.0"
 tempfile = "3.18.0"
 uuid = "1.15.1"
 futures = "0.3.31"
 multimap = "0.10.0"
-chrono = "0.4.40"
+chrono = "=0.4.39"
 num-traits = "0.2.19"
+
+# TODO(hjiang): Check dependency freshness.
+iceberg = "0.4.0"
+iceberg-catalog-memory = "0.4.0"
+
+# [patch.crates-io]
+# chrono = "=0.4.39"
