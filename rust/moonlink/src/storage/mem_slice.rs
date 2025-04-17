@@ -3,8 +3,8 @@ use crate::row::MoonlinkRow;
 use crate::storage::data_batches::{BatchEntry, ColumnStoreBuffer};
 use crate::storage::index::{Index, MemIndex};
 use crate::storage::table_utils::{RawDeletionRecord, RecordLocation};
-use arrow::array::RecordBatch;
-use arrow::datatypes::Schema;
+use arrow_array::RecordBatch;
+use arrow_schema::Schema;
 use std::mem::swap;
 use std::sync::Arc;
 
@@ -82,8 +82,8 @@ mod tests {
 
     use super::*;
     use crate::row::RowValue;
-    use arrow::datatypes::Schema;
     use arrow::datatypes::{DataType, Field};
+    use arrow_schema::Schema;
 
     #[test]
     fn test_mem_slice() {

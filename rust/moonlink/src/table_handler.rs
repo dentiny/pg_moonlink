@@ -2,7 +2,7 @@ use crate::error::Result;
 use crate::row::MoonlinkRow;
 use crate::storage::DiskSliceWriter;
 use crate::storage::MooncakeTable;
-use arrow::datatypes::Schema;
+use arrow_schema::Schema;
 use std::path::PathBuf;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::oneshot;
