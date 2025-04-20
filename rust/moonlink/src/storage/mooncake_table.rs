@@ -62,10 +62,12 @@ pub struct TableMetadata {
 pub struct Snapshot {
     /// table metadata
     pub(crate) metadata: Arc<TableMetadata>,
-    /// datafile and their deletion vectors
+    /// Maps from datafile to their deletion vectors.
+    /// It's worth noting data file paths get updated after exporting to iceberg. 
     ///
     /// TODO(hjiang): Check if we can or should write parquet files directly to destination.
     pub(crate) disk_files: HashMap<PathBuf, BatchDeletionVector>,
+
     /// Current snapshot version
     snapshot_version: u64,
     /// indices

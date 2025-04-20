@@ -7,10 +7,10 @@ use arrow::util::bit_util;
 #[derive(Debug)]
 pub struct BatchDeletionVector {
     /// Boolean array tracking deletions (false = deleted, true = active)
-    deletion_vector: Option<Vec<u8>>,
+    pub deletion_vector: Option<Vec<u8>>,
 
     /// Maximum number of rows this buffer can track
-    max_rows: usize,
+    pub max_rows: usize,
 }
 
 impl BatchDeletionVector {

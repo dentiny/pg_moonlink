@@ -1,9 +1,11 @@
 use crate::error::Result;
 use crate::storage::mooncake_table::Snapshot;
+use crate::storage::delete_vector::BatchDeletionVector;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow_array::{Int64Array, StringArray};
 use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
 use arrow::ipc::reader::FileReader;
 use arrow_array::RecordBatch;
@@ -30,6 +32,7 @@ use iceberg_catalog_memory::MemoryCatalog;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::properties::WriterProperties;
 use std::path::{Path, PathBuf};
+use iceberg::writer::position_delete_writer::PositionDeleteWriterBuilder;
 
 // UNDONE(Iceberg):
 
@@ -157,12 +160,54 @@ async fn write_record_batch_to_iceberg(
     Ok(())
 }
 
+async fn write_deletion_file_to_iceberg(
+        table: &IcebergTable, 
+        deletion_vector: &BatchDeletionVector, 
+        source_data_file_path: &str) -> IcebergResult<()> {
+    // Collect positions that are deleted
+    let deleted_positions: Vec<i64> = (0..deletion_vector.max_rows)
+        .filter(|&i| deletion_vector.is_deleted(i))
+        .map(|i| i as i64)
+        .collect();
+
+    if deleted_positions.is_empty() {
+        return Ok(())
+    }
+
+    // Build Arrow columns
+    let file_path_array = Arc::new(StringArray::from(vec![source_data_file_path; deleted_positions.len()]));
+    let pos_array = Arc::new(Int64Array::from(deleted_positions));
+    let batch = RecordBatch::try_from_iter(vec![
+        ("file_path", file_path_array as _),
+        ("pos", pos_array as _),
+    ])?;
+
+    // Create an output location
+    let file_io = FileIOBuilder::new("memory").build()?; // this is in-memory
+    let output_file = file_io.new_output("memory::delete/pos_delete.parquet")?;
+
+    // Build the writer
+    let mut writer = PositionDeleteWriterBuilder::new()
+        .file_format(DataFileFormat::Parquet)
+        .build(output_file)?;
+
+    writer.write(&batch)?;
+    let delete_file = writer.finish()?;
+
+    Ok(delete_file)
+}
+
 pub trait IcebergSnapshot {
     // Write the current version to iceberg
     async fn _export_to_iceberg(&self) -> IcebergResult<()>;
 
     // Create a snapshot by reading from iceberg
+    //
+    // expects to call at recovery.
     fn _load_from_iceberg(&self) -> Self;
+
+    // populate BatchDeletionVector fields
+    // PathBuf could still be remote files
 }
 
 /// TODO(hjiang): Currently use in-memory IO, instead persist it somewhere.
@@ -181,15 +226,11 @@ impl IcebergSnapshot for Snapshot {
         let disk_files_ref = &self.disk_files;
 
         // Step 4: Write batch into Iceberg table
-        for (file_path, _deletion_vector) in disk_files_ref {
+        for (file_path, deletion_vector) in disk_files_ref {
             write_record_batch_to_iceberg(&iceberg_table.clone(), file_path).await?;
+            // TODO(hjiang): Update date filepath.
+            write_deletion_file_to_iceberg(&iceberg_table.clone(), deletion_vector, "random").await?;
         }
-
-        println!(
-            "Exported snapshot to Iceberg table: {}/{}",
-            namespace.join("."),
-            table_name
-        );
 
         Ok(())
     }
