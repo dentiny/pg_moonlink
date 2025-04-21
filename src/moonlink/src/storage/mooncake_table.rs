@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tokio::spawn;
 use tokio::task::JoinHandle;
-struct TableConfig {
+pub(crate) struct TableConfig {
     /// mem slice size
     ///
     _mem_slice_size: usize,
