@@ -63,8 +63,6 @@ pub struct Snapshot {
     /// table metadata
     pub(crate) metadata: Arc<TableMetadata>,
     /// datafile and their deletion vectors
-    ///
-    /// TODO(hjiang): Check if we can or should write parquet files directly to destination.
     pub(crate) disk_files: HashMap<PathBuf, BatchDeletionVector>,
     /// Current snapshot version
     snapshot_version: u64,
@@ -73,7 +71,7 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    pub fn new(metadata: Arc<TableMetadata>) -> Self {
+    pub(crate) fn new(metadata: Arc<TableMetadata>) -> Self {
         Self {
             metadata,
             disk_files: HashMap::new(),
