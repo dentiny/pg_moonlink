@@ -14,9 +14,9 @@ edition = "2021"
 async-trait = "0.1"
 
 tokio-postgres = { git = "ssh://git@github.com/Mooncake-labs/rust-postgres.git"}
-arrow = "53.4.1"
+arrow = "54.2.1"
 thiserror = "2.0.12"
-parquet = "53.4.1"
+parquet = "54.2.1"
 tempfile = "3.18.0"
 futures = "0.3.31"
 multimap = "0.10.0"
@@ -25,7 +25,8 @@ num-traits = "0.2.19"
 postgres-replication = { git = "ssh://git@github.com/Mooncake-labs/rust-postgres.git" }
 tokio = { version = "1.38", features = ["rt-multi-thread", "macros"] }
 uuid = { version = "1.15.1", features = ["v4"] }
-arrow-array = "53.4.1"
-arrow-schema = "53.4.1"
-iceberg = "0.4.0"
-iceberg-catalog-memory = "0.4.0"
+arrow-array = "54.2.1"
+arrow-schema = "54.2.1"
+
+iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "53ceb2b5426f56efd1152a9daaa2fca25847b6ff"}
+iceberg-catalog-rest = { git = "https://github.com/apache/iceberg-rust.git", rev = "53ceb2b5426f56efd1152a9daaa2fca25847b6ff" }

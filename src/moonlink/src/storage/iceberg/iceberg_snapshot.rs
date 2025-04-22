@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType as ArrowType;
 use arrow_schema::Schema as ArrowSchema;
-use iceberg::io::FileIOBuilder;
 use iceberg::spec::{DataFile, DataFileFormat};
 use iceberg::spec::{
     NestedField, NestedFieldRef, PrimitiveType, Schema as IcebergSchema, Type as IcebergType,
@@ -21,7 +20,7 @@ use iceberg::writer::IcebergWriterBuilder;
 use iceberg::NamespaceIdent;
 use iceberg::TableCreation;
 use iceberg::{Catalog, Result as IcebergResult, TableIdent};
-use iceberg_catalog_memory::MemoryCatalog;
+use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::properties::WriterProperties;
 use std::path::PathBuf;
@@ -78,7 +77,7 @@ fn arrow_type_to_iceberg_type(data_type: &ArrowType) -> IcebergType {
 
 // Get or create an iceberg table in the given catalog from the given namespace and table name.
 async fn get_or_create_iceberg_table(
-    catalog: &MemoryCatalog,
+    catalog: &RestCatalog,
     namespace: &[&str],
     table_name: &str,
     arrow_schema: &ArrowSchema,
@@ -144,8 +143,11 @@ async fn write_record_batch_to_iceberg(
     );
 
     // TOOD(hjiang): Add support for partition values.
-    let data_file_writer_builder =
-        DataFileWriterBuilder::new(parquet_writer_builder, /*partition_valu=*/ None);
+    let data_file_writer_builder = DataFileWriterBuilder::new(
+        parquet_writer_builder,
+        /*partition_valu=*/ None,
+        /*partition_val=*/ 0,
+    );
     let mut data_file_writer = data_file_writer_builder.build().await?;
 
     while let Some(record_batch) = arrow_reader.next().transpose()? {
@@ -175,8 +177,11 @@ impl IcebergSnapshot for Snapshot {
         let table_name = self.metadata.name.clone();
         let namespace = vec!["default"];
         let arrow_schema = self.metadata.schema.as_ref();
-        let file_io = FileIOBuilder::new("memory").build()?;
-        let catalog = MemoryCatalog::new(file_io.clone(), None);
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri("http://localhost:8181".to_string())
+                .build(),
+        );
         let iceberg_table =
             get_or_create_iceberg_table(&catalog, &namespace, &table_name, arrow_schema).await?;
 
