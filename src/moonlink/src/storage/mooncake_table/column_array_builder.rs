@@ -3,10 +3,11 @@ use crate::row::RowValue;
 use arrow::array::builder::{BooleanBuilder, PrimitiveBuilder, StringBuilder};
 use arrow::array::types::{Float32Type, Float64Type, Int32Type, Int64Type};
 use arrow::array::{ArrayRef, FixedSizeBinaryBuilder};
+use arrow::compute::kernels::cast;
 use arrow::datatypes::DataType;
 use std::sync::Arc;
 /// A column array builder that can handle different types
-pub enum ColumnArrayBuilder {
+pub(super) enum ColumnArrayBuilder {
     Boolean(BooleanBuilder),
     Int32(PrimitiveBuilder<Int32Type>),
     Int64(PrimitiveBuilder<Int64Type>),
@@ -18,7 +19,7 @@ pub enum ColumnArrayBuilder {
 
 impl ColumnArrayBuilder {
     /// Create a new column array builder for a specific data type
-    pub fn new(data_type: DataType, capacity: usize) -> Self {
+    pub(super) fn new(data_type: DataType, capacity: usize) -> Self {
         match &data_type {
             DataType::Boolean => {
                 ColumnArrayBuilder::Boolean(BooleanBuilder::with_capacity(capacity))
@@ -49,7 +50,7 @@ impl ColumnArrayBuilder {
     }
 
     /// Append a value to this builder
-    pub fn append_value(&mut self, value: &RowValue) -> Result<(), Error> {
+    pub(super) fn append_value(&mut self, value: &RowValue) -> Result<(), Error> {
         match self {
             ColumnArrayBuilder::Boolean(builder) => {
                 match value {
@@ -112,8 +113,8 @@ impl ColumnArrayBuilder {
         }
     }
     /// Finish building and return the array
-    pub fn finish(&mut self) -> ArrayRef {
-        match self {
+    pub(super) fn finish(&mut self, logical_type: &DataType) -> ArrayRef {
+        let array: ArrayRef = match self {
             ColumnArrayBuilder::Boolean(builder) => Arc::new(builder.finish()),
             ColumnArrayBuilder::Int32(builder) => Arc::new(builder.finish()),
             ColumnArrayBuilder::Int64(builder) => Arc::new(builder.finish()),
@@ -121,7 +122,8 @@ impl ColumnArrayBuilder {
             ColumnArrayBuilder::Float64(builder) => Arc::new(builder.finish()),
             ColumnArrayBuilder::Utf8(builder) => Arc::new(builder.finish()),
             ColumnArrayBuilder::FixedSizeBinary(builder) => Arc::new(builder.finish()),
-        }
+        };
+        cast(&array, logical_type).unwrap()
     }
 }
 
@@ -140,7 +142,7 @@ mod tests {
         let mut builder = ColumnArrayBuilder::new(DataType::Int32, 2);
         builder.append_value(&RowValue::Int32(1)).unwrap();
         builder.append_value(&RowValue::Int32(2)).unwrap();
-        let array = builder.finish();
+        let array = builder.finish(&DataType::Int32);
         assert_eq!(array.len(), 2);
         let int32_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(int32_array.value(0), 1);
@@ -150,7 +152,7 @@ mod tests {
         let mut builder = ColumnArrayBuilder::new(DataType::Int64, 2);
         builder.append_value(&RowValue::Int64(100)).unwrap();
         builder.append_value(&RowValue::Int64(200)).unwrap();
-        let array = builder.finish();
+        let array = builder.finish(&DataType::Int64);
         assert_eq!(array.len(), 2);
         let int64_array = array.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(int64_array.value(0), 100);
@@ -160,7 +162,7 @@ mod tests {
         let mut builder = ColumnArrayBuilder::new(DataType::Float32, 2);
         builder.append_value(&RowValue::Float32(3.14)).unwrap();
         builder.append_value(&RowValue::Float32(2.71)).unwrap();
-        let array = builder.finish();
+        let array = builder.finish(&DataType::Float32);
         assert_eq!(array.len(), 2);
         let float32_array = array.as_any().downcast_ref::<Float32Array>().unwrap();
         assert!((float32_array.value(0) - 3.14).abs() < 0.0001);
@@ -170,7 +172,7 @@ mod tests {
         let mut builder = ColumnArrayBuilder::new(DataType::Float64, 2);
         builder.append_value(&RowValue::Float64(3.14159)).unwrap();
         builder.append_value(&RowValue::Float64(2.71828)).unwrap();
-        let array = builder.finish();
+        let array = builder.finish(&DataType::Float64);
         assert_eq!(array.len(), 2);
         let float64_array = array.as_any().downcast_ref::<Float64Array>().unwrap();
         assert!((float64_array.value(0) - 3.14159).abs() < 0.00001);
@@ -180,7 +182,7 @@ mod tests {
         let mut builder = ColumnArrayBuilder::new(DataType::Boolean, 2);
         builder.append_value(&RowValue::Bool(true)).unwrap();
         builder.append_value(&RowValue::Bool(false)).unwrap();
-        let array = builder.finish();
+        let array = builder.finish(&DataType::Boolean);
         assert_eq!(array.len(), 2);
         let bool_array = array.as_any().downcast_ref::<BooleanArray>().unwrap();
         assert_eq!(bool_array.value(0), true);
@@ -194,7 +196,7 @@ mod tests {
         builder
             .append_value(&RowValue::ByteArray("world".as_bytes().to_vec()))
             .unwrap();
-        let array = builder.finish();
+        let array = builder.finish(&DataType::Utf8);
         assert_eq!(array.len(), 2);
         let string_array = array.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(string_array.value(0), "hello");
@@ -210,7 +212,7 @@ mod tests {
         builder
             .append_value(&RowValue::FixedLenByteArray(bytes2))
             .unwrap();
-        let array = builder.finish();
+        let array = builder.finish(&DataType::FixedSizeBinary(16));
         assert_eq!(array.len(), 2);
         let binary_array = array
             .as_any()
@@ -224,7 +226,7 @@ mod tests {
         builder.append_value(&RowValue::Int32(1)).unwrap();
         builder.append_value(&RowValue::Null).unwrap();
         builder.append_value(&RowValue::Int32(3)).unwrap();
-        let array = builder.finish();
+        let array = builder.finish(&DataType::Int32);
         assert_eq!(array.len(), 3);
         let int32_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(int32_array.value(0), 1);
@@ -236,7 +238,7 @@ mod tests {
         builder.append_value(&RowValue::Int32(1)).unwrap();
         builder.append_value(&RowValue::Null).unwrap();
         builder.append_value(&RowValue::Int32(3)).unwrap();
-        let array = builder.finish();
+        let array = builder.finish(&DataType::Int32);
         assert_eq!(array.len(), 3);
         let int32_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(int32_array.value(0), 1);

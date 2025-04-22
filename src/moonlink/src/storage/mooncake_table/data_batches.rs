@@ -1,16 +1,16 @@
+use super::column_array_builder::ColumnArrayBuilder;
+use super::delete_vector::BatchDeletionVector;
 use crate::error::Result;
 use crate::row::MoonlinkRow;
-use crate::storage::column_array_builder::ColumnArrayBuilder;
-use crate::storage::delete_vector::BatchDeletionVector;
-use crate::storage::table_utils::RecordLocation;
+use crate::storage::storage_utils::RecordLocation;
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow_schema::Schema;
 use std::sync::Arc;
 
 #[derive(Debug)]
-pub struct InMemoryBatch {
-    pub(crate) data: Option<Arc<RecordBatch>>,
-    pub(crate) deletions: BatchDeletionVector,
+pub(super) struct InMemoryBatch {
+    pub(super) data: Option<Arc<RecordBatch>>,
+    pub(super) deletions: BatchDeletionVector,
 }
 
 impl InMemoryBatch {
@@ -41,14 +41,14 @@ impl InMemoryBatch {
 }
 
 #[derive(Debug)]
-pub struct BatchEntry {
-    pub(crate) id: u64,
-    pub(crate) batch: InMemoryBatch,
+pub(super) struct BatchEntry {
+    pub(super) id: u64,
+    pub(super) batch: InMemoryBatch,
 }
 
 /// A streaming buffered writer for column-oriented data.
 /// Creates new buffers when the current one is full and links them together.
-pub struct ColumnStoreBuffer {
+pub(super) struct ColumnStoreBuffer {
     /// The Arrow schema defining the structure of the data
     schema: Arc<Schema>,
     /// Maximum number of rows per buffer before creating a new one
@@ -66,7 +66,7 @@ pub struct ColumnStoreBuffer {
 impl ColumnStoreBuffer {
     /// Initialize a new column store buffer with the given schema and buffer size.
     ///
-    pub fn new(schema: Arc<Schema>, max_rows_per_buffer: usize) -> Self {
+    pub(super) fn new(schema: Arc<Schema>, max_rows_per_buffer: usize) -> Self {
         let current_rows = schema
             .fields()
             .iter()
@@ -94,7 +94,7 @@ impl ColumnStoreBuffer {
     /// Append a row of data to the buffer. If the current buffer is full,
     /// finalize it and start a new one.
     ///
-    pub fn append_row(
+    pub(super) fn append_row(
         &mut self,
         row: &MoonlinkRow,
     ) -> Result<(u64, usize, Option<(u64, Arc<RecordBatch>)>)> {
@@ -119,7 +119,7 @@ impl ColumnStoreBuffer {
 
     /// Finalize the current batch, adding it to filled_batches and preparing for a new batch
     ///
-    pub fn finalize_current_batch(&mut self) -> Result<Option<(u64, Arc<RecordBatch>)>> {
+    pub(super) fn finalize_current_batch(&mut self) -> Result<Option<(u64, Arc<RecordBatch>)>> {
         if self.current_row_count == 0 {
             return Ok(None);
         }
@@ -128,9 +128,10 @@ impl ColumnStoreBuffer {
         let columns: Vec<ArrayRef> = self
             .current_rows
             .iter_mut()
-            .map(|builder| {
+            .zip(self.schema.fields())
+            .map(|(builder, field)| {
                 // Finish the builder to get an array
-                Arc::new(builder.finish()) as ArrayRef
+                Arc::new(builder.finish(field.data_type())) as ArrayRef
             })
             .collect();
 
@@ -148,7 +149,7 @@ impl ColumnStoreBuffer {
         Ok(Some((self.next_batch_id - 1, batch)))
     }
 
-    pub fn delete_if_exists(&mut self, (batch_id, row_offset): (u64, usize)) -> bool {
+    pub(super) fn delete_if_exists(&mut self, (batch_id, row_offset): (u64, usize)) -> bool {
         let idx = self
             .in_memory_batches
             .binary_search_by_key(&batch_id, |x| x.id)
@@ -159,7 +160,7 @@ impl ColumnStoreBuffer {
             .delete_row(row_offset)
     }
 
-    pub fn flush(&mut self) -> Vec<BatchEntry> {
+    pub(super) fn drain(&mut self) -> Vec<BatchEntry> {
         assert!(self.current_row_count == 0);
         let last = self.in_memory_batches.pop();
         let current_batch = std::mem::take(&mut self.in_memory_batches);
@@ -167,11 +168,11 @@ impl ColumnStoreBuffer {
         current_batch
     }
 
-    pub fn get_num_rows(&self) -> usize {
+    pub(super) fn get_num_rows(&self) -> usize {
         (self.in_memory_batches.len() - 1) * self.max_rows_per_buffer + self.current_row_count
     }
 
-    pub fn get_commit_check_point(&self) -> RecordLocation {
+    pub(super) fn get_commit_check_point(&self) -> RecordLocation {
         RecordLocation::MemoryBatch(
             self.in_memory_batches.last().unwrap().id,
             self.current_row_count,
@@ -179,7 +180,7 @@ impl ColumnStoreBuffer {
     }
 }
 
-pub fn create_batch_from_rows(
+pub(super) fn create_batch_from_rows(
     rows: &[MoonlinkRow],
     schema: Arc<Schema>,
     deletions: &BatchDeletionVector,
@@ -204,7 +205,8 @@ pub fn create_batch_from_rows(
     }
     let columns: Vec<ArrayRef> = builders
         .iter_mut()
-        .map(|builder| builder.finish())
+        .zip(schema.fields())
+        .map(|(builder, field)| builder.finish(field.data_type()))
         .collect();
     RecordBatch::try_new(Arc::clone(&schema), columns).unwrap()
 }
@@ -221,6 +223,11 @@ mod tests {
             Field::new("id", DataType::Int32, false),
             Field::new("name", DataType::Utf8, true),
             Field::new("age", DataType::Int32, false),
+            Field::new(
+                "event_date",
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
+                false,
+            ),
         ]);
 
         let mut buffer = ColumnStoreBuffer::new(Arc::new(schema), 2);
@@ -229,18 +236,21 @@ mod tests {
             RowValue::Int32(1),
             RowValue::ByteArray("John".as_bytes().to_vec()),
             RowValue::Int32(30),
+            RowValue::Int64(1618876800000000),
         ]);
 
         let row2 = MoonlinkRow::new(vec![
             RowValue::Int32(2),
             RowValue::ByteArray("Jane".as_bytes().to_vec()),
             RowValue::Int32(25),
+            RowValue::Int64(1618876800000000),
         ]);
 
         let row3 = MoonlinkRow::new(vec![
             RowValue::Int32(3),
             RowValue::ByteArray("Bob".as_bytes().to_vec()),
             RowValue::Int32(40),
+            RowValue::Int64(1618876800000000),
         ]);
 
         buffer.append_row(&row1)?;
@@ -250,7 +260,7 @@ mod tests {
         buffer.append_row(&row3)?;
         buffer.finalize_current_batch()?;
 
-        let batches = buffer.flush();
+        let batches = buffer.drain();
         println!("batches: {:?}", batches);
         Ok(())
     }

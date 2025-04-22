@@ -90,12 +90,6 @@ async fn get_or_create_iceberg_table(
     match catalog.load_table(&table_ident).await {
         Ok(table) => Ok(table),
         Err(_) => {
-            let existing_namespaces = catalog.list_namespaces(None).await.unwrap();
-            println!(
-                "Namespaces alreading in the existing catalog: {:?}",
-                existing_namespaces
-            );
-
             let namespace_already_exists = catalog.namespace_exists(&namespace_ident).await?;
             if !namespace_already_exists {
                 let _created_namespace = catalog
