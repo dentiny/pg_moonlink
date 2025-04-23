@@ -1,6 +1,6 @@
 mod column_array_builder;
 mod data_batches;
-mod delete_vector;
+pub(crate) mod delete_vector;
 mod disk_slice;
 mod mem_slice;
 mod snapshot;

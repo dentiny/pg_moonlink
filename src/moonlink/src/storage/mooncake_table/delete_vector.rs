@@ -15,7 +15,7 @@ pub(crate) struct BatchDeletionVector {
 
 impl BatchDeletionVector {
     /// Create a new delete buffer with the specified capacity
-    pub(super) fn new(max_rows: usize) -> Self {
+    pub(crate) fn new(max_rows: usize) -> Self {
         Self {
             deletion_vector: None,
             max_rows,

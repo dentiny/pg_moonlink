@@ -1,8 +1,11 @@
 use crate::storage::mooncake_table::Snapshot;
+use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use futures::TryStreamExt;
+use futures::executor::block_on;
 
 use arrow::datatypes::DataType as ArrowType;
 use arrow_schema::Schema as ArrowSchema;
@@ -15,6 +18,7 @@ use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
+use iceberg::spec::ManifestContentType;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::IcebergWriter;
 use iceberg::writer::IcebergWriterBuilder;
@@ -24,6 +28,7 @@ use iceberg::{Catalog, Result as IcebergResult, TableIdent};
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::properties::WriterProperties;
+use iceberg::transaction::Transaction;
 
 // UNDONE(Iceberg):
 // 1. Implement deletion file related load and store operations.
@@ -187,20 +192,91 @@ impl IcebergSnapshot for Snapshot {
             get_or_create_iceberg_table(&catalog, &namespace, &table_name, arrow_schema).await?;
 
         let mut new_disk_files = HashMap::new();
+        let txn = Transaction::new(&iceberg_table);
+        let mut action =
+            txn.fast_append(/*commit_uuid=*/ None, /*key_metadata=*/ vec![])?;
         for (file_path, deletion_vector) in self.disk_files.drain() {
             let data_file =
                 write_record_batch_to_iceberg(&iceberg_table.clone(), &file_path).await?;
 
             let new_path = PathBuf::from(data_file.file_path());
             new_disk_files.insert(new_path, deletion_vector);
+            action.add_data_files(vec![data_file])?;
         }
         self.disk_files = new_disk_files;
+
+        // Commit write transaction.
+        let txn = action.apply().await?;
+        let table = txn.commit(&catalog).await?;
+
+        let batch_stream = table
+            .scan()
+            .select_all()
+            .build()
+            .unwrap()
+            .to_arrow()
+            .await?;
+        let batches: Vec<arrow_array::RecordBatch> = batch_stream.try_collect().await?;
+        for (i, batch) in batches.iter().enumerate() {
+                        println!("Batch {}:", i);
+                        println!("Num rows: {}", batch.num_rows());
+                        println!("Schema: {:?}", batch.schema());
+                        println!("Data: {:?}", batch);
+        }
+
 
         Ok(())
     }
 
     fn _load_from_iceberg(&self) -> IcebergResult<Self> {
-        todo!()
+        let namespace = vec!["default"];
+        let table_name = self.metadata.name.clone();
+        let arrow_schema = self.metadata.schema.as_ref();
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri("http://localhost:8181".to_string())
+                .build(),
+        );
+        let iceberg_table = block_on(get_or_create_iceberg_table(&catalog, &namespace, &table_name, arrow_schema))?;
+
+        let table_metadata = iceberg_table.metadata();
+        let snapshot_meta = table_metadata.current_snapshot().unwrap();
+
+        let file_io = iceberg_table.file_io();
+
+        // Load the manifest list (async inside block_on)
+        let manifest_list = block_on(snapshot_meta.load_manifest_list(file_io, table_metadata))?;
+
+        let mut snapshot = Snapshot::new(self.metadata.clone());
+
+        for manifest_file in manifest_list.entries().iter() {
+            // We're only interested in DATA files, not DELETES
+            if manifest_file.content != ManifestContentType::Data {
+                continue;
+            }
+
+            let manifest = block_on(manifest_file.load_manifest(file_io))?;
+            for entry in manifest.entries() {
+                let data_file = entry.data_file();
+                let file_path = PathBuf::from(data_file.file_path().to_string());
+
+                // Read parquet file
+                let file = std::fs::File::open(&file_path)?;
+                let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+                let mut reader = builder.build()?;
+
+                while let Some(record_batch) = reader.next().transpose()? {
+                    print!("Record Batch: {:?}\n", record_batch);
+
+                    // Register file with deletion vector
+                    snapshot
+                        .disk_files
+                        .insert(file_path.clone(), BatchDeletionVector::new(/*max_rows=*/0));
+                }
+            }
+        }
+
+        Ok(snapshot)
     }
 }
 
@@ -244,13 +320,13 @@ mod tests {
         use tempfile::tempdir;
 
         use arrow_array::{Int32Array, RecordBatch};
-        use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+        use arrow_schema::{DataType, Field as ArrowField, Schema as ArrowSchema};
         use iceberg::table::Table;
         use iceberg::{NamespaceIdent, TableCreation};
         use parquet::arrow::ArrowWriter;
 
         // Create Arrow schema and record batch.
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![ArrowField::new(
             "id",
             DataType::Int32,
             false,
@@ -345,4 +421,58 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_store_and_load_snapshot() -> IcebergResult<()> {
+        use crate::storage::mooncake_table::{Snapshot, TableConfig, TableMetadata};
+
+        use std::collections::HashMap;
+
+        use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
+
+        // Step 1: Create a self-made Snapshot
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int32, false),
+            ArrowField::new("name", ArrowDataType::Utf8, true),
+        ]));
+
+        let metadata = Arc::new(TableMetadata {
+            name: "test_table".to_string(),
+            schema: arrow_schema.clone(),
+            id: 0,
+            config: TableConfig::new(),
+            path: PathBuf::from("test_table"),
+            get_lookup_key: |_row| 1,
+        });
+
+        let mut disk_files = HashMap::new();
+        let test_file_path = PathBuf::from("test.parquet");
+
+        // Simulate a deletion vector (empty for simplicity)
+        disk_files.insert(test_file_path.clone(), BatchDeletionVector::new(0));
+
+        let mut snapshot = Snapshot::new(metadata);
+
+        // Step 2: Export the Snapshot to Iceberg
+        snapshot._export_to_iceberg().await?;
+
+        // Step 3: Load the Snapshot back from Iceberg
+        let loaded_snapshot = snapshot._load_from_iceberg().unwrap();
+
+        // Step 4: Compare the loaded content with the original Snapshot
+        assert_eq!(loaded_snapshot.metadata.name, snapshot.metadata.name);
+        assert_eq!(
+            loaded_snapshot.metadata.schema.as_ref(),
+            snapshot.metadata.schema.as_ref()
+        );
+        assert_eq!(
+            loaded_snapshot.disk_files.keys().collect::<Vec<_>>(),
+            snapshot.disk_files.keys().collect::<Vec<_>>()
+        );
+
+        println!("Test passed: Stored and loaded snapshot matches the original.");
+
+        Ok(())
+    }
+
 }
