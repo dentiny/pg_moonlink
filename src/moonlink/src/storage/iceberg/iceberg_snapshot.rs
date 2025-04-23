@@ -146,8 +146,8 @@ async fn write_record_batch_to_iceberg(
     // TOOD(hjiang): Add support for partition values.
     let data_file_writer_builder = DataFileWriterBuilder::new(
         parquet_writer_builder,
-        /*partition_valu=*/ None,
-        /*partition_val=*/ 0,
+        /*partition_value=*/ None,
+        /*partition_spec_id=*/ 0,
     );
     let mut data_file_writer = data_file_writer_builder.build().await?;
 
