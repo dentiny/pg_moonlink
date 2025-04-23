@@ -3,7 +3,7 @@ services:
     image: mcr.microsoft.com/devcontainers/rust:latest
     volumes:
       - ..:/workspaces/pg_moonlink:cached
-    network_mode: host
+    network_mode: service:postgres
     command: sleep infinity
 
   postgres:
@@ -11,10 +11,7 @@ services:
     environment:
       POSTGRES_PASSWORD: postgres
     command: ["-c", "wal_level=logical"]
-    network_mode: host
 
   iceberg:
     image: tabulario/iceberg-rest:latest
-    ports:
-      - "8181:8181"
-    network_mode: host
+    network_mode: service:postgres
