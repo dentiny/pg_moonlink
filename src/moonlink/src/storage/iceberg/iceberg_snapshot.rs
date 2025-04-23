@@ -33,9 +33,9 @@ use parquet::file::properties::WriterProperties;
 // 1. Implement filesystem catalog for (1) unit test; (2) local quick experiment for pg_mooncake.
 // 2. Implement deletion file related load and store operations.
 // (unrelated to functionality) 3. Support all data types, other than major primitive types.
-// (unrelated to functionality) 4. Update rest catalog service ip/port, which should be parsed from env variable or config files.
+// (unrelated to functionality) 4. Update rest catalog service ip/port, currently it's hard-coded to devcontainer's config, which should be parsed from env variable or config files.
 // (unrelated to functionality) 5. Add timeout to rest catalog access.
-// (unrelated to functionality) 6. Use real namespace and table name, it's hard-coded to "default" and "test_table" for now.
+// (unrelated to functionality) 6. Use real namespace and table name, which we should be able to get it from moonlink, it's hard-coded to "default" and "test_table" for now.
 
 // Convert arrow schema to icerberg schema.
 fn arrow_to_iceberg_schema(arrow_schema: &ArrowSchema) -> IcebergSchema {
@@ -170,11 +170,11 @@ pub trait IcebergSnapshot {
     // Write the current version to iceberg
     async fn _export_to_iceberg(&mut self) -> IcebergResult<()>;
 
-    // Create a snapshot by reading from iceberg in async style
+    // Create a snapshot by reading from iceberg in async style.
     //
     // TODO(hjiang): Expose an async function only for tokio-based test, otherwise will suffer deadlock with executor.
     // Reference: https://greptime.com/blogs/2023-03-09-bridging-async-and-sync-rust
-    async fn async_load_from_iceberg(&self) -> IcebergResult<Self>
+    async fn _async_load_from_iceberg(&self) -> IcebergResult<Self>
     where
         Self: Sized;
 
@@ -197,28 +197,30 @@ impl IcebergSnapshot for Snapshot {
         let iceberg_table =
             get_or_create_iceberg_table(&catalog, &namespace, &table_name, arrow_schema).await?;
 
-        let mut new_disk_files = HashMap::new();
         let txn = Transaction::new(&iceberg_table);
         let mut action =
             txn.fast_append(/*commit_uuid=*/ None, /*key_metadata=*/ vec![])?;
 
+        let mut new_disk_files = HashMap::with_capacity(self.disk_files.len());
+        let mut new_data_files = Vec::with_capacity(self.disk_files.len());
         for (file_path, deletion_vector) in self.disk_files.drain() {
             let data_file =
                 write_record_batch_to_iceberg(&iceberg_table.clone(), &file_path).await?;
             let new_path = PathBuf::from(data_file.file_path());
             new_disk_files.insert(new_path, deletion_vector);
-            action.add_data_files(vec![data_file])?;
+            new_data_files.push(data_file);
         }
         self.disk_files = new_disk_files;
+        action.add_data_files(new_data_files)?;
 
-        // Commit write transaction.
+        // Commit write transaction, which internally creates manifest files and manifest list files.
         let txn = action.apply().await?;
         txn.commit(&catalog).await?;
 
         Ok(())
     }
 
-    async fn async_load_from_iceberg(&self) -> IcebergResult<Self> {
+    async fn _async_load_from_iceberg(&self) -> IcebergResult<Self> {
         let namespace = vec!["default"];
         let table_name = self.metadata.name.clone();
         let arrow_schema = self.metadata.schema.as_ref();
@@ -257,7 +259,7 @@ impl IcebergSnapshot for Snapshot {
     }
 
     fn _load_from_iceberg(&self) -> IcebergResult<Self> {
-        block_on(self.async_load_from_iceberg())
+        block_on(self._async_load_from_iceberg())
     }
 }
 
@@ -441,7 +443,7 @@ mod tests {
         snapshot.disk_files = disk_files;
 
         snapshot._export_to_iceberg().await?;
-        let loaded_snapshot = snapshot.async_load_from_iceberg().await?;
+        let loaded_snapshot = snapshot._async_load_from_iceberg().await?;
         assert_eq!(
             loaded_snapshot.disk_files.len(),
             1,
