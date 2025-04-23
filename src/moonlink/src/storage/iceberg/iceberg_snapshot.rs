@@ -30,14 +30,12 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::properties::WriterProperties;
 
 // UNDONE(Iceberg):
-// 1. Implement deletion file related load and store operations.
-// 2. Implement store and load for manifest files, manifest lists, and catalog metadata, which is not supported in iceberg-rust.
-// 3. Current implementation only works for in-memory catalog, we need to support remote access.
-// 3.1 Before development, setup local minio for integration testing purpose.
-// (unrelated to functionality) 4. Support all data types, other than major primitive types.
-// (unrelated to functionality) 5. Update rest catalog service ip/port, which should be parsed from env variable or config files.
-// (unrelated to functionality) 6. Add timeout to rest catalog access.
-// (unrelated to functionality) 7. Use real namespace and table name, it's hard-coded to "default" and "test_table" for now.
+// 1. Implement filesystem catalog for (1) unit test; (2) local quick experiment for pg_mooncake.
+// 2. Implement deletion file related load and store operations.
+// (unrelated to functionality) 3. Support all data types, other than major primitive types.
+// (unrelated to functionality) 4. Update rest catalog service ip/port, which should be parsed from env variable or config files.
+// (unrelated to functionality) 5. Add timeout to rest catalog access.
+// (unrelated to functionality) 6. Use real namespace and table name, it's hard-coded to "default" and "test_table" for now.
 
 // Convert arrow schema to icerberg schema.
 fn arrow_to_iceberg_schema(arrow_schema: &ArrowSchema) -> IcebergSchema {
@@ -267,13 +265,26 @@ impl IcebergSnapshot for Snapshot {
 mod tests {
     use super::*;
 
+    use crate::storage::mooncake_table::{Snapshot, TableConfig, TableMetadata};
+
+    use std::collections::HashMap;
+    use std::fs::File;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
+    use arrow_array::{Int32Array, RecordBatch};
+    use iceberg::io::FileRead;
+    use iceberg::table::Table;
+    use iceberg::{NamespaceIdent, TableCreation};
+    use parquet::arrow::ArrowWriter;
+
     async fn delete_all_tables<C: Catalog>(catalog: &C) -> IcebergResult<()> {
         let namespaces = catalog.list_namespaces(/*parent=*/ None).await?;
         for namespace in namespaces {
             let tables = catalog.list_tables(&namespace).await?;
             for table in tables {
-                // Purge the table (delete all data and metadata)
-                catalog.drop_table(&table).await?;
+                catalog.drop_table(&table).await.ok();
                 println!("Deleted table: {:?} in namespace {:?}", table, namespace);
             }
         }
@@ -284,7 +295,7 @@ mod tests {
     async fn delete_all_namespaces<C: Catalog>(catalog: &C) -> IcebergResult<()> {
         let namespaces = catalog.list_namespaces(/*parent=*/ None).await?;
         for namespace in namespaces {
-            catalog.drop_namespace(&namespace).await?;
+            catalog.drop_namespace(&namespace).await.ok();
             println!("Deleted namespace: {:?}", namespace);
         }
 
@@ -293,21 +304,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_record_batch_to_iceberg() -> IcebergResult<()> {
-        use std::collections::HashMap;
-        use std::fs::File;
-        use std::sync::Arc;
-        use tempfile::tempdir;
-
-        use arrow_array::{Int32Array, RecordBatch};
-        use arrow_schema::{DataType, Field as ArrowField, Schema as ArrowSchema};
-        use iceberg::table::Table;
-        use iceberg::{NamespaceIdent, TableCreation};
-        use parquet::arrow::ArrowWriter;
-
         // Create Arrow schema and record batch.
         let arrow_schema = Arc::new(ArrowSchema::new(vec![ArrowField::new(
             "id",
-            DataType::Int32,
+            ArrowDataType::Int32,
             false,
         )
         .with_metadata(HashMap::from([(
@@ -330,12 +330,12 @@ mod tests {
         // Build Iceberg schema.
         let iceberg_schema = arrow_to_iceberg_schema(&arrow_schema);
 
-        // Create rest catalog and table.
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder()
                 .uri("http://localhost:8181".to_string())
                 .build(),
         );
+
         // Cleanup states before testing.
         delete_all_tables(&catalog).await?;
         delete_all_namespaces(&catalog).await?;
@@ -343,10 +343,6 @@ mod tests {
         let namespace_ident = NamespaceIdent::from_strs(&["default"])?;
         let table_name = "test_table";
 
-        // Create namespace and table.
-        catalog
-            .create_namespace(&namespace_ident, HashMap::new())
-            .await?;
         let tbl_creation = TableCreation::builder()
             .name(table_name.to_string())
             .location(format!(
@@ -370,7 +366,7 @@ mod tests {
             let schema = batch.schema();
             assert_eq!(schema.fields().len(), 1, "Expected 1 column in schema");
             assert_eq!(schema.field(0).name(), "id");
-            assert_eq!(schema.field(0).data_type(), &arrow_schema::DataType::Int32);
+            assert_eq!(schema.field(0).data_type(), &ArrowDataType::Int32);
 
             // Check columns.
             assert_eq!(batch.num_columns(), 1, "Expected 1 column");
@@ -396,19 +392,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_and_load_snapshot() -> IcebergResult<()> {
-        use crate::storage::mooncake_table::{Snapshot, TableConfig, TableMetadata};
-
-        use std::collections::HashMap;
-        use std::fs::File;
-        use tempfile::tempdir;
-
-        use arrow::datatypes::{
-            DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
-        };
-        use arrow_array::{Int32Array, RecordBatch};
-        use iceberg::io::FileRead;
-        use parquet::arrow::ArrowWriter;
-
         // Create Arrow schema and record batch.
         let arrow_schema = Arc::new(ArrowSchema::new(vec![ArrowField::new(
             "id",
@@ -424,15 +407,7 @@ mod tests {
             vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
         )?;
 
-        // Write record batch to Parquet file.
-        let tmp_dir = tempdir()?;
-        let parquet_path = tmp_dir.path().join("data.parquet");
-        let file = File::create(&parquet_path)?;
-        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), None)?;
-        writer.write(&batch)?;
-        writer.close()?;
-
-        // Create rest catalog and table.
+        // Cleanup namespace and table before testing.
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder()
                 .uri("http://localhost:8181".to_string())
@@ -442,13 +417,21 @@ mod tests {
         delete_all_tables(&catalog).await?;
         delete_all_namespaces(&catalog).await?;
 
+        // Write record batch to Parquet file.
+        let tmp_dir = tempdir()?;
+        let parquet_path = tmp_dir.path().join("data.parquet");
+        let file = File::create(&parquet_path)?;
+        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+
         let metadata = Arc::new(TableMetadata {
             name: "test_table".to_string(),
             schema: arrow_schema.clone(),
-            id: 0,
+            id: 0, // unused.
             config: TableConfig::new(),
             path: tmp_dir.path().to_path_buf(),
-            get_lookup_key: |_row| 1,
+            get_lookup_key: |_row| 1, // unused.
         });
 
         let mut disk_files = HashMap::new();
@@ -462,7 +445,7 @@ mod tests {
         assert_eq!(
             loaded_snapshot.disk_files.len(),
             1,
-            "Should have exactly one file"
+            "Should have exactly one file."
         );
 
         let namespace = vec!["default"];
@@ -471,19 +454,18 @@ mod tests {
             get_or_create_iceberg_table(&catalog, &namespace, table_name, &arrow_schema).await?;
         let file_io = iceberg_table.file_io();
 
-        // Check loaded data file exists.
+        // Check the loaded data file exists.
         let (loaded_path, _) = loaded_snapshot.disk_files.iter().next().unwrap();
         assert!(
             file_io.exists(loaded_path.to_str().unwrap()).await?,
             "File should exist"
         );
 
-        // Check loaded data file is of the expected format and content.
+        // Check the loaded data file is of the expected format and content.
         let input_file = file_io.new_input(loaded_path.to_str().unwrap())?;
         let input_file_metadata = input_file.metadata().await?;
-        let input_file_size = input_file_metadata.size;
         let reader = input_file.reader().await?;
-        let bytes = reader.read(0..input_file_size).await?;
+        let bytes = reader.read(0..input_file_metadata.size).await?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
         let mut reader = builder.build()?;
         let batch = reader.next().transpose()?.expect("Should have one batch");
