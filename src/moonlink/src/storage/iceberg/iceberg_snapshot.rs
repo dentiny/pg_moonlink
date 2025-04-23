@@ -276,7 +276,7 @@ mod tests {
     use tempfile::tempdir;
 
     use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
-    use arrow_array::{Int32Array, RecordBatch};
+    use arrow_array::{Int32Array, RecordBatch, StringArray};
     use iceberg::io::FileRead;
     use parquet::arrow::ArrowWriter;
 
@@ -306,18 +306,21 @@ mod tests {
     #[tokio::test]
     async fn test_store_and_load_snapshot() -> IcebergResult<()> {
         // Create Arrow schema and record batch.
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![ArrowField::new(
-            "id",
-            ArrowDataType::Int32,
-            false,
-        )
-        .with_metadata(HashMap::from([(
-            "PARQUET:field_id".to_string(),
-            "1".to_string(),
-        )]))]));
+        let arrow_schema =
+            Arc::new(ArrowSchema::new(vec![
+                ArrowField::new("id", ArrowDataType::Int32, false).with_metadata(HashMap::from([
+                    ("PARQUET:field_id".to_string(), "1".to_string()),
+                ])),
+                ArrowField::new("name", ArrowDataType::Utf8, false).with_metadata(HashMap::from([
+                    ("PARQUET:field_id".to_string(), "2".to_string()),
+                ])),
+            ]));
         let batch = RecordBatch::try_new(
             arrow_schema.clone(),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])), // id column
+                Arc::new(StringArray::from(vec!["a", "b", "c"])), // name column
+            ],
         )?;
 
         // Cleanup namespace and table before testing.
@@ -382,15 +385,28 @@ mod tests {
         let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
         let mut reader = builder.build()?;
         let batch = reader.next().transpose()?.expect("Should have one batch");
-        let actual_data = batch
+
+        let actual_ids = batch
             .column(0)
             .as_any()
             .downcast_ref::<Int32Array>()
             .unwrap();
         assert_eq!(
-            *actual_data,
+            *actual_ids,
             Int32Array::from(vec![1, 2, 3]),
-            "Data should match [1, 2, 3]"
+            "ID data should match"
+        );
+
+        // Verify second column (name)
+        let actual_names = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(
+            *actual_names,
+            StringArray::from(vec!["a", "b", "c"]),
+            "Name data should match"
         );
 
         Ok(())
