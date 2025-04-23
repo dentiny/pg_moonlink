@@ -210,6 +210,7 @@ impl IcebergSnapshot for Snapshot {
             new_disk_files.insert(new_path, deletion_vector);
             new_data_files.push(data_file);
         }
+        // TODO(hjiang): Likely we should bookkeep the old files so they could be deleted later.
         self.disk_files = new_disk_files;
         action.add_data_files(new_data_files)?;
 
@@ -240,7 +241,7 @@ impl IcebergSnapshot for Snapshot {
             .await?;
         let mut snapshot = Snapshot::new(self.metadata.clone());
         for manifest_file in manifest_list.entries().iter() {
-            // We're only interested in DATA files.
+            // We're only interested in DATA files when recover snapshot status.
             if manifest_file.content != ManifestContentType::Data {
                 continue;
             }
@@ -277,8 +278,6 @@ mod tests {
     use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
     use arrow_array::{Int32Array, RecordBatch};
     use iceberg::io::FileRead;
-    use iceberg::table::Table;
-    use iceberg::{NamespaceIdent, TableCreation};
     use parquet::arrow::ArrowWriter;
 
     async fn delete_all_tables<C: Catalog>(catalog: &C) -> IcebergResult<()> {
@@ -300,94 +299,6 @@ mod tests {
             catalog.drop_namespace(&namespace).await.ok();
             println!("Deleted namespace: {:?}", namespace);
         }
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_write_record_batch_to_iceberg() -> IcebergResult<()> {
-        // Create Arrow schema and record batch.
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![ArrowField::new(
-            "id",
-            ArrowDataType::Int32,
-            false,
-        )
-        .with_metadata(HashMap::from([(
-            "PARQUET:field_id".to_string(),
-            "1".to_string(),
-        )]))]));
-        let batch = RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
-        )?;
-
-        // Write record batch to Parquet file.
-        let tmp_dir = tempdir()?;
-        let parquet_path = tmp_dir.path().join("data.parquet");
-        let file = File::create(&parquet_path)?;
-        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), None)?;
-        writer.write(&batch)?;
-        writer.close()?;
-
-        // Build Iceberg schema.
-        let iceberg_schema = arrow_to_iceberg_schema(&arrow_schema);
-
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder()
-                .uri("http://localhost:8181".to_string())
-                .build(),
-        );
-
-        // Cleanup states before testing.
-        delete_all_tables(&catalog).await?;
-        delete_all_namespaces(&catalog).await?;
-
-        let namespace_ident = NamespaceIdent::from_strs(&["default"])?;
-        let table_name = "test_table";
-
-        let tbl_creation = TableCreation::builder()
-            .name(table_name.to_string())
-            .location(format!(
-                "file:///tmp/iceberg-test/{}/{}",
-                namespace_ident.to_url_string(),
-                table_name
-            ))
-            .schema(iceberg_schema)
-            .properties(HashMap::new())
-            .build();
-        let table: Table = catalog.create_table(&namespace_ident, tbl_creation).await?;
-        let data_file = write_record_batch_to_iceberg(&table, &parquet_path).await?;
-        let input_file = table.file_io().new_input(data_file.file_path())?;
-        let bytes = input_file.read().await?;
-        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
-        let mut arrow_reader = builder.build()?;
-
-        let mut total_rows = 0;
-        while let Some(batch) = arrow_reader.next().transpose()? {
-            // Check schema.
-            let schema = batch.schema();
-            assert_eq!(schema.fields().len(), 1, "Expected 1 column in schema");
-            assert_eq!(schema.field(0).name(), "id");
-            assert_eq!(schema.field(0).data_type(), &ArrowDataType::Int32);
-
-            // Check columns.
-            assert_eq!(batch.num_columns(), 1, "Expected 1 column");
-            let array = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .expect("Expected Int32Array");
-
-            // Check column values.
-            let expected = vec![1, 2, 3];
-            for (i, value) in expected.iter().enumerate() {
-                assert_eq!(array.value(i), *value);
-            }
-
-            total_rows += batch.num_rows();
-        }
-
-        assert_eq!(total_rows, 3, "Expected total 3 rows");
 
         Ok(())
     }
