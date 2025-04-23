@@ -1,6 +1,7 @@
 use crate::storage::mooncake_table::Snapshot;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType as ArrowType;
@@ -23,7 +24,6 @@ use iceberg::{Catalog, Result as IcebergResult, TableIdent};
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::properties::WriterProperties;
-use std::path::PathBuf;
 
 // UNDONE(Iceberg):
 // 1. Implement deletion file related load and store operations.
@@ -180,7 +180,7 @@ impl IcebergSnapshot for Snapshot {
         let arrow_schema = self.metadata.schema.as_ref();
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder()
-                .uri("http://iceberg:8181".to_string())
+                .uri("http://localhost:8181".to_string())
                 .build(),
         );
         let iceberg_table =
@@ -278,7 +278,7 @@ mod tests {
         // Create rest catalog and table.
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder()
-                .uri("http://iceberg:8181".to_string())
+                .uri("http://localhost:8181".to_string())
                 .build(),
         );
         // Cleanup states before testing.
