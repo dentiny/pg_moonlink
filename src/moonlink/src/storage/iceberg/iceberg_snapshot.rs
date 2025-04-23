@@ -284,10 +284,6 @@ mod tests {
     async fn delete_all_namespaces<C: Catalog>(catalog: &C) -> IcebergResult<()> {
         let namespaces = catalog.list_namespaces(/*parent=*/ None).await?;
         for namespace in namespaces {
-            // Skip default namespace if it exists.
-            if namespace.len() == 1 && namespace[0] == "default" {
-                continue;
-            }
             catalog.drop_namespace(&namespace).await?;
             println!("Deleted namespace: {:?}", namespace);
         }
@@ -404,7 +400,6 @@ mod tests {
 
         use std::collections::HashMap;
         use std::fs::File;
-        use std::io::Read;
         use tempfile::tempdir;
 
         use arrow::datatypes::{
@@ -446,12 +441,6 @@ mod tests {
         // Cleanup states before testing.
         delete_all_tables(&catalog).await?;
         delete_all_namespaces(&catalog).await?;
-
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![ArrowField::new(
-            "id",
-            ArrowDataType::Int32,
-            false,
-        )]));
 
         let metadata = Arc::new(TableMetadata {
             name: "test_table".to_string(),
