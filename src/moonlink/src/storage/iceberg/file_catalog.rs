@@ -252,9 +252,52 @@ impl Catalog for FileSystemCatalog {
     }
 
     /// Load table from the catalog.
-    async fn load_table(&self, _table: &TableIdent) -> IcebergResult<Table> {
-        todo!()
+    async fn load_table(&self, table: &TableIdent) -> IcebergResult<Table> {
+        // Construct the path to the version hint file
+        let version_hint_path = format!(
+            "{}/{}/{}{}",
+            self.warehouse_location,
+            table.namespace().to_url_string(),
+            table.name(),
+            "/metadata/version-hint.text"
+        );
+
+        // Read the version hint to get the latest metadata version
+        let version_hint_input = self.file_io.new_input(&version_hint_path)?;
+        let version_bytes = version_hint_input.read().await?;
+        let version_str = std::str::from_utf8(&version_bytes)
+            .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
+        let version = version_str
+            .trim()
+            .parse::<u32>()
+            .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
+
+        // Construct the path to the metadata file
+        let metadata_path = format!(
+            "{}/{}/{}{}/v{}.metadata.json",
+            self.warehouse_location,
+            table.namespace().to_url_string(),
+            table.name(),
+            "/metadata",
+            version
+        );
+
+        // Read and parse table metadata.
+        let input_file = self.file_io.new_input(&metadata_path)?;
+        let metadata_content = input_file.read().await?;
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)
+            .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
+
+        // Build and return the table
+        Ok(Table::builder()
+            .metadata_location(metadata_path)
+            .metadata(metadata)
+            .identifier(table.clone())
+            .file_io(self.file_io.clone())
+            .build()
+            .unwrap())
     }
+
     /// Drop a table from the catalog.
     async fn drop_table(&self, table: &TableIdent) -> IcebergResult<()> {
         // Construct the path to the table directory
@@ -466,7 +509,7 @@ mod tests {
 
         // Create table and check.
         let field = NestedField::required(
-            /*id=*/ 0,
+            /*id=*/ 1,
             "field_name".to_string(),
             IcebergType::Primitive(PrimitiveType::Int),
         );
@@ -481,13 +524,26 @@ mod tests {
                 namespace.to_url_string(),
                 table_name
             ))
-            .schema(schema)
+            .schema(schema.clone())
             .build();
         catalog.create_namespace(&namespace, HashMap::new()).await?;
         catalog.create_table(&namespace, table_creation).await?;
 
         let table_exists = catalog.table_exists(&table_ident).await?;
         assert!(table_exists, "Table should exist after creation");
+
+        // Load table and check.
+        let table = catalog.load_table(&table_ident).await?;
+        assert_eq!(
+            table.identifier(),
+            &table_ident,
+            "Loaded table identifier should match"
+        );
+        assert_eq!(
+            *table.metadata().current_schema().as_ref(),
+            schema,
+            "Loaded table schema should match"
+        );
 
         // Drop the table and check.
         catalog.drop_table(&table_ident).await?;
