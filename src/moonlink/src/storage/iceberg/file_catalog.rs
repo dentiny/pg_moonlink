@@ -194,10 +194,58 @@ impl Catalog for FileSystemCatalog {
         Ok(())
     }
 
-    /// List tables from namespace.
-    async fn list_tables(&self, _namespace: &NamespaceIdent) -> IcebergResult<Vec<TableIdent>> {
-        todo!()
+    /// List tables from namespace, return error if the given namespace doesn't exist.
+    async fn list_tables(&self, namespace: &NamespaceIdent) -> IcebergResult<Vec<TableIdent>> {
+        // Build the namespace directory path
+        let mut namespace_path = PathBuf::from(&self.warehouse_location);
+        for part in namespace.as_ref() {
+            namespace_path.push(part);
+        }
+
+        // Verify namespace exists
+        if !namespace_path.is_dir() {
+            return Err(IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Namespace {:?} does not exist", namespace),
+            ));
+        }
+
+        let mut tables = Vec::new();
+
+        // Read the namespace directory
+        for entry in std::fs::read_dir(&namespace_path).map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Failed to read namespace directory: {}", e),
+            )
+        })? {
+            let entry = entry.map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to read directory entry: {}", e),
+                )
+            })?;
+
+            let path = entry.path();
+            if path.is_dir() {
+                let table_name = entry.file_name().into_string().map_err(|_| {
+                    IcebergError::new(
+                        iceberg::ErrorKind::Unexpected,
+                        "Failed to parse table name as UTF-8",
+                    )
+                })?;
+
+                // Check if this is a valid table (has metadata directory)
+                let metadata_path = path.join("metadata");
+                if metadata_path.is_dir() {
+                    tables.push(TableIdent::new(namespace.clone(), table_name));
+                }
+            }
+        }
+
+        Ok(tables)
     }
+
     async fn update_namespace(
         &self,
         _namespace: &NamespaceIdent,
@@ -564,6 +612,9 @@ mod tests {
         // Ensure table does not exist
         let table_exists = catalog.table_exists(&table_ident).await?;
         assert!(!table_exists, "Table should not exist before creation");
+        let results = catalog.list_tables(&namespace).await;
+        let err = results.unwrap_err(); // Panics if result is Ok
+        assert_eq!(err.kind(), iceberg::ErrorKind::Unexpected);
 
         // Create table and check.
         let field = NestedField::required(
@@ -589,6 +640,10 @@ mod tests {
 
         let table_exists = catalog.table_exists(&table_ident).await?;
         assert!(table_exists, "Table should exist after creation");
+
+        let tables = catalog.list_tables(&namespace).await?;
+        assert_eq!(tables.len(), 1);
+        assert!(tables.contains(&table_ident));
 
         // Load table and check.
         let table = catalog.load_table(&table_ident).await?;
@@ -616,6 +671,11 @@ mod tests {
         assert!(table_exists, "Table should exist after rename");
         let table_exists = catalog.table_exists(&old_table_ident).await?;
         assert!(!table_exists, "Old table should not exist after rename");
+
+        let tables = catalog.list_tables(&namespace).await?;
+        assert_eq!(tables.len(), 1);
+        assert!(tables.contains(&new_table_ident));
+        assert!(!tables.contains(&old_table_ident));
 
         // Drop the table and check.
         catalog.drop_table(&new_table_ident).await?;
