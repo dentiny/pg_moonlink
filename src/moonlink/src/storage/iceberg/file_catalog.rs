@@ -71,15 +71,62 @@ impl FileSystemCatalog {
         self.metadata = Some(metadata);
         Ok(self)
     }
+
+    fn namespace_path(&self, namespace: &NamespaceIdent) -> PathBuf {
+        let mut path = PathBuf::from(&self.warehouse_location);
+        for part in namespace.as_ref() {
+            path.push(part);
+        }
+        path
+    }
 }
 
 #[async_trait]
 impl Catalog for FileSystemCatalog {
     async fn list_namespaces(
         &self,
-        _parent: Option<&iceberg::NamespaceIdent>,
+        parent: Option<&NamespaceIdent>,
     ) -> IcebergResult<Vec<NamespaceIdent>> {
-        todo!()
+        let mut base_path = PathBuf::from(&self.warehouse_location);
+        if let Some(ns) = parent {
+            for part in ns.as_ref() {
+                base_path.push(part);
+            }
+            if !base_path.exists() {
+                return Err(IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Parent namespace {:?} does not exist", ns),
+                ));
+            }
+        }
+
+        let mut namespaces = vec![];
+        for entry in std::fs::read_dir(&base_path).map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Failed to read directory: {}", e),
+            )
+        })? {
+            let entry = entry.map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to read entry: {}", e),
+                )
+            })?;
+
+            let path = entry.path();
+            if path.is_dir() {
+                let name = entry.file_name().into_string().map_err(|_| {
+                    IcebergError::new(
+                        iceberg::ErrorKind::Unexpected,
+                        "Failed to parse directory name as UTF-8",
+                    )
+                })?;
+                namespaces.push(NamespaceIdent::new(name));
+            }
+        }
+
+        Ok(namespaces)
     }
 
     /// Create a new namespace inside the catalog.
@@ -109,18 +156,43 @@ impl Catalog for FileSystemCatalog {
     }
 
     /// Get a namespace information from the catalog.
-    async fn get_namespace(&self, _namespace: &NamespaceIdent) -> IcebergResult<Namespace> {
-        todo!()
+    async fn get_namespace(&self, namespace: &NamespaceIdent) -> IcebergResult<Namespace> {
+        let path = self.namespace_path(namespace);
+        if path.is_dir() {
+            Ok(Namespace::new(namespace.clone()))
+        } else {
+            Err(IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Namespace {:?} does not exist", namespace),
+            ))
+        }
     }
 
     /// Check if namespace exists in catalog.
-    async fn namespace_exists(&self, _namespace: &NamespaceIdent) -> IcebergResult<bool> {
-        todo!()
+    async fn namespace_exists(&self, namespace: &NamespaceIdent) -> IcebergResult<bool> {
+        let path = self.namespace_path(namespace);
+        Ok(path.is_dir())
     }
+
     /// Drop a namespace from the catalog.
-    async fn drop_namespace(&self, _namespace: &NamespaceIdent) -> IcebergResult<()> {
-        todo!()
+    async fn drop_namespace(&self, namespace: &NamespaceIdent) -> IcebergResult<()> {
+        let path = self.namespace_path(namespace);
+        if !path.exists() {
+            return Err(IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Namespace {:?} does not exist", namespace),
+            ));
+        }
+
+        std::fs::remove_dir_all(&path).map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("failed to remove namespace directory: {}", e),
+            )
+        })?;
+        Ok(())
     }
+
     /// List tables from namespace.
     async fn list_tables(&self, _namespace: &NamespaceIdent) -> IcebergResult<Vec<TableIdent>> {
         todo!()
@@ -222,11 +294,78 @@ impl Catalog for FileSystemCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    
+    use tempfile::TempDir;
+
+    use iceberg::Catalog;
+    
     use iceberg::Result as IcebergResult;
+    use iceberg::NamespaceIdent;
 
     #[tokio::test]
-    async fn test_file_catalog() -> IcebergResult<()> {
-        assert!(false, "Test not implemented yet");
+    async fn test_filesystem_catalog_namespace_operations() -> IcebergResult<()> {
+        // Setup: create a temporary warehouse directory
+        let temp_dir = TempDir::new().expect("tempdir failed");
+        let warehouse_path = temp_dir.path().to_str().unwrap();
+        let catalog = FileSystemCatalog::new(
+            /*table_name=*/ "".to_string(),
+            warehouse_path.to_string(),
+        );
+        let namespace = NamespaceIdent::from_strs(&["default", "ns"])?;
+
+        // List namespace before creation.
+        let namespaces = catalog.list_namespaces(/*parent=*/ None).await?;
+        assert!(
+            namespaces.is_empty(),
+            "No namespaces should exist before creation"
+        );
+
+        // Ensure namespace does not exist.
+        let exists = catalog.namespace_exists(&namespace).await?;
+        assert!(!exists, "Namespace should not exist before creation");
+
+        // Create namespace and check.
+        catalog
+            .create_namespace(&namespace, /*properties=*/ HashMap::new())
+            .await?;
+        let exists = catalog.namespace_exists(&namespace).await?;
+        assert!(exists, "Namespace should exist after creation");
+
+        // List all existing namespaces.
+        let namespaces = catalog
+            .list_namespaces(
+                /*parent=*/ Some(&NamespaceIdent::from_strs(&["default"]).unwrap()),
+            )
+            .await?;
+        assert_eq!(namespaces.len(), 1, "There should be one root namespace");
+        assert_eq!(
+            namespaces[0],
+            NamespaceIdent::from_strs(&["ns"]).unwrap(),
+            "Namespace should match created one"
+        );
+
+        let namespaces = catalog.list_namespaces(/*parent=*/ None).await?;
+        assert_eq!(
+            namespaces.len(),
+            1,
+            "There should be one sub-namespace under root namespace"
+        );
+        assert_eq!(
+            namespaces[0],
+            NamespaceIdent::from_strs(&["default"]).unwrap(),
+            "Namespace should match created one"
+        );
+
+        // Get the namespace and check.
+        let ns = catalog.get_namespace(&namespace).await?;
+        assert_eq!(ns.name(), &namespace, "Namespace should match created one");
+
+        // Drop the namespace and check.
+        catalog.drop_namespace(&namespace).await?;
+        let exists = catalog.namespace_exists(&namespace).await?;
+        assert!(!exists, "Namespace should not exist after drop");
+
         Ok(())
     }
 }
