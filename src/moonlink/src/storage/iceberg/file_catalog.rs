@@ -366,9 +366,67 @@ impl Catalog for FileSystemCatalog {
     }
 
     /// Rename a table in the catalog.
-    async fn rename_table(&self, _src: &TableIdent, _dest: &TableIdent) -> IcebergResult<()> {
-        todo!()
+    async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> IcebergResult<()> {
+        // Construct source and destination base paths
+        let src_base = format!(
+            "{}/{}/{}",
+            self.warehouse_location,
+            src.namespace().to_url_string(),
+            src.name()
+        );
+
+        let dest_base = format!(
+            "{}/{}/{}",
+            self.warehouse_location,
+            dest.namespace().to_url_string(),
+            dest.name()
+        );
+
+        // Convert to PathBuf for filesystem operations
+        let src_path = PathBuf::from(&src_base);
+        let dest_path = PathBuf::from(&dest_base);
+
+        // Check if source table exists (look for metadata directory)
+        let src_metadata = src_path.join("metadata");
+        if !src_metadata.exists() {
+            return Err(IcebergError::new(
+                iceberg::ErrorKind::DataInvalid,
+                format!("Source table does not exist: {:?}", src),
+            ));
+        }
+
+        // Check if destination already exists
+        if dest_path.exists() {
+            return Err(IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Destination table already exists: {:?}", dest),
+            ));
+        }
+
+        // Create parent namespace directories if they don't exist
+        if let Some(parent) = dest_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to create destination namespace directory: {}", e),
+                )
+            })?;
+        }
+
+        // Perform the directory rename - this moves the entire table structure
+        std::fs::rename(&src_path, &dest_path).map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!(
+                    "Failed to rename table directory from {:?} to {:?}: {}",
+                    src, dest, e
+                ),
+            )
+        })?;
+
+        Ok(())
     }
+
     /// Update a table to the catalog.
     async fn update_table(&self, mut commit: TableCommit) -> IcebergResult<Table> {
         let version = self.metadata.as_ref().unwrap().next_sequence_number();
@@ -545,9 +603,23 @@ mod tests {
             "Loaded table schema should match"
         );
 
+        // Rename table and check.
+        let old_table_ident = table_ident;
+        let new_table_ident = TableIdent::new(namespace.clone(), "new_test_table".to_string());
+        catalog
+            .rename_table(
+                /*src=*/ &old_table_ident,
+                /*dest=*/ &new_table_ident,
+            )
+            .await?;
+        let table_exists = catalog.table_exists(&new_table_ident).await?;
+        assert!(table_exists, "Table should exist after rename");
+        let table_exists = catalog.table_exists(&old_table_ident).await?;
+        assert!(!table_exists, "Old table should not exist after rename");
+
         // Drop the table and check.
-        catalog.drop_table(&table_ident).await?;
-        let table_exists = catalog.table_exists(&table_ident).await?;
+        catalog.drop_table(&new_table_ident).await?;
+        let table_exists = catalog.table_exists(&new_table_ident).await?;
         assert!(!table_exists, "Table should not exist after drop");
 
         Ok(())
