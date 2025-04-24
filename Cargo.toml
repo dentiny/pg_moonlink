@@ -27,6 +27,7 @@ tokio = { version = "1.38", features = ["rt-multi-thread", "macros"] }
 uuid = { version = "1.15.1", features = ["v4"] }
 arrow-array = "54.2.1"
 arrow-schema = "54.2.1"
+serde_json = { version = "1.0", features = ["std"] }
 
 iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "53ceb2b5426f56efd1152a9daaa2fca25847b6ff"}
 iceberg-catalog-rest = { git = "https://github.com/apache/iceberg-rust.git", rev = "53ceb2b5426f56efd1152a9daaa2fca25847b6ff" }
