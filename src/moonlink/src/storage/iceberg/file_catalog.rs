@@ -256,9 +256,37 @@ impl Catalog for FileSystemCatalog {
         todo!()
     }
     /// Drop a table from the catalog.
-    async fn drop_table(&self, _table: &TableIdent) -> IcebergResult<()> {
-        todo!()
+    async fn drop_table(&self, table: &TableIdent) -> IcebergResult<()> {
+        // Construct the path to the table directory
+        let table_path = format!(
+            "{}/{}/{}",
+            self.warehouse_location,
+            table.namespace().to_url_string(),
+            table.name()
+        );
+
+        // Convert to PathBuf for std::fs operations
+        let path = std::path::PathBuf::from(&table_path);
+
+        // Check if path exists first to return a better error if not found
+        if !path.exists() {
+            return Err(IcebergError::new(
+                iceberg::ErrorKind::DataInvalid,
+                format!("Table path does not exist: {}", table_path),
+            ));
+        }
+
+        // Remove the directory and all its contents
+        std::fs::remove_dir_all(&path).map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Failed to delete table directory: {}", e),
+            )
+        })?;
+
+        Ok(())
     }
+
     /// Check if a table exists in the catalog.
     async fn table_exists(&self, table: &TableIdent) -> IcebergResult<bool> {
         let mut metadata_path = PathBuf::from(&self.warehouse_location);
@@ -460,6 +488,11 @@ mod tests {
 
         let table_exists = catalog.table_exists(&table_ident).await?;
         assert!(table_exists, "Table should exist after creation");
+
+        // Drop the table and check.
+        catalog.drop_table(&table_ident).await?;
+        let table_exists = catalog.table_exists(&table_ident).await?;
+        assert!(!table_exists, "Table should not exist after drop");
 
         Ok(())
     }
