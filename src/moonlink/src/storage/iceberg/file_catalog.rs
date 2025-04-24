@@ -15,8 +15,9 @@ use iceberg::{
 /// Compared with `MemoryCatalog`, `FileSystemCatalog` could be used in production environment.
 ///
 /// TODO(hjiang):
-/// 1. Implement features necessary for concurrent accesses.
-/// 2. The initial version access everything via filesystem, for performance considerartion we should cache metadata in memory.
+/// 1. Implement property related functionalities.
+/// 2. Implement features necessary for concurrent accesses.
+/// 3. The initial version access everything via filesystem, for performance considerartion we should cache metadata in memory.
 
 #[derive(Debug)]
 pub struct FileSystemCatalog {
@@ -204,6 +205,7 @@ impl Catalog for FileSystemCatalog {
     ) -> IcebergResult<()> {
         todo!()
     }
+
     /// Create a new table inside the namespace.
     async fn create_table(
         &self,
@@ -211,22 +213,35 @@ impl Catalog for FileSystemCatalog {
         creation: TableCreation,
     ) -> IcebergResult<Table> {
         let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
-        let warehouse_location = creation.location.clone().unwrap();
-        // Create the metadata directory.
-        // Most client implicitly expects metadata in PATH/metadata directory.
-        //
-        let metadata_path: String = format!("{warehouse_location}/metadata");
-        // Create the initial table metadata
+        // TODO(hjiang): Confirm the location field inside of `TableCreation`.
+        let warehouse_location = self.warehouse_location.clone();
+        let metadata_path = format!(
+            "{}/{}/{}{}",
+            warehouse_location,
+            namespace.to_url_string(),
+            creation.name,
+            "/metadata"
+        );
+        let version_hint_path = format!(
+            "{}/{}/{}{}",
+            warehouse_location,
+            namespace.to_url_string(),
+            creation.name,
+            "/metadata/version-hint.text"
+        );
+
+        // Create the initial table metadata.
         let table_metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
-        // Write the initial metadata file
+        // Write the initial metadata file.
         let metadata_file_path = format!("{metadata_path}/v0.metadata.json");
         let metadata_json = serde_json::to_string(&table_metadata.metadata)?;
         let output = self.file_io.new_output(&metadata_file_path)?;
         output.write(metadata_json.into()).await?;
-        // Write the version hint file
-        let version_hint_path = format!("{warehouse_location}/metadata/version-hint.text");
+
+        // Write the version hint file.
         let version_hint_output = self.file_io.new_output(&version_hint_path)?;
         version_hint_output.write("0".into()).await?;
+
         let table = Table::builder()
             .metadata(table_metadata.metadata)
             .identifier(table_ident)
@@ -235,6 +250,7 @@ impl Catalog for FileSystemCatalog {
             .unwrap();
         Ok(table)
     }
+
     /// Load table from the catalog.
     async fn load_table(&self, _table: &TableIdent) -> IcebergResult<Table> {
         todo!()
@@ -244,9 +260,40 @@ impl Catalog for FileSystemCatalog {
         todo!()
     }
     /// Check if a table exists in the catalog.
-    async fn table_exists(&self, _table: &TableIdent) -> IcebergResult<bool> {
-        todo!()
+    async fn table_exists(&self, table: &TableIdent) -> IcebergResult<bool> {
+        let mut metadata_path = PathBuf::from(&self.warehouse_location);
+        for part in table.namespace().as_ref() {
+            metadata_path.push(part);
+        }
+        metadata_path.push(table.name());
+        metadata_path.push("metadata");
+
+        // Check if directory exists
+        if !metadata_path.is_dir() {
+            return Ok(false);
+        }
+
+        // Check if at least one .metadata.json file exists
+        let exists = std::fs::read_dir(&metadata_path)
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to read metadata dir: {}", e),
+                )
+            })?
+            .any(|entry| {
+                if let Ok(entry) = entry {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    name.ends_with(".metadata.json")
+                } else {
+                    false
+                }
+            });
+
+        Ok(exists)
     }
+
     /// Rename a table in the catalog.
     async fn rename_table(&self, _src: &TableIdent, _dest: &TableIdent) -> IcebergResult<()> {
         todo!()
@@ -295,17 +342,19 @@ impl Catalog for FileSystemCatalog {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    
+    use std::sync::Arc;
     use tempfile::TempDir;
 
+    use iceberg::spec::NestedField;
+    use iceberg::spec::PrimitiveType;
+    use iceberg::spec::Schema;
+    use iceberg::spec::Type as IcebergType;
     use iceberg::Catalog;
-    
-    use iceberg::Result as IcebergResult;
     use iceberg::NamespaceIdent;
+    use iceberg::Result as IcebergResult;
 
     #[tokio::test]
     async fn test_filesystem_catalog_namespace_operations() -> IcebergResult<()> {
-        // Setup: create a temporary warehouse directory
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
         let catalog = FileSystemCatalog::new(
@@ -365,6 +414,52 @@ mod tests {
         catalog.drop_namespace(&namespace).await?;
         let exists = catalog.namespace_exists(&namespace).await?;
         assert!(!exists, "Namespace should not exist after drop");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filesystem_catalog_table_operations() -> IcebergResult<()> {
+        let temp_dir = TempDir::new().expect("tempdir failed");
+        let warehouse_path = temp_dir.path().to_str().unwrap();
+        let catalog = FileSystemCatalog::new(
+            /*table_name=*/ "".to_string(),
+            warehouse_path.to_string(),
+        );
+
+        // Define namespace and table.
+        let namespace = NamespaceIdent::from_strs(&["default"])?;
+        let table_name = "test_table".to_string();
+        let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
+
+        // Ensure table does not exist
+        let table_exists = catalog.table_exists(&table_ident).await?;
+        assert!(!table_exists, "Table should not exist before creation");
+
+        // Create table and check.
+        let field = NestedField::required(
+            /*id=*/ 0,
+            "field_name".to_string(),
+            IcebergType::Primitive(PrimitiveType::Int),
+        );
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![Arc::new(field)])
+            .build()?;
+        let table_creation = TableCreation::builder()
+            .name(table_name.clone())
+            .location(format!(
+                "file:///tmp/iceberg-test/{}/{}",
+                namespace.to_url_string(),
+                table_name
+            ))
+            .schema(schema)
+            .build();
+        catalog.create_namespace(&namespace, HashMap::new()).await?;
+        catalog.create_table(&namespace, table_creation).await?;
+
+        let table_exists = catalog.table_exists(&table_ident).await?;
+        assert!(table_exists, "Table should exist after creation");
 
         Ok(())
     }
