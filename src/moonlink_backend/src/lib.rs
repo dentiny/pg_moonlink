@@ -28,9 +28,9 @@ impl<T: Eq + Hash> MoonlinkBackend<T> {
             if ingest_source.check_table_belongs_to_source(uri) {
                 let reader_state_manager = ingest_source.add_table(table).await?;
                 self.table_readers
-                        .write()
-                        .await
-                        .insert(table_id, reader_state_manager);
+                    .write()
+                    .await
+                    .insert(table_id, reader_state_manager);
                 return Ok(());
             }
         }
@@ -38,9 +38,9 @@ impl<T: Eq + Hash> MoonlinkBackend<T> {
         let reader_state_manager = ingest_source.add_table(table).await?;
         ingest_sources.push(ingest_source);
         self.table_readers
-                .write()
-                .await
-                .insert(table_id, reader_state_manager);
+            .write()
+            .await
+            .insert(table_id, reader_state_manager);
         Ok(())
     }
 

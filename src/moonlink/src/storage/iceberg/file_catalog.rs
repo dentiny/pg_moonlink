@@ -61,7 +61,7 @@ impl FileSystemCatalog {
         }
     }
 
-    // Load metadata for the given table.
+    /// Load metadata for the given table.
     async fn load_metadata(
         &self,
         table_ident: &TableIdent,
@@ -498,41 +498,23 @@ impl Catalog for FileSystemCatalog {
 
         // TODO(hjiang): As of now, we only take one AddSnapshot update.
         let updates = commit.take_updates();
-        assert_eq!(
-            updates.len(),
-            1,
-            "Only one update is expected in this implementation"
-        );
-        let mut snapshot_id: Option<i64> = None;
         for update in &updates {
             match update {
                 TableUpdate::AddSnapshot { snapshot } => {
-                    snapshot_id = Some(snapshot.snapshot_id());
                     builder = builder.add_snapshot(snapshot.clone())?;
                 }
+                TableUpdate::SetSnapshotRef {
+                    ref_name,
+                    reference,
+                } => {
+                    // Set the snapshot reference, which is used to point to the latest snapshot.
+                    builder = builder.set_ref(ref_name, reference.clone())?;
+                }
                 _ => {
-                    unreachable!("Only AddSnapshot updates are expected in this implementation");
+                    unreachable!("Only snapshot updates are expected in this implementation");
                 }
             }
         }
-
-        // After apply all update operations, set current snapshot to the latest one.
-        let metadata = builder
-            .set_ref(
-                MAIN_BRANCH,
-                SnapshotReference {
-                    snapshot_id: snapshot_id.unwrap(),
-                    retention: SnapshotRetention::Branch {
-                        min_snapshots_to_keep: None,
-                        max_snapshot_age_ms: None,
-                        max_ref_age_ms: None,
-                    },
-                },
-            )
-            .unwrap()
-            .build()
-            .unwrap()
-            .metadata;
 
         // Write metadata file.
         let metadata_directory = format!(
@@ -828,6 +810,17 @@ mod tests {
                     additional_properties: HashMap::new(),
                 })
                 .build(),
+        },
+        TableUpdate::SetSnapshotRef {
+            ref_name: MAIN_BRANCH.to_string(),
+            reference: SnapshotReference {
+                snapshot_id: 1,
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            },
         }]);
 
         // TODO(hjiang): This is a hack to create `TableCommit`, because its builder is only exposed to crate instead of public.
