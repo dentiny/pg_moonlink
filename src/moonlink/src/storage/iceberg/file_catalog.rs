@@ -17,9 +17,8 @@ use iceberg::{
 ///
 /// TODO(hjiang):
 /// 1. Implement property related functionalities.
-/// 2. Implement concurrent accesses features, currently we assume it's only single thread access.
-/// 3. The initial version access everything via filesystem, for performance consideration we should cache metadata in memory.
-/// (not related to functionality) 4. Set snapshot retention policy at metadata.
+/// 2. The initial version access everything via filesystem, for performance consideration we should cache metadata in memory.
+/// (not related to functionality) 3. Set snapshot retention policy at metadata.
 
 /// Iceberg table format from filesystem's perspective:
 /// - data
