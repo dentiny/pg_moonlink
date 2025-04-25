@@ -26,7 +26,6 @@ use iceberg::writer::IcebergWriterBuilder;
 use iceberg::NamespaceIdent;
 use iceberg::TableCreation;
 use iceberg::{Catalog, Result as IcebergResult, TableIdent};
-use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::properties::WriterProperties;
 
