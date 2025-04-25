@@ -3,7 +3,9 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use iceberg::io::FileIO;
-use iceberg::spec::{TableMetadata, TableMetadataBuilder};
+use iceberg::spec::{
+    SnapshotReference, SnapshotRetention, TableMetadata, TableMetadataBuilder, MAIN_BRANCH,
+};
 use iceberg::table::Table;
 use iceberg::Error as IcebergError;
 use iceberg::Result as IcebergResult;
@@ -19,6 +21,7 @@ use iceberg::{
 /// 1. Implement property related functionalities.
 /// 2. Implement concurrent accesses features, currently we assume it's only single thread access.
 /// 3. The initial version access everything via filesystem, for performance consideration we should cache metadata in memory.
+/// (not related to functionality) 4. Set snapshot retention policy at metadata.
 
 /// Iceberg table format from filesystem's perspective:
 /// - data
@@ -69,15 +72,17 @@ impl FileSystemCatalog {
             table_ident.namespace.to_url_string(),
             table_ident.name()
         );
+
+        // Get metadata file path via version hint file.
         let version_hint_path = format!("{}/version-hint.text", metadata_directory);
         let input_file: iceberg::io::InputFile = self.file_io.new_input(&version_hint_path)?;
         let version = String::from_utf8(input_file.read().await?.to_vec()).expect("");
+
+        // Get table metadata.
         let metadata_file_path = format!("{}/v{}.metadata.json", metadata_directory, version);
         let input_file: iceberg::io::InputFile = self.file_io.new_input(&metadata_file_path)?;
         let metadata_content = input_file.read().await?.to_vec();
         let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
-
-        // TODO(hjiang): Need to make sure snapshot information (i.e. current snapshot) is correctly populated.
         Ok((metadata_file_path, metadata))
     }
 
@@ -488,12 +493,21 @@ impl Catalog for FileSystemCatalog {
         let version = metadata.next_sequence_number();
         let mut builder = TableMetadataBuilder::new_from_metadata(
             metadata.clone(),
-            Some(metadata_file_path.clone()),
+            /*current_file_location=*/ Some(metadata_file_path.clone()),
         );
-        let update = commit.take_updates().to_vec();
-        for update in &update {
+
+        // TODO(hjiang): As of now, we only take one AddSnapshot update.
+        let updates = commit.take_updates();
+        assert_eq!(
+            updates.len(),
+            1,
+            "Only one update is expected in this implementation"
+        );
+        let mut snapshot_id: Option<i64> = None;
+        for update in &updates {
             match update {
                 TableUpdate::AddSnapshot { snapshot } => {
+                    snapshot_id = Some(snapshot.snapshot_id());
                     builder = builder.add_snapshot(snapshot.clone())?;
                 }
                 _ => {
@@ -501,9 +515,26 @@ impl Catalog for FileSystemCatalog {
                 }
             }
         }
-        let metadata = builder.build()?;
 
-        // Write the initial metadata file and version hint file.
+        // After apply all update operations, set current snapshot to the latest one.
+        let metadata = builder
+            .set_ref(
+                MAIN_BRANCH,
+                SnapshotReference {
+                    snapshot_id: snapshot_id.unwrap(),
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: None,
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
+                },
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        // Write metadata file.
         let metadata_directory = format!(
             "{}/{}/{}/metadata",
             self.warehouse_location,
@@ -511,18 +542,21 @@ impl Catalog for FileSystemCatalog {
             commit.identifier().name()
         );
         let metadata_file_path = format!("{}/v{}.metadata.json", metadata_directory, version);
-        let metadata_json = serde_json::to_string(&metadata.metadata)?;
+        let metadata_json = serde_json::to_string(&metadata)?;
         let output = self.file_io.new_output(&metadata_file_path)?;
         output.write(metadata_json.into()).await?;
+
+        // Write version hint file.
         let version_hint_path = format!("{}/version-hint.text", metadata_directory);
         let version_hint_output = self.file_io.new_output(&version_hint_path)?;
         version_hint_output
             .write(format!("{version}").into())
             .await?;
+
         Table::builder()
             .identifier(commit.identifier().clone())
             .file_io(self.file_io.clone())
-            .metadata(metadata.metadata)
+            .metadata(metadata)
             .metadata_location(metadata_file_path)
             .build()
     }
@@ -536,10 +570,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
     use tempfile::TempDir;
 
-    use iceberg::spec::NestedField;
-    use iceberg::spec::PrimitiveType;
-    use iceberg::spec::Schema;
-    use iceberg::spec::Type as IcebergType;
+    use iceberg::spec::{NestedField, PrimitiveType, Schema, Type as IcebergType};
     use iceberg::NamespaceIdent;
     use iceberg::Result as IcebergResult;
 
@@ -787,7 +818,7 @@ mod tests {
                 .with_timestamp_ms(millis as i64)
                 .with_schema_id(0)
                 .with_manifest_list(format!(
-                    "file:///tmp/iceberg-test/{}/{}",
+                    "file:///tmp/iceberg-test/{}/{}/snap-8161620281254644995-0-01966b87-6e93-7bc1-9e12-f1980d9737d3.avro",
                     namespace.to_url_string(),
                     table_name
                 ))
@@ -809,14 +840,13 @@ mod tests {
         let table_commit_proxy = TableCommitProxy {
             ident: table_ident.clone(),
             requirements: vec![],
-            updates: table_updates.clone(),
+            updates: table_updates,
         };
         let table_commit =
             unsafe { std::mem::transmute::<TableCommitProxy, TableCommit>(table_commit_proxy) };
 
-        catalog.update_table(table_commit).await?;
-        let table = catalog.load_table(&table_ident).await?;
-
+        // Check table metadata.
+        let table = catalog.update_table(table_commit).await?;
         let table_metadata = table.metadata();
         assert_eq!(
             **table_metadata.current_schema(),
@@ -827,6 +857,11 @@ mod tests {
             table.identifier(),
             &table_ident,
             "Updated table identifier should match"
+        );
+        assert_eq!(
+            table_metadata.current_snapshot_id(),
+            Some(1),
+            "Current snapshot ID should be 1"
         );
 
         Ok(())
