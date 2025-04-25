@@ -11,66 +11,69 @@ use iceberg::{
     Catalog, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableUpdate,
 };
 
-/// This module contains the filesystem catalog implementation, which serves for local development and hermetic unit test purpose, so for initial versions, it's focusing more on simplicity and correctness rather than performance.
-/// Compared with `MemoryCatalog`, `FileSystemCatalog` could be used in production environment.
+/// This module contains the filesystem catalog implementation, which serves for local development and hermetic unit test purpose;
+/// For initial versions, it's focusing more on simplicity and correctness rather than performance.
+/// Different with `MemoryCatalog`, `FileSystemCatalog` could be used in production environment.
 ///
 /// TODO(hjiang):
 /// 1. Implement property related functionalities.
-/// 2. Implement features necessary for concurrent accesses.
+/// 2. Implement concurrent accesses features, currently we assume it's only single thread access.
 /// 3. The initial version access everything via filesystem, for performance considerartion we should cache metadata in memory.
+
+/// Iceberg table format from filesystem's perspective:
+/// - data
+///   - parquet files
+/// - metdata
+///   - version hint file
+///     + version-hint.text
+///     + contains the latest version number for metadata
+///   - metadata file
+///     + v0.metadata.json ... vn.metadata.json
+///     + records table schema
+///   - snapshot file / manifest list
+///     + snap-<snapshot-id>-<attempt-id>-<commit-uuid>.avro
+///     + points to manifest files and record actions
+///   - manifest files
+///     + <commit-uuid>-m<manifest-counter>.avro
+///     + which points to data files and stats
 
 #[derive(Debug)]
 pub struct FileSystemCatalog {
     file_io: FileIO,
-    table_name: String,
     warehouse_location: String,
-    metadata: Option<TableMetadata>,
-    metadata_content: Vec<u8>,
-    metadata_file_path: String,
-    table: Option<Table>,
 }
 
 impl FileSystemCatalog {
     /// Creates a rest catalog from config.
-    pub fn new(name: String, warehouse_location: String) -> Self {
+    pub fn new(warehouse_location: String) -> Self {
         Self {
             file_io: FileIO::from_path(warehouse_location.clone())
                 .unwrap()
                 .build()
                 .unwrap(),
-            table_name: name,
             warehouse_location: warehouse_location,
-            metadata: None,
-            metadata_content: vec![],
-            metadata_file_path: "".to_string(),
-            table: None,
         }
     }
 
-    pub async fn load_metadata(mut self) -> IcebergResult<Self> {
-        let version_hint_path = format!("{}/metadata/version-hint.text", self.warehouse_location);
+    // Load metadata for the given table.
+    async fn load_metadata(
+        &self,
+        table_ident: &TableIdent,
+    ) -> IcebergResult<(String /*metadata_file_path*/, TableMetadata)> {
+        let metadata_directory = format!(
+            "{}/{}/{}/metadata",
+            self.warehouse_location,
+            table_ident.namespace.to_url_string(),
+            table_ident.name()
+        );
+        let version_hint_path = format!("{}/version-hint.text", metadata_directory);
         let input_file: iceberg::io::InputFile = self.file_io.new_input(&version_hint_path)?;
         let version = String::from_utf8(input_file.read().await?.to_vec()).expect("");
-        self.metadata_file_path = format!(
-            "{}/metadata/v{}.metadata.json",
-            self.warehouse_location, version
-        );
-        let input_file: iceberg::io::InputFile =
-            self.file_io.new_input(&self.metadata_file_path)?;
-        self.metadata_content = input_file.read().await?.to_vec();
-        let metadata = serde_json::from_slice::<TableMetadata>(&self.metadata_content)?;
-        let table_id: TableIdent = TableIdent::from_strs(["default", &self.table_name]).unwrap();
-        self.table = Some(
-            Table::builder()
-                .file_io(self.file_io.clone())
-                .metadata_location(self.metadata_file_path.clone())
-                .metadata(metadata.clone())
-                .identifier(table_id.clone())
-                .build()
-                .unwrap(),
-        );
-        self.metadata = Some(metadata);
-        Ok(self)
+        let metadata_file_path = format!("{}/v{}.metadata.json", metadata_directory, version);
+        let input_file: iceberg::io::InputFile = self.file_io.new_input(&metadata_file_path)?;
+        let metadata_content = input_file.read().await?.to_vec();
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+        Ok((metadata_file_path, metadata))
     }
 
     fn namespace_path(&self, namespace: &NamespaceIdent) -> PathBuf {
@@ -475,33 +478,41 @@ impl Catalog for FileSystemCatalog {
         Ok(())
     }
 
-    /// Update a table to the catalog.
+    /// Update a table to the catalog, which writes metadata file and version hint file.
+    ///
+    /// TODO(hjiang): Implement table requirements, which is user-defined compare-and-swap logic.
     async fn update_table(&self, mut commit: TableCommit) -> IcebergResult<Table> {
-        let version = self.metadata.as_ref().unwrap().next_sequence_number();
-        let builder = TableMetadataBuilder::new_from_metadata(
-            self.metadata.clone().unwrap(),
-            Some(self.metadata_file_path.clone()),
+        let (metadata_file_path, metadata) = self.load_metadata(commit.identifier()).await?;
+        let version = metadata.next_sequence_number();
+        let mut builder = TableMetadataBuilder::new_from_metadata(
+            metadata.clone(),
+            Some(metadata_file_path.clone()),
         );
         let update = commit.take_updates().to_vec();
-        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &update[0] {
-            snapshot
-        } else {
-            unreachable!()
-        };
-        let metadata = builder
-            .add_snapshot(new_snapshot.clone())
-            .unwrap()
-            .build()
-            .unwrap();
+        for update in &update {
+            match update {
+                TableUpdate::AddSnapshot { snapshot } => {
+                    builder = builder.add_snapshot(snapshot.clone())?;
+                }
+                _ => {
+                    unreachable!("Only AddSnapshot updates are expected in this implementation");
+                }
+            }
+        }
+        let metadata = builder.build()?;
+
         // Write the initial metadata file
-        let metadata_file_path = format!(
-            "{}/metadata/v{}.metadata.json",
-            self.warehouse_location, version
+        let metadata_directory = format!(
+            "{}/{}/{}/metadata",
+            self.warehouse_location,
+            commit.identifier().namespace().to_url_string(),
+            commit.identifier().name()
         );
+        let metadata_file_path = format!("{}/v{}.metadata.json", metadata_directory, version);
         let metadata_json = serde_json::to_string(&metadata.metadata)?;
         let output = self.file_io.new_output(&metadata_file_path)?;
         output.write(metadata_json.into()).await?;
-        let version_hint_path = format!("{}/metadata/version-hint.text", self.warehouse_location);
+        let version_hint_path = format!("{}/version-hint.text", metadata_directory);
         let version_hint_output = self.file_io.new_output(&version_hint_path)?;
         version_hint_output
             .write(format!("{version}").into())
@@ -520,24 +531,59 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use tempfile::TempDir;
 
     use iceberg::spec::NestedField;
     use iceberg::spec::PrimitiveType;
     use iceberg::spec::Schema;
     use iceberg::spec::Type as IcebergType;
-    use iceberg::Catalog;
     use iceberg::NamespaceIdent;
     use iceberg::Result as IcebergResult;
+
+    // Test util function to get iceberg schema,
+    async fn get_test_schema() -> IcebergResult<Schema> {
+        let field = NestedField::required(
+            /*id=*/ 1,
+            "field_name".to_string(),
+            IcebergType::Primitive(PrimitiveType::Int),
+        );
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![Arc::new(field)])
+            .build()?;
+
+        Ok(schema)
+    }
+
+    // Test util function to create a new table.
+    async fn create_test_table(catalog: &FileSystemCatalog) -> IcebergResult<()> {
+        // Define namespace and table.
+        let namespace = NamespaceIdent::from_strs(&["default"])?;
+        let table_name = "test_table".to_string();
+
+        let schema = get_test_schema().await?;
+        let table_creation = TableCreation::builder()
+            .name(table_name.clone())
+            .location(format!(
+                "file:///tmp/iceberg-test/{}/{}",
+                namespace.to_url_string(),
+                table_name
+            ))
+            .schema(schema.clone())
+            .build();
+
+        catalog.create_namespace(&namespace, HashMap::new()).await?;
+        catalog.create_table(&namespace, table_creation).await?;
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_filesystem_catalog_namespace_operations() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileSystemCatalog::new(
-            /*table_name=*/ "".to_string(),
-            warehouse_path.to_string(),
-        );
+        let catalog = FileSystemCatalog::new(warehouse_path.to_string());
         let namespace = NamespaceIdent::from_strs(&["default", "ns"])?;
 
         // List namespace before creation.
@@ -599,10 +645,7 @@ mod tests {
     async fn test_filesystem_catalog_table_operations() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileSystemCatalog::new(
-            /*table_name=*/ "".to_string(),
-            warehouse_path.to_string(),
-        );
+        let catalog = FileSystemCatalog::new(warehouse_path.to_string());
 
         // Define namespace and table.
         let namespace = NamespaceIdent::from_strs(&["default"])?;
@@ -616,28 +659,7 @@ mod tests {
         let err = results.unwrap_err(); // Panics if result is Ok
         assert_eq!(err.kind(), iceberg::ErrorKind::Unexpected);
 
-        // Create table and check.
-        let field = NestedField::required(
-            /*id=*/ 1,
-            "field_name".to_string(),
-            IcebergType::Primitive(PrimitiveType::Int),
-        );
-        let schema = Schema::builder()
-            .with_schema_id(0)
-            .with_fields(vec![Arc::new(field)])
-            .build()?;
-        let table_creation = TableCreation::builder()
-            .name(table_name.clone())
-            .location(format!(
-                "file:///tmp/iceberg-test/{}/{}",
-                namespace.to_url_string(),
-                table_name
-            ))
-            .schema(schema.clone())
-            .build();
-        catalog.create_namespace(&namespace, HashMap::new()).await?;
-        catalog.create_table(&namespace, table_creation).await?;
-
+        create_test_table(&catalog).await?;
         let table_exists = catalog.table_exists(&table_ident).await?;
         assert!(table_exists, "Table should exist after creation");
 
@@ -647,6 +669,7 @@ mod tests {
 
         // Load table and check.
         let table = catalog.load_table(&table_ident).await?;
+        let expected_schema = get_test_schema().await?;
         assert_eq!(
             table.identifier(),
             &table_ident,
@@ -654,7 +677,7 @@ mod tests {
         );
         assert_eq!(
             *table.metadata().current_schema().as_ref(),
-            schema,
+            expected_schema,
             "Loaded table schema should match"
         );
 
@@ -681,6 +704,76 @@ mod tests {
         catalog.drop_table(&new_table_ident).await?;
         let table_exists = catalog.table_exists(&new_table_ident).await?;
         assert!(!table_exists, "Table should not exist after drop");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_update_table() -> IcebergResult<()> {
+        let temp_dir = TempDir::new().expect("tempdir failed");
+        let warehouse_path = temp_dir.path().to_str().unwrap();
+        let catalog = FileSystemCatalog::new(warehouse_path.to_string());
+        create_test_table(&catalog).await?;
+
+        let namespace = NamespaceIdent::from_strs(&["default"])?;
+        let table_name = "test_table".to_string();
+        let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
+        catalog.load_metadata(&table_ident).await?;
+
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+
+        let mut table_updates = vec![];
+        table_updates.append(&mut vec![TableUpdate::AddSnapshot {
+            snapshot: iceberg::spec::Snapshot::builder()
+                .with_snapshot_id(1)
+                .with_sequence_number(1)
+                .with_timestamp_ms(millis as i64)
+                .with_schema_id(0)
+                .with_manifest_list(format!(
+                    "file:///tmp/iceberg-test/{}/{}",
+                    namespace.to_url_string(),
+                    table_name
+                ))
+                .with_parent_snapshot_id(None)
+                .with_summary(iceberg::spec::Summary {
+                    operation: iceberg::spec::Operation::Append,
+                    additional_properties: HashMap::new(),
+                })
+                .build(),
+        }]);
+
+        // TODO(hjiang): This is a hack to create `TableCommit`, because its builder is only exposed to crate instead of public.
+        #[repr(C)]
+        struct TableCommitProxy {
+            ident: TableIdent,
+            requirements: Vec<iceberg::TableRequirement>,
+            updates: Vec<TableUpdate>,
+        }
+        let table_commit_proxy = TableCommitProxy {
+            ident: table_ident.clone(),
+            requirements: vec![],
+            updates: table_updates.clone(),
+        };
+        let table_commit =
+            unsafe { std::mem::transmute::<TableCommitProxy, TableCommit>(table_commit_proxy) };
+
+        catalog.update_table(table_commit).await?;
+        let table = catalog.load_table(&table_ident).await?;
+
+        let table_metadata = table.metadata();
+        assert_eq!(
+            **table_metadata.current_schema(),
+            get_test_schema().await.unwrap(),
+            "Schema should match"
+        );
+        assert_eq!(
+            table.identifier(),
+            &table_ident,
+            "Updated table identifier should match"
+        );
 
         Ok(())
     }
