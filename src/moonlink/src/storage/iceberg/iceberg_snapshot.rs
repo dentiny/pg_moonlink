@@ -343,7 +343,7 @@ mod tests {
         disk_files.insert(parquet_path.clone(), BatchDeletionVector::new(0));
 
         let mut snapshot = Snapshot::new(metadata);
-        snapshot.set_warehouse_info(warehouse_uri.to_string());
+        snapshot._set_warehouse_info(warehouse_uri.to_string());
         snapshot.disk_files = disk_files;
 
         snapshot._export_to_iceberg().await?;

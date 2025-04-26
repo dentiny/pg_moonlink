@@ -8,28 +8,16 @@ use url::Url;
 #[derive(Debug, Clone)]
 pub enum CatalogInfo {
     /// Connection to a REST catalog server.
-    Rest { uri: String },
+    _Rest { uri: String },
     /// Local filesystem based catalog.
-    FileSystem { warehouse_location: String },
+    FileSystem { _warehouse_location: String },
 }
 
 // Default to use filesystem catalog with a default warehouse location.
 impl Default for CatalogInfo {
     fn default() -> Self {
         CatalogInfo::FileSystem {
-            warehouse_location: "/tmp/moonlink_iceberg_warehouse".to_string(),
-        }
-    }
-}
-
-impl CatalogInfo {
-    pub fn display(&self) -> String {
-        match self {
-            CatalogInfo::Rest { uri } => format!("REST catalog uri: {}", uri),
-            CatalogInfo::FileSystem { warehouse_location } => format!(
-                "Filesytem catalog with warehouse location: {}",
-                warehouse_location
-            ),
+            _warehouse_location: "/tmp/moonlink_iceberg_warehouse".to_string(),
         }
     }
 }
