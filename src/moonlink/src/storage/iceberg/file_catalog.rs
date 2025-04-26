@@ -576,7 +576,7 @@ mod tests {
     // Test util function to create a new table.
     async fn create_test_table(catalog: &FileSystemCatalog) -> IcebergResult<()> {
         // Define namespace and table.
-        let namespace = NamespaceIdent::from_strs(&["default"])?;
+        let namespace = NamespaceIdent::from_strs(["default"])?;
         let table_name = "test_table".to_string();
 
         let schema = get_test_schema().await?;
@@ -603,7 +603,7 @@ mod tests {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
         let catalog = FileSystemCatalog::new(warehouse_path.to_string());
-        let namespace = NamespaceIdent::from_strs(&["default", "ns"])?;
+        let namespace = NamespaceIdent::from_strs(["default", "ns"])?;
 
         // Namespace creation fails because parent namespace doesn't exist.
         let result = catalog
@@ -620,8 +620,8 @@ mod tests {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
         let catalog = FileSystemCatalog::new(warehouse_path.to_string());
-        let parent_namespace = NamespaceIdent::from_strs(&["default"])?;
-        let child_namespace = NamespaceIdent::from_strs(&["default", "ns"])?;
+        let parent_namespace = NamespaceIdent::from_strs(["default"])?;
+        let child_namespace = NamespaceIdent::from_strs(["default", "ns"])?;
 
         catalog
             .create_namespace(&parent_namespace, /*properties=*/ HashMap::new())
@@ -646,7 +646,7 @@ mod tests {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
         let catalog = FileSystemCatalog::new(warehouse_path.to_string());
-        let namespace = NamespaceIdent::from_strs(&["default", "ns"])?;
+        let namespace = NamespaceIdent::from_strs(["default", "ns"])?;
 
         // List namespace before creation.
         let namespaces = catalog.list_namespaces(/*parent=*/ None).await?;
@@ -662,7 +662,7 @@ mod tests {
         // Create parent namespace.
         catalog
             .create_namespace(
-                &NamespaceIdent::from_strs(&["default"]).unwrap(),
+                &NamespaceIdent::from_strs(["default"]).unwrap(),
                 /*properties=*/ HashMap::new(),
             )
             .await?;
@@ -676,13 +676,13 @@ mod tests {
         // List all existing namespaces.
         let namespaces = catalog
             .list_namespaces(
-                /*parent=*/ Some(&NamespaceIdent::from_strs(&["default"]).unwrap()),
+                /*parent=*/ Some(&NamespaceIdent::from_strs(["default"]).unwrap()),
             )
             .await?;
         assert_eq!(namespaces.len(), 1, "There should be one root namespace");
         assert_eq!(
             namespaces[0],
-            NamespaceIdent::from_strs(&["ns"]).unwrap(),
+            NamespaceIdent::from_strs(["ns"]).unwrap(),
             "Namespace should match created one"
         );
 
@@ -694,7 +694,7 @@ mod tests {
         );
         assert_eq!(
             namespaces[0],
-            NamespaceIdent::from_strs(&["default"]).unwrap(),
+            NamespaceIdent::from_strs(["default"]).unwrap(),
             "Namespace should match created one"
         );
 
@@ -717,7 +717,7 @@ mod tests {
         let catalog = FileSystemCatalog::new(warehouse_path.to_string());
 
         // Define namespace and table.
-        let namespace = NamespaceIdent::from_strs(&["default"])?;
+        let namespace = NamespaceIdent::from_strs(["default"])?;
         let table_name = "test_table".to_string();
         let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
 
@@ -784,7 +784,7 @@ mod tests {
         let catalog = FileSystemCatalog::new(warehouse_path.to_string());
         create_test_table(&catalog).await?;
 
-        let namespace = NamespaceIdent::from_strs(&["default"])?;
+        let namespace = NamespaceIdent::from_strs(["default"])?;
         let table_name = "test_table".to_string();
         let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
         catalog.load_metadata(&table_ident).await?;

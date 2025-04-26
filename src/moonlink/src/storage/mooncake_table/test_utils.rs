@@ -72,7 +72,7 @@ pub fn verify_file_contents(
 ) {
     let actual = read_ids_from_parquet(file_path)
         .into_iter()
-        .filter_map(|id| id)
+        .flatten()
         .collect::<HashSet<_>>();
     let expected: HashSet<_> = expected_ids.iter().copied().collect();
 
@@ -129,7 +129,7 @@ pub fn verify_files_and_deletions(
                 ids[deletion.1 as usize] = None;
             }
         }
-        res.extend(ids.into_iter().filter_map(|id| id));
+        res.extend(ids.into_iter().flatten());
     }
     res.sort();
     assert_eq!(res, expected_ids);

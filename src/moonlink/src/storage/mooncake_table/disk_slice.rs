@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn test_disk_slice_builder() -> Result<()> {
         // Create a temporary directory for the test
-        let temp_dir = tempdir().map_err(|e| Error::Io(e))?;
+        let temp_dir = tempdir().map_err(Error::Io)?;
         // Create a schema for testing
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
@@ -230,7 +230,7 @@ mod tests {
 
         // Read the files and verify the data
         for (file, _rows) in disk_slice.output_files() {
-            let file = File::open(file).map_err(|e| Error::Io(e))?;
+            let file = File::open(file).map_err(Error::Io)?;
             let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
             println!("Converted arrow schema is: {}", builder.schema());
 
@@ -239,7 +239,7 @@ mod tests {
             println!("{:?}", record_batch);
         }
         // Clean up temporary directory
-        temp_dir.close().map_err(|e| Error::Io(e))?;
+        temp_dir.close().map_err(Error::Io)?;
 
         Ok(())
     }
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn test_index_remapping() -> Result<()> {
         // Create a temporary directory for the test
-        let temp_dir = tempdir().map_err(|e| Error::Io(e))?;
+        let temp_dir = tempdir().map_err(Error::Io)?;
 
         // Create a schema for testing
         let schema = Arc::new(Schema::new(vec![
@@ -259,8 +259,7 @@ mod tests {
         let mut mem_slice = MemSlice::new(schema.clone(), 3);
 
         // Add several test rows
-        let rows = vec![
-            MoonlinkRow::new(vec![
+        let rows = [MoonlinkRow::new(vec![
                 RowValue::Int32(1),
                 RowValue::ByteArray("Alice".as_bytes().to_vec()),
             ]),
@@ -279,8 +278,7 @@ mod tests {
             MoonlinkRow::new(vec![
                 RowValue::Int32(5),
                 RowValue::ByteArray("Eve".as_bytes().to_vec()),
-            ]),
-        ];
+            ])];
 
         // Insert original keys into the index
         for row in rows.iter() {
@@ -369,7 +367,7 @@ mod tests {
         }
 
         // Clean up temporary directory
-        temp_dir.close().map_err(|e| Error::Io(e))?;
+        temp_dir.close().map_err(Error::Io)?;
 
         Ok(())
     }

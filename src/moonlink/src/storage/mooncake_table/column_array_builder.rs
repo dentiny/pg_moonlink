@@ -185,8 +185,8 @@ mod tests {
         let array = builder.finish(&DataType::Boolean);
         assert_eq!(array.len(), 2);
         let bool_array = array.as_any().downcast_ref::<BooleanArray>().unwrap();
-        assert_eq!(bool_array.value(0), true);
-        assert_eq!(bool_array.value(1), false);
+        assert!(bool_array.value(0));
+        assert!(!bool_array.value(1));
 
         // Test Utf8 (ByteArray) type
         let mut builder = ColumnArrayBuilder::new(DataType::Utf8, 2);

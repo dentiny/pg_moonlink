@@ -97,9 +97,9 @@ async fn test_deletion_after_flush() -> Result<()> {
     let mut ids = read_ids_from_parquet(&paths[0]);
 
     for deletion in deletions {
-        ids[deletion.1 as usize] = None;
+        ids[deletion.1] = None;
     }
-    let ids = ids.into_iter().filter_map(|id| id).collect::<Vec<_>>();
+    let ids = ids.into_iter().flatten().collect::<Vec<_>>();
 
     assert!(ids.contains(&1));
     assert!(ids.contains(&3));
