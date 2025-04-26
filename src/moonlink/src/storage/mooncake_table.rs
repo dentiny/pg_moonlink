@@ -9,7 +9,6 @@ use super::index::{get_lookup_key, MemIndex, MooncakeIndex};
 use super::storage_utils::{RawDeletionRecord, RecordLocation};
 use crate::error::{Error, Result};
 use crate::row::MoonlinkRow;
-use crate::storage::iceberg::catalog_utils::CatalogInfo;
 
 use std::collections::HashMap;
 use std::mem::take;
@@ -70,8 +69,8 @@ pub struct TableMetadata {
 /// A snapshot maps directly to an iceberg snapshot.
 ///
 pub struct Snapshot {
-    /// Catalog information.
-    pub(crate) catalog_info: CatalogInfo,
+    /// Warehouse URI for the catalog.
+    pub(crate) warehouse_uri: String,
     /// table metadata
     pub(crate) metadata: Arc<TableMetadata>,
     /// datafile and their deletion vectors
@@ -85,7 +84,8 @@ pub struct Snapshot {
 impl Snapshot {
     pub(crate) fn new(metadata: Arc<TableMetadata>) -> Self {
         Self {
-            catalog_info: CatalogInfo::default(),
+            // Provide default warehouse location at filesystem.
+            warehouse_uri: "/tmp/moonlink_iceberg_warehouse".to_string(),
             metadata,
             disk_files: HashMap::new(),
             snapshot_version: 0,
@@ -94,9 +94,9 @@ impl Snapshot {
     }
 
     // TODO(hjiang): Currently development between mooncake table and iceberg are independent, this interface is left for unit test purpose.
-    // After end-to-end integration, catalog information should be passed down from postgres.
-    pub fn set_catalog_info(&mut self, catalog_info: CatalogInfo) {
-        self.catalog_info = catalog_info
+    // After end-to-end integration, warehouse information should be passed down from postgres.
+    pub fn set_warehouse_info(&mut self, warehouse_uri: String) {
+        self.warehouse_uri = warehouse_uri;
     }
 
     pub fn get_name_for_inmemory_file(&self) -> PathBuf {

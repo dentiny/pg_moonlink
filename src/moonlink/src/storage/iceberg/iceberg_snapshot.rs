@@ -188,7 +188,7 @@ impl IcebergSnapshot for Snapshot {
         let table_name = self.metadata.name.clone();
         let namespace = vec!["default"];
         let arrow_schema = self.metadata.schema.as_ref();
-        let catalog = create_catalog(self.catalog_info.clone());
+        let catalog = create_catalog(&self.warehouse_uri)?;
         let iceberg_table =
             get_or_create_iceberg_table(&*catalog, &namespace, &table_name, arrow_schema).await?;
 
@@ -220,7 +220,7 @@ impl IcebergSnapshot for Snapshot {
         let namespace = vec!["default"];
         let table_name = self.metadata.name.clone();
         let arrow_schema = self.metadata.schema.as_ref();
-        let catalog = create_catalog(self.catalog_info.clone());
+        let catalog = create_catalog(&self.warehouse_uri)?;
         let iceberg_table =
             get_or_create_iceberg_table(&*catalog, &namespace, &table_name, arrow_schema).await?;
 
@@ -260,7 +260,7 @@ mod tests {
     use super::*;
 
     use crate::storage::{
-        iceberg::catalog_utils::{create_catalog, CatalogInfo},
+        iceberg::catalog_utils::create_catalog,
         mooncake_table::{Snapshot, TableConfig, TableMetadata},
     };
 
@@ -297,7 +297,7 @@ mod tests {
         Ok(())
     }
 
-    async fn test_store_and_load_snapshot_impl(catalog_info: CatalogInfo) -> IcebergResult<()> {
+    async fn test_store_and_load_snapshot_impl(warehouse_uri: &str) -> IcebergResult<()> {
         // Create Arrow schema and record batch.
         let arrow_schema =
             Arc::new(ArrowSchema::new(vec![
@@ -317,7 +317,7 @@ mod tests {
         )?;
 
         // Cleanup namespace and table before testing.
-        let catalog = create_catalog(catalog_info.clone());
+        let catalog = create_catalog(warehouse_uri)?;
         // Cleanup states before testing.
         delete_all_tables(&*catalog).await?;
         delete_all_namespaces(&*catalog).await?;
@@ -343,7 +343,7 @@ mod tests {
         disk_files.insert(parquet_path.clone(), BatchDeletionVector::new(0));
 
         let mut snapshot = Snapshot::new(metadata);
-        snapshot.set_catalog_info(catalog_info.clone());
+        snapshot.set_warehouse_info(warehouse_uri.to_string());
         snapshot.disk_files = disk_files;
 
         snapshot._export_to_iceberg().await?;
@@ -404,10 +404,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_and_load_snapshot_with_rest_catalog() -> IcebergResult<()> {
-        let catalog_info = CatalogInfo::Rest {
-            uri: "http://localhost:8181".to_string(),
-        };
-        test_store_and_load_snapshot_impl(catalog_info).await?;
+        let warehouse_uri = "http://localhost:8181";
+        test_store_and_load_snapshot_impl(warehouse_uri).await?;
         Ok(())
     }
 
@@ -415,10 +413,7 @@ mod tests {
     async fn test_store_and_load_snapshot_with_filesystem_catalog() -> IcebergResult<()> {
         let tmp_dir = tempdir()?;
         let warehouse_path = tmp_dir.path().to_str().unwrap();
-        let catalog_info = CatalogInfo::FileSystem {
-            warehouse_location: warehouse_path.to_string(),
-        };
-        test_store_and_load_snapshot_impl(catalog_info).await?;
+        test_store_and_load_snapshot_impl(warehouse_path).await?;
         Ok(())
     }
 }

@@ -1,7 +1,9 @@
 use crate::storage::iceberg::file_catalog::FileSystemCatalog;
 
-use iceberg::Catalog;
+use iceberg::Error as IcebergError;
+use iceberg::{Catalog, Result as IcebergResult};
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
+use url::Url;
 
 #[derive(Debug, Clone)]
 pub enum CatalogInfo {
@@ -33,13 +35,26 @@ impl CatalogInfo {
 }
 
 /// Create a catelog based on the provided type.
-pub fn create_catalog(catalog_info: CatalogInfo) -> Box<dyn Catalog> {
-    match catalog_info {
-        CatalogInfo::Rest { uri } => Box::new(RestCatalog::new(
-            RestCatalogConfig::builder().uri(uri).build(),
-        )),
-        CatalogInfo::FileSystem { warehouse_location } => {
-            Box::new(FileSystemCatalog::new(warehouse_location))
-        }
+pub fn create_catalog(warehouse_uri: &str) -> IcebergResult<Box<dyn Catalog>> {
+    let url = Url::parse(warehouse_uri)
+        .or_else(|_| Url::from_file_path(warehouse_uri))
+        .map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Invalid warehouse URI {}: {:?}", warehouse_uri, e),
+            )
+        })?;
+
+    // There're only two catalogs supported: filesystem and rest, all other catalogs don't support transactional commit.
+    if url.scheme() == "file" {
+        let absolute_path = url.path();
+        return Ok(Box::new(FileSystemCatalog::new(absolute_path.to_string())));
     }
+
+    // Delegate all other warehouse URIs to the REST catalog.
+    Ok(Box::new(RestCatalog::new(
+        RestCatalogConfig::builder()
+            .uri(warehouse_uri.to_string())
+            .build(),
+    )))
 }
