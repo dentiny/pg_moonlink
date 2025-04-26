@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 // UNDONE(UPDATE_DELETE): a better way to handle file ids
@@ -17,7 +17,7 @@ pub enum RecordLocation {
 }
 
 impl RecordLocation {
-    pub fn new_disk_file(path: &PathBuf, row_offset: usize) -> Self {
+    pub fn new_disk_file(path: &Path, row_offset: usize) -> Self {
         RecordLocation::DiskFile(FileId(Arc::new(path.to_path_buf())), row_offset)
     }
 }
@@ -43,9 +43,9 @@ pub struct ProcessedDeletionRecord {
     pub(crate) xact_id: Option<u32>,
 }
 
-impl Into<(u64, usize)> for RecordLocation {
-    fn into(self) -> (u64, usize) {
-        match self {
+impl From<RecordLocation> for (u64, usize) {
+    fn from(val: RecordLocation) -> Self {
+        match val {
             RecordLocation::MemoryBatch(batch_id, row_offset) => (batch_id, row_offset),
             _ => panic!("Cannot convert RecordLocation to (u64, usize)"),
         }

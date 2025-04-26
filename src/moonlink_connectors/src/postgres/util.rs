@@ -201,18 +201,18 @@ mod tests {
         assert_eq!(arrow_schema.fields().len(), 3);
         assert_eq!(arrow_schema.field(0).name(), "id");
         assert_eq!(arrow_schema.field(0).data_type(), &DataType::Int32);
-        assert_eq!(arrow_schema.field(0).is_nullable(), false);
+        assert!(!arrow_schema.field(0).is_nullable());
 
         assert_eq!(arrow_schema.field(1).name(), "name");
         assert_eq!(arrow_schema.field(1).data_type(), &DataType::Utf8);
-        assert_eq!(arrow_schema.field(1).is_nullable(), true);
+        assert!(arrow_schema.field(1).is_nullable());
 
         assert_eq!(arrow_schema.field(2).name(), "created_at");
         assert!(matches!(
             arrow_schema.field(2).data_type(),
             DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
         ));
-        assert_eq!(arrow_schema.field(2).is_nullable(), true);
+        assert!(arrow_schema.field(2).is_nullable());
     }
 
     #[test]
@@ -221,8 +221,8 @@ mod tests {
             values: vec![
                 Cell::I32(1),
                 Cell::I64(2),
-                Cell::F32(3.14),
-                Cell::F64(2.718),
+                Cell::F32(std::f32::consts::PI),
+                Cell::F64(std::f64::consts::E),
                 Cell::Bool(true),
                 Cell::String("test".to_string()),
                 Cell::Date(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()),
@@ -244,8 +244,14 @@ mod tests {
         assert_eq!(moonlink_row.values.len(), 11);
         assert_eq!(moonlink_row.values[0], RowValue::Int32(1));
         assert_eq!(moonlink_row.values[1], RowValue::Int64(2));
-        assert_eq!(moonlink_row.values[2], RowValue::Float32(3.14));
-        assert_eq!(moonlink_row.values[3], RowValue::Float64(2.718));
+        assert_eq!(
+            moonlink_row.values[2],
+            RowValue::Float32(std::f32::consts::PI)
+        );
+        assert_eq!(
+            moonlink_row.values[3],
+            RowValue::Float64(std::f64::consts::E)
+        );
         assert_eq!(moonlink_row.values[4], RowValue::Bool(true));
         let vec = "test".as_bytes().to_vec();
         assert_eq!(moonlink_row.values[5], RowValue::ByteArray(vec.clone()));

@@ -18,8 +18,8 @@ use iceberg::{
 /// TODO(hjiang):
 /// 1. Implement property related functionalities.
 /// 2. The initial version access everything via filesystem, for performance consideration we should cache metadata in memory.
-/// (not related to functionality) 3. Set snapshot retention policy at metadata.
-
+/// 3. (not related to functionality) Set snapshot retention policy at metadata.
+///
 /// Iceberg table format from filesystem's perspective:
 /// - data
 ///   - parquet files
@@ -54,7 +54,7 @@ impl FileSystemCatalog {
                 .unwrap()
                 .build()
                 .unwrap(),
-            warehouse_location: warehouse_location,
+            warehouse_location,
         }
     }
 

@@ -107,7 +107,7 @@ impl BatchSink for Sink {
                 }
                 CdcEvent::Commit(commit_body) => {
                     for table_id in &tables_in_transaction {
-                        let event_sender = self.event_senders.get_mut(&table_id).unwrap();
+                        let event_sender = self.event_senders.get_mut(table_id).unwrap();
                         event_sender
                             .send(TableEvent::Commit {
                                 lsn: commit_body.commit_lsn(),
@@ -119,7 +119,7 @@ impl BatchSink for Sink {
                 }
                 CdcEvent::StreamCommit(stream_commit_body) => {
                     for table_id in &tables_in_transaction {
-                        let event_sender = self.event_senders.get_mut(&table_id).unwrap();
+                        let event_sender = self.event_senders.get_mut(table_id).unwrap();
                         event_sender
                             .send(TableEvent::StreamCommit {
                                 lsn: stream_commit_body.commit_lsn(),
@@ -179,7 +179,7 @@ impl BatchSink for Sink {
                 }
                 CdcEvent::StreamAbort(stream_abort_body) => {
                     for table_id in &tables_in_transaction {
-                        let event_sender = self.event_senders.get_mut(&table_id).unwrap();
+                        let event_sender = self.event_senders.get_mut(table_id).unwrap();
                         event_sender
                             .send(TableEvent::StreamAbort {
                                 xact_id: stream_abort_body.xid(),

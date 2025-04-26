@@ -34,7 +34,7 @@ impl MemSlice {
     }
 
     pub(super) fn delete(&mut self, record: &RawDeletionRecord) -> Option<(u64, usize)> {
-        let locations = self.mem_index.find_record(&record)?;
+        let locations = self.mem_index.find_record(record)?;
 
         for location in locations {
             // Clone the reference to create an owned copy
@@ -49,7 +49,7 @@ impl MemSlice {
 
     /// Find the first non-deleted position for a given lookup key
     pub fn find_non_deleted_position(&self, record: &RawDeletionRecord) -> Option<(u64, usize)> {
-        let locations = self.mem_index.find_record(&record)?;
+        let locations = self.mem_index.find_record(record)?;
 
         for location in locations {
             let location_tuple: (u64, usize) = location.clone().into();
@@ -78,6 +78,7 @@ impl MemSlice {
         self.column_store.get_num_rows()
     }
 
+    #[allow(clippy::type_complexity)]
     pub(super) fn drain(
         &mut self,
     ) -> Result<(Option<(u64, Arc<RecordBatch>)>, Vec<BatchEntry>, MemIndex)> {

@@ -107,7 +107,7 @@ impl DiskSliceWriter {
                 // Create the file
                 let file_name = format!("{}.parquet", Uuid::new_v4());
                 file_path = Some(dir_path.join(file_name));
-                let file = File::create(file_path.as_ref().unwrap()).map_err(|e| Error::Io(e))?;
+                let file = File::create(file_path.as_ref().unwrap()).map_err(Error::Io)?;
                 out_file_idx = files.len();
                 writer = Some(ArrowWriter::try_new(file, self.schema.clone(), None)?);
                 out_row_idx = 0;

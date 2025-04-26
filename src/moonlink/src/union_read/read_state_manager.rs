@@ -18,7 +18,7 @@ impl ReadStateManager {
             last_read_lsn: AtomicU64::new(0),
             last_read_state: RwLock::new(None),
             table_snapshot,
-            table_snapshot_watch_receiver: table_snapshot_watch_receiver,
+            table_snapshot_watch_receiver,
         }
     }
 

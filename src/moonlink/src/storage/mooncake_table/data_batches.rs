@@ -25,9 +25,7 @@ impl InMemoryBatch {
         if self.data.is_none() {
             return Ok(None);
         }
-        let batch = self
-            .deletions
-            .apply_to_batch(&self.data.as_ref().unwrap())?;
+        let batch = self.deletions.apply_to_batch(self.data.as_ref().unwrap())?;
         Ok(Some(batch))
     }
 
@@ -56,7 +54,7 @@ pub(super) struct ColumnStoreBuffer {
     /// Collection of record batches including the current one
     in_memory_batches: Vec<BatchEntry>,
     /// Current batch being built
-    current_rows: Vec<Box<ColumnArrayBuilder>>,
+    current_rows: Vec<ColumnArrayBuilder>,
     /// Current row count in the current buffer
     current_row_count: usize,
     /// Next batch id, each batch is assigned a unique id
@@ -70,12 +68,7 @@ impl ColumnStoreBuffer {
         let current_rows = schema
             .fields()
             .iter()
-            .map(|field| {
-                Box::new(ColumnArrayBuilder::new(
-                    field.data_type().clone(),
-                    max_rows_per_buffer,
-                ))
-            })
+            .map(|field| ColumnArrayBuilder::new(field.data_type().clone(), max_rows_per_buffer))
             .collect();
 
         Self {
@@ -94,6 +87,7 @@ impl ColumnStoreBuffer {
     /// Append a row of data to the buffer. If the current buffer is full,
     /// finalize it and start a new one.
     ///
+    #[allow(clippy::type_complexity)]
     pub(super) fn append_row(
         &mut self,
         row: &MoonlinkRow,

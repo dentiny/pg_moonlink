@@ -95,7 +95,7 @@ impl ColumnArrayBuilder {
             ColumnArrayBuilder::Utf8(builder) => {
                 match value {
                     RowValue::ByteArray(v) => {
-                        builder.append_value(unsafe { std::str::from_utf8_unchecked(&v) })
+                        builder.append_value(unsafe { std::str::from_utf8_unchecked(v) })
                     }
                     RowValue::Null => builder.append_null(),
                     _ => unreachable!("ByteArray expected from well-typed input"),

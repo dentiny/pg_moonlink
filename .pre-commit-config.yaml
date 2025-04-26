@@ -3,3 +3,11 @@ repos:
     rev: v1.0
     hooks:
     - id: fmt
+  - repo: local
+    hooks:
+    - id: clipper
+      name: clipper
+      language: system
+      files: '\.rs$'
+      entry: cargo clippy --all-targets -- -D warnings
+      pass_filenames: false

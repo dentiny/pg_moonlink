@@ -49,13 +49,13 @@ impl SnapshotTableState {
 
     pub(super) fn update_snapshot(&mut self, mut next_snapshot_task: SnapshotTask) -> u64 {
         let batch_size = self.current_snapshot.metadata.config.batch_size;
-        if next_snapshot_task.new_mem_indices.len() > 0 {
+        if !next_snapshot_task.new_mem_indices.is_empty() {
             let new_mem_indices = take(&mut next_snapshot_task.new_mem_indices);
             for mem_index in new_mem_indices {
                 self.current_snapshot.indices.insert_memory_index(mem_index);
             }
         }
-        if next_snapshot_task.new_record_batches.len() > 0 {
+        if !next_snapshot_task.new_record_batches.is_empty() {
             let new_batches = take(&mut next_snapshot_task.new_record_batches);
             // previous unfinished batch is finished
             assert!(self.batches.values().last().unwrap().data.is_none());
@@ -79,11 +79,11 @@ impl SnapshotTableState {
                 }));
             self.rows.clear();
         }
-        if next_snapshot_task.new_disk_slices.len() > 0 {
+        if !next_snapshot_task.new_disk_slices.is_empty() {
             let mut new_disk_slices = take(&mut next_snapshot_task.new_disk_slices);
             for slice in new_disk_slices.iter_mut() {
                 self.current_snapshot.disk_files.extend(
-                    slice.output_files().into_iter().map(|(file, row_count)| {
+                    slice.output_files().iter().map(|(file, row_count)| {
                         (file.clone(), BatchDeletionVector::new(*row_count))
                     }),
                 );
@@ -94,10 +94,8 @@ impl SnapshotTableState {
                 for entry in self.committed_deletion_log.iter_mut().skip(pos) {
                     slice.remap_deletion_if_needed(entry);
                 }
-                for entry in self.uncommitted_deletion_log.iter_mut() {
-                    if let Some(deletion) = entry {
-                        slice.remap_deletion_if_needed(deletion);
-                    }
+                for entry in self.uncommitted_deletion_log.iter_mut().flatten() {
+                    slice.remap_deletion_if_needed(entry);
                 }
                 self.current_snapshot
                     .indices
@@ -110,9 +108,9 @@ impl SnapshotTableState {
                 });
             }
         }
-        if next_snapshot_task.new_rows.len() > 0 {
+        if !next_snapshot_task.new_rows.is_empty() {
             let new_rows = take(&mut next_snapshot_task.new_rows);
-            self.rows.extend(new_rows.into_iter());
+            self.rows.extend(new_rows);
         }
         Self::process_deletion_log(self, &mut next_snapshot_task);
         if next_snapshot_task.new_lsn != 0 {
@@ -126,12 +124,12 @@ impl SnapshotTableState {
 
     fn process_delete_record(&mut self, deletion: RawDeletionRecord) -> ProcessedDeletionRecord {
         if let Some(pos) = deletion.pos {
-            return ProcessedDeletionRecord {
+            ProcessedDeletionRecord {
                 _lookup_key: deletion.lookup_key,
                 pos: pos.into(),
                 lsn: deletion.lsn,
                 xact_id: deletion.xact_id,
-            };
+            }
         } else {
             let locations = self.current_snapshot.indices.find_record(&deletion);
             for location in locations.unwrap() {
@@ -139,7 +137,7 @@ impl SnapshotTableState {
                     RecordLocation::MemoryBatch(batch_id, row_id) => {
                         if !self
                             .batches
-                            .get_mut(&batch_id)
+                            .get_mut(batch_id)
                             .unwrap()
                             .deletions
                             .is_deleted(*row_id)
@@ -182,7 +180,7 @@ impl SnapshotTableState {
 
                     let res = self
                         .batches
-                        .get_mut(&batch_id)
+                        .get_mut(batch_id)
                         .unwrap()
                         .deletions
                         .delete_row(*row_id);
@@ -259,6 +257,7 @@ impl SnapshotTableState {
         ret
     }
 
+    #[allow(clippy::type_complexity)]
     pub(crate) fn request_read(&self) -> Result<(Vec<PathBuf>, Vec<(usize, usize)>)> {
         let mut file_paths: Vec<PathBuf> = Vec::new();
         let deletions = self.get_deletion_records();
@@ -298,7 +297,7 @@ impl SnapshotTableState {
                 }
             }
 
-            if filtered_batches.len() > 0 {
+            if !filtered_batches.is_empty() {
                 // Build a parquet file from current record batches
                 //
                 let mut parquet_writer =

@@ -141,7 +141,7 @@ impl SnapshotTask {
     }
 
     pub fn should_create_snapshot(&self) -> bool {
-        self.new_lsn > 0 || self.new_disk_slices.len() > 0
+        self.new_lsn > 0 || !self.new_disk_slices.is_empty()
     }
 }
 
@@ -202,7 +202,8 @@ impl MooncakeTable {
             get_lookup_key,
         });
         let (table_snapshot_watch_sender, table_snapshot_watch_receiver) = watch::channel(0);
-        let table = Self {
+
+        Self {
             mem_slice: MemSlice::new(metadata.schema.clone(), metadata.config.batch_size),
             metadata: metadata.clone(),
             snapshot: Arc::new(RwLock::new(SnapshotTableState::new(metadata))),
@@ -210,9 +211,7 @@ impl MooncakeTable {
             transaction_stream_states: HashMap::new(),
             table_snapshot_watch_sender,
             table_snapshot_watch_receiver,
-        };
-
-        table
+        }
     }
 
     pub(crate) fn get_state_for_reader(
