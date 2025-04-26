@@ -35,7 +35,10 @@ impl CatalogInfo {
 }
 
 /// Create a catelog based on the provided type.
+///
+/// TODO(hjiang): Support security configuration for REST catalog.
 pub fn create_catalog(warehouse_uri: &str) -> IcebergResult<Box<dyn Catalog>> {
+    // Same as iceberg-rust imlementation, use URL parsing to decide which catalog to use.
     let url = Url::parse(warehouse_uri)
         .or_else(|_| Url::from_file_path(warehouse_uri))
         .map_err(|e| {

@@ -93,8 +93,8 @@ impl Snapshot {
         }
     }
 
-    // TODO(hjiang): Currently development between mooncake table and iceberg are independent, this interface is left for unit test purpose.
-    // After end-to-end integration, warehouse information should be passed down from postgres.
+    // TODO(hjiang): Currently development between mooncake table and iceberg is independent, this interface is left for unit test purpose.
+    // After end-to-end integration, warehouse information should be passed down from postgres at `Snapshot` initialization.
     pub fn set_warehouse_info(&mut self, warehouse_uri: String) {
         self.warehouse_uri = warehouse_uri;
     }
