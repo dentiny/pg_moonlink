@@ -259,7 +259,8 @@ mod tests {
         let mut mem_slice = MemSlice::new(schema.clone(), 3);
 
         // Add several test rows
-        let rows = [MoonlinkRow::new(vec![
+        let rows = [
+            MoonlinkRow::new(vec![
                 RowValue::Int32(1),
                 RowValue::ByteArray("Alice".as_bytes().to_vec()),
             ]),
@@ -278,7 +279,8 @@ mod tests {
             MoonlinkRow::new(vec![
                 RowValue::Int32(5),
                 RowValue::ByteArray("Eve".as_bytes().to_vec()),
-            ])];
+            ]),
+        ];
 
         // Insert original keys into the index
         for row in rows.iter() {
