@@ -160,8 +160,12 @@ mod tests {
 
         // Test Float32 type
         let mut builder = ColumnArrayBuilder::new(DataType::Float32, 2);
-        builder.append_value(&RowValue::Float32(std::f32::consts::PI)).unwrap();
-        builder.append_value(&RowValue::Float32(std::f32::consts::E)).unwrap();
+        builder
+            .append_value(&RowValue::Float32(std::f32::consts::PI))
+            .unwrap();
+        builder
+            .append_value(&RowValue::Float32(std::f32::consts::E))
+            .unwrap();
         let array = builder.finish(&DataType::Float32);
         assert_eq!(array.len(), 2);
         let float32_array = array.as_any().downcast_ref::<Float32Array>().unwrap();
@@ -170,8 +174,12 @@ mod tests {
 
         // Test Float64 type
         let mut builder = ColumnArrayBuilder::new(DataType::Float64, 2);
-        builder.append_value(&RowValue::Float64(std::f64::consts::PI)).unwrap();
-        builder.append_value(&RowValue::Float64(std::f64::consts::E)).unwrap();
+        builder
+            .append_value(&RowValue::Float64(std::f64::consts::PI))
+            .unwrap();
+        builder
+            .append_value(&RowValue::Float64(std::f64::consts::E))
+            .unwrap();
         let array = builder.finish(&DataType::Float64);
         assert_eq!(array.len(), 2);
         let float64_array = array.as_any().downcast_ref::<Float64Array>().unwrap();
