@@ -66,7 +66,7 @@ pub fn read_ids_from_parquet(file_path: &Path) -> Vec<Option<i32>> {
 }
 
 pub fn verify_file_contents(
-    file_path: &PathBuf,
+    file_path: &Path,
     expected_ids: &[i32],
     expected_row_count: Option<usize>,
 ) {

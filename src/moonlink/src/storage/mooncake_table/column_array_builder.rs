@@ -160,23 +160,23 @@ mod tests {
 
         // Test Float32 type
         let mut builder = ColumnArrayBuilder::new(DataType::Float32, 2);
-        builder.append_value(&RowValue::Float32(3.14)).unwrap();
-        builder.append_value(&RowValue::Float32(2.71)).unwrap();
+        builder.append_value(&RowValue::Float32(std::f32::consts::PI)).unwrap();
+        builder.append_value(&RowValue::Float32(std::f32::consts::E)).unwrap();
         let array = builder.finish(&DataType::Float32);
         assert_eq!(array.len(), 2);
         let float32_array = array.as_any().downcast_ref::<Float32Array>().unwrap();
-        assert!((float32_array.value(0) - 3.14).abs() < 0.0001);
-        assert!((float32_array.value(1) - 2.71).abs() < 0.0001);
+        assert!((float32_array.value(0) - std::f32::consts::PI).abs() < 0.0001);
+        assert!((float32_array.value(1) - std::f32::consts::E).abs() < 0.0001);
 
         // Test Float64 type
         let mut builder = ColumnArrayBuilder::new(DataType::Float64, 2);
-        builder.append_value(&RowValue::Float64(3.14159)).unwrap();
-        builder.append_value(&RowValue::Float64(2.71828)).unwrap();
+        builder.append_value(&RowValue::Float64(std::f64::consts::PI)).unwrap();
+        builder.append_value(&RowValue::Float64(std::f64::consts::E)).unwrap();
         let array = builder.finish(&DataType::Float64);
         assert_eq!(array.len(), 2);
         let float64_array = array.as_any().downcast_ref::<Float64Array>().unwrap();
-        assert!((float64_array.value(0) - 3.14159).abs() < 0.00001);
-        assert!((float64_array.value(1) - 2.71828).abs() < 0.00001);
+        assert!((float64_array.value(0) - std::f64::consts::PI).abs() < 0.00001);
+        assert!((float64_array.value(1) - std::f64::consts::E).abs() < 0.00001);
 
         // Test Boolean type
         let mut builder = ColumnArrayBuilder::new(DataType::Boolean, 2);
