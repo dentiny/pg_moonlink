@@ -58,7 +58,7 @@ impl BatchDeletionVector {
         }
     }
 
-    pub(super) fn collect_active_rows(&self) -> Vec<usize> {
+    pub(crate) fn collect_active_rows(&self) -> Vec<usize> {
         let Some(bitmap) = &self.deletion_vector else {
             return (0..self.max_rows).collect();
         };
@@ -67,7 +67,7 @@ impl BatchDeletionVector {
             .collect()
     }
 
-    pub(super) fn collect_deleted_rows(&self) -> Vec<usize> {
+    pub(crate) fn collect_deleted_rows(&self) -> Vec<usize> {
         let Some(bitmap) = &self.deletion_vector else {
             return Vec::new();
         };
