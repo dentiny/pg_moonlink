@@ -66,6 +66,32 @@ impl BatchDeletionVector {
             .filter(move |i| bit_util::get_bit(bitmap, *i))
             .collect()
     }
+
+    pub(super) fn collect_deleted_rows(&self) -> Vec<usize> {
+        let Some(bitmap) = &self.deletion_vector else {
+            return Vec::new();
+        };
+
+        let mut deleted = Vec::new();
+        for byte_idx in 0..bitmap.len() {
+            let byte = bitmap[byte_idx];
+            // No deletion in the byte.
+            if byte == 0xFF {
+                continue;
+            }
+
+            for bit_idx in 0..8 {
+                let row_idx = byte_idx * 8 + bit_idx;
+                if row_idx >= self.max_rows {
+                    break;
+                }
+                if byte & (1 << bit_idx) == 0 {
+                    deleted.push(row_idx);
+                }
+            }
+        }
+        deleted
+    }
 }
 
 #[cfg(test)]
@@ -133,13 +159,21 @@ mod tests {
         // Create a delete vector
         let mut buffer = BatchDeletionVector::new(10);
 
+        // Before deletion all rows are active
+        let active_rows: Vec<usize> = buffer.collect_active_rows();
+        assert_eq!(active_rows, (0..10).collect::<Vec<_>>());
+        let deleted_rows: Vec<usize> = buffer.collect_deleted_rows();
+        assert!(deleted_rows.is_empty());
+
         // Delete rows 1, 3, and 8
         buffer.delete_row(1);
         buffer.delete_row(3);
         buffer.delete_row(8);
 
         // Check that the iterator returns those positions
-        let deleted_rows: Vec<usize> = buffer.collect_active_rows();
-        assert_eq!(deleted_rows, vec![0, 2, 4, 5, 6, 7, 9]);
+        let active_rows: Vec<usize> = buffer.collect_active_rows();
+        assert_eq!(active_rows, vec![0, 2, 4, 5, 6, 7, 9]);
+        let deleted_rows: Vec<usize> = buffer.collect_deleted_rows();
+        assert_eq!(deleted_rows, vec![1, 3, 8]);
     }
 }
