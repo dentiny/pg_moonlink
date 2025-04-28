@@ -28,6 +28,7 @@ use iceberg::TableCreation;
 use iceberg::{Catalog, Result as IcebergResult, TableIdent};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::properties::WriterProperties;
+use uuid::Uuid;
 
 // UNDONE(Iceberg):
 // 1. Implement deletion file related load and store operations.
@@ -128,7 +129,7 @@ async fn write_record_batch_to_iceberg(
 ) -> IcebergResult<DataFile> {
     let location_generator = DefaultLocationGenerator::new(table.metadata().clone())?;
     let file_name_generator = DefaultFileNameGenerator::new(
-        /*prefix=*/ "iceberg-data".to_string(),
+        /*prefix=*/ Uuid::new_v4().to_string(),
         /*suffix=*/ None,
         /*format=*/ DataFileFormat::Parquet,
     );
