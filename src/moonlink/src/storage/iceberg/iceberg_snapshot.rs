@@ -416,7 +416,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_and_load_snapshot_with_rest_catalog() -> IcebergResult<()> {
-        let warehouse_uri = "http://localhost:8181";
+        let warehouse_uri = "http://iceberg:8181";
         test_store_and_load_snapshot_impl(warehouse_uri).await?;
         Ok(())
     }

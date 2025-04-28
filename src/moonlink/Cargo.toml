@@ -21,6 +21,8 @@ serde_json.workspace = true
 url.workspace = true
 roaring.workspace = true
 crc32fast.workspace = true
+aws-config.workspace = true
+aws-sdk-s3.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
