@@ -547,6 +547,7 @@ impl Catalog for FileSystemCatalog {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::path::Path;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tempfile::TempDir;
@@ -722,15 +723,18 @@ mod tests {
         let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
 
         // Ensure table does not exist.
-        let table_exists = catalog.table_exists(&table_ident).await?;
-        assert!(!table_exists, "Table should not exist before creation");
+        let table_already_exists = catalog.table_exists(&table_ident).await?;
+        assert!(
+            !table_already_exists,
+            "Table should not exist before creation"
+        );
         let results = catalog.list_tables(&namespace).await;
         let err = results.unwrap_err();
         assert_eq!(err.kind(), iceberg::ErrorKind::NamespaceNotFound);
 
         create_test_table(&catalog).await?;
-        let table_exists = catalog.table_exists(&table_ident).await?;
-        assert!(table_exists, "Table should exist after creation");
+        let table_already_exists = catalog.table_exists(&table_ident).await?;
+        assert!(table_already_exists, "Table should exist after creation");
 
         let tables = catalog.list_tables(&namespace).await?;
         assert_eq!(tables.len(), 1);
@@ -759,10 +763,13 @@ mod tests {
                 /*dest=*/ &new_table_ident,
             )
             .await?;
-        let table_exists = catalog.table_exists(&new_table_ident).await?;
-        assert!(table_exists, "Table should exist after rename");
-        let table_exists = catalog.table_exists(&old_table_ident).await?;
-        assert!(!table_exists, "Old table should not exist after rename");
+        let table_already_exists = catalog.table_exists(&new_table_ident).await?;
+        assert!(table_already_exists, "Table should exist after rename");
+        let table_already_exists = catalog.table_exists(&old_table_ident).await?;
+        assert!(
+            !table_already_exists,
+            "Old table should not exist after rename"
+        );
 
         let tables = catalog.list_tables(&namespace).await?;
         assert_eq!(tables.len(), 1);
@@ -771,8 +778,8 @@ mod tests {
 
         // Drop the table and check.
         catalog.drop_table(&new_table_ident).await?;
-        let table_exists = catalog.table_exists(&new_table_ident).await?;
-        assert!(!table_exists, "Table should not exist after drop");
+        let table_already_exists = catalog.table_exists(&new_table_ident).await?;
+        assert!(!table_already_exists, "Table should not exist after drop");
 
         Ok(())
     }
@@ -860,6 +867,29 @@ mod tests {
             Some(1),
             "Current snapshot ID should be 1"
         );
+
+        // Check metadata files and manifest files are correctly created.
+        let table_path = format!(
+            "{warehouse_path}/{}/{table_name}",
+            namespace.to_url_string()
+        );
+        let metadata_filepath_v0 = format!("{table_path}/metadata/v0.metadata.json");
+        assert!(
+            Path::new(&metadata_filepath_v0).exists(),
+            "{metadata_filepath_v0} doesn't exist"
+        ); // created at table creation
+        let metadata_filepath_v1 = format!("{table_path}/metadata/v1.metadata.json");
+        assert!(
+            Path::new(&metadata_filepath_v1).exists(),
+            "{metadata_filepath_v1} doesn't exist"
+        ); // created at table update
+
+        let version_hint_filepath = format!("{table_path}/metadata/version-hint.text");
+        assert!(
+            Path::new(&version_hint_filepath).exists(),
+            "{version_hint_filepath} doesn't exist"
+        ); // created at table creation
+        assert_eq!(std::fs::read_to_string(version_hint_filepath).unwrap(), "1"); // updated at table update
 
         Ok(())
     }
