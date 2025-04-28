@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
+use iceberg::puffin::Blob;
 use iceberg::{Error as IcebergError, Result as IcebergResult};
 use roaring::RoaringBitmap;
-use std::collections::HashMap;
 
 // Magic bytes for deletion vector for puffin file.
 #[allow(dead_code)]
@@ -18,7 +20,7 @@ pub(crate) struct DeletionVector {
 
 // TODO(hjiang): Ideally moonlink doesn't need to operate on `Blob` directly, iceberg-rust should provide high-level interface to operate on deleted rows, but before it's supported officially, we use this hacky way to construct a `iceberg::puffin::blob::Blob`.
 #[allow(dead_code)]
-pub struct IcebergBlobProxy {
+struct IcebergBlobProxy {
     pub(crate) r#type: String,
     pub(crate) fields: Vec<i32>,
     pub(crate) snapshot_id: i64,
@@ -65,7 +67,7 @@ impl DeletionVector {
     ///
     /// Serialization storage format:
     /// | len for magic and vector | magic | vector | crc32c |
-    pub fn _serialize(&self) -> IcebergBlobProxy {
+    pub fn _serialize(&self) -> Blob {
         let serialized_bitmap = self._serialize_roaring_bitmap();
 
         // Calculate combined length (magic bytes + bitmap).
@@ -97,19 +99,21 @@ impl DeletionVector {
         // Write CRC.
         data.extend_from_slice(&crc.to_be_bytes());
 
-        IcebergBlobProxy {
+        let blob_proxy = IcebergBlobProxy {
             r#type: "deletion-vector-v1".to_string(),
             fields: vec![],
             snapshot_id: 0, // TODO: Set appropriate values, we should pass in TableMetadata here.
             sequence_number: 0, // TODO: Set appropriate values, we should pass in TableMetadata here.
             data,
             properties: HashMap::new(),
-        }
+        };
+        unsafe { std::mem::transmute::<IcebergBlobProxy, Blob>(blob_proxy) }
     }
 
     /// Deserialize from `IcebergBlobProxy` to deletion vector.
-    pub fn _deserialize(blob: IcebergBlobProxy) -> IcebergResult<Self> {
-        let data = &blob.data;
+    pub fn _deserialize(blob: Blob) -> IcebergResult<Self> {
+        let blob_proxy = unsafe { std::mem::transmute::<Blob, IcebergBlobProxy>(blob) };
+        let data = &blob_proxy.data;
 
         // Minimum length for serialized blob is 12 bytes (4 length + 4 magic + 4 crc).
         if data.len() < MIN_SERIALIZED_DELETION_VECTOR_BLOB {
