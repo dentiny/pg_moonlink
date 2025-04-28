@@ -33,3 +33,4 @@ iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "7a5ad1fca
 iceberg-catalog-rest = { git = "https://github.com/apache/iceberg-rust.git", rev = "7a5ad1fcaf00d4638857812bab788105f6c60573" }
 url = "2.5"
 roaring = { version = "0.10.12", git = "https://github.com/RoaringBitmap/roaring-rs.git" }
+crc32fast = "1.3"

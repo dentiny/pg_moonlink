@@ -73,10 +73,9 @@ impl BatchDeletionVector {
         };
 
         let mut deleted = Vec::new();
-        for byte_idx in 0..bitmap.len() {
-            let byte = bitmap[byte_idx];
+        for (byte_idx, byte) in bitmap.iter().enumerate() {
             // No deletion in the byte.
-            if byte == 0xFF {
+            if *byte == 0xFF {
                 continue;
             }
 
