@@ -110,7 +110,7 @@ impl Catalog for FileSystemCatalog {
         let base_path = self.get_namespace_path(parent);
         if !base_path.exists() {
             return Err(IcebergError::new(
-                iceberg::ErrorKind::Unexpected,
+                iceberg::ErrorKind::NamespaceNotFound,
                 format!("Parent namespace {:?} does not exist", parent),
             ));
         }
@@ -157,7 +157,7 @@ impl Catalog for FileSystemCatalog {
         let path = self.get_namespace_path(Some(namespace));
         if path.exists() {
             return Err(IcebergError::new(
-                iceberg::ErrorKind::Unexpected,
+                iceberg::ErrorKind::NamespaceAlreadyExists,
                 format!("Namespace {:?} already exists", namespace),
             ));
         }
@@ -185,7 +185,7 @@ impl Catalog for FileSystemCatalog {
             Ok(Namespace::new(namespace.clone()))
         } else {
             Err(IcebergError::new(
-                iceberg::ErrorKind::Unexpected,
+                iceberg::ErrorKind::NamespaceNotFound,
                 format!("Namespace {:?} does not exist", namespace),
             ))
         }
@@ -202,7 +202,7 @@ impl Catalog for FileSystemCatalog {
         let path = self.get_namespace_path(Some(namespace));
         if !path.exists() {
             return Err(IcebergError::new(
-                iceberg::ErrorKind::Unexpected,
+                iceberg::ErrorKind::NamespaceNotFound,
                 format!("Namespace {:?} does not exist", namespace),
             ));
         }
@@ -222,7 +222,7 @@ impl Catalog for FileSystemCatalog {
         let namespace_path = self.get_namespace_path(Some(namespace));
         if !namespace_path.is_dir() {
             return Err(IcebergError::new(
-                iceberg::ErrorKind::Unexpected,
+                iceberg::ErrorKind::NamespaceNotFound,
                 format!("Namespace {:?} does not exist", namespace),
             ));
         }
@@ -445,7 +445,7 @@ impl Catalog for FileSystemCatalog {
         let src_metadata = src_path.join("metadata");
         if !src_metadata.exists() {
             return Err(IcebergError::new(
-                iceberg::ErrorKind::Unexpected,
+                iceberg::ErrorKind::TableNotFound,
                 format!("Source table does not exist: {:?}", src),
             ));
         }
@@ -453,7 +453,7 @@ impl Catalog for FileSystemCatalog {
         // Check if destination already exists.
         if dst_path.exists() {
             return Err(IcebergError::new(
-                iceberg::ErrorKind::Unexpected,
+                iceberg::ErrorKind::TableAlreadyExists,
                 format!("Destination table already exists: {:?}", dest),
             ));
         }
@@ -721,12 +721,12 @@ mod tests {
         let table_name = "test_table".to_string();
         let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
 
-        // Ensure table does not exist
+        // Ensure table does not exist.
         let table_exists = catalog.table_exists(&table_ident).await?;
         assert!(!table_exists, "Table should not exist before creation");
         let results = catalog.list_tables(&namespace).await;
-        let err = results.unwrap_err(); // Panics if result is Ok
-        assert_eq!(err.kind(), iceberg::ErrorKind::Unexpected);
+        let err = results.unwrap_err();
+        assert_eq!(err.kind(), iceberg::ErrorKind::NamespaceNotFound);
 
         create_test_table(&catalog).await?;
         let table_exists = catalog.table_exists(&table_ident).await?;
