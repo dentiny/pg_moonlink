@@ -19,7 +19,7 @@ services:
     command: ["-c", "wal_level=logical"]
 
   iceberg:
-    image: tabulario/iceberg-rest:latest
+    image: apache/iceberg-rest-fixture
     networks:
       - shared_network
     ports:

@@ -68,7 +68,7 @@ mod tests {
     use tokio_postgres::{connect, NoTls};
     #[tokio::test]
     async fn test_moonlink_service() {
-        let uri = "postgresql://postgres:postgres@localhost:5432/postgres";
+        let uri = "postgresql://postgres:postgres@postgres:5432/postgres";
         let service = MoonlinkBackend::<&'static str>::new();
         // connect to postgres and create a table
         let (client, connection) = connect(uri, NoTls).await.unwrap();

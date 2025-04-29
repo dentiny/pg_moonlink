@@ -94,9 +94,7 @@ async fn get_or_create_iceberg_table<C: Catalog + ?Sized>(
     match catalog.load_table(&table_ident).await {
         Ok(table) => Ok(table),
         Err(_) => {
-            // TOOD(hjiang): Temporary workaround for iceberg-rust bug, see https://github.com/apache/iceberg-rust/issues/1234
-            let namespaces = catalog.list_namespaces(None).await?;
-            let namespace_already_exists = namespaces.contains(&namespace_ident);
+            let namespace_already_exists = catalog.namespace_exists(&namespace_ident).await?;
             if !namespace_already_exists {
                 catalog
                     .create_namespace(&namespace_ident, /*properties=*/ HashMap::new())
