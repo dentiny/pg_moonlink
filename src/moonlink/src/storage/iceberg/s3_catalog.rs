@@ -339,6 +339,50 @@ impl S3Catalog {
 
         Ok(())
     }
+
+    /// Load metadata and its location foe the given table.
+    async fn load_metadata(
+        &self,
+        table_ident: &TableIdent,
+    ) -> IcebergResult<(String /*metadata_filepath*/, TableMetadata)> {
+        // Read version hint for the table to get latest version.
+        let version_hint_filepath = format!(
+            "{}/{}/metadata/version-hint.text",
+            table_ident.namespace().to_url_string(),
+            table_ident.name(),
+        );
+        let version_str = self
+            .read_object(&version_hint_filepath)
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to read version hint file on load table: {}", e),
+                )
+            })?;
+        let version = version_str
+            .trim()
+            .parse::<u32>()
+            .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
+
+        // Read and parse table metadata.
+        let metadata_filepath = format!(
+            "{}/{}/metadata/v{}.metadata.json",
+            table_ident.namespace().to_url_string(),
+            table_ident.name(),
+            version,
+        );
+        let metadata_str = self.read_object(&metadata_filepath).await.map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Failed to read table metadata file on load table: {}", e),
+            )
+        })?;
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_str.as_bytes())
+            .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
+
+        Ok((metadata_filepath, metadata))
+    }
 }
 
 #[async_trait]
@@ -537,41 +581,7 @@ impl Catalog for S3Catalog {
 
     /// Load table from the catalog.
     async fn load_table(&self, table_ident: &TableIdent) -> IcebergResult<Table> {
-        // Read version hint for the table to get latest version.
-        let version_hint_filepath = format!(
-            "{}/{}/metadata/version-hint.text",
-            table_ident.namespace().to_url_string(),
-            table_ident.name(),
-        );
-        let version_str = self
-            .read_object(&version_hint_filepath)
-            .await
-            .map_err(|e| {
-                IcebergError::new(
-                    iceberg::ErrorKind::Unexpected,
-                    format!("Failed to read version hint file on load table: {}", e),
-                )
-            })?;
-        let version = version_str
-            .trim()
-            .parse::<u32>()
-            .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
-
-        // Read and parse table metadata.
-        let metadata_filepath = format!(
-            "{}/{}/metadata/v{}.metadata.json",
-            table_ident.namespace().to_url_string(),
-            table_ident.name(),
-            version,
-        );
-        let metadata_str = self.read_object(&metadata_filepath).await.map_err(|e| {
-            IcebergError::new(
-                iceberg::ErrorKind::Unexpected,
-                format!("Failed to read table metadata file on load table: {}", e),
-            )
-        })?;
-        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_str.as_bytes())
-            .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
+        let (metadata_filepath, metadata) = self.load_metadata(&table_ident).await?;
 
         // Build and return the table.
         let metadata_path = format!(
