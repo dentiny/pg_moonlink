@@ -213,13 +213,13 @@ impl S3Catalog {
     ) -> Result<Vec<String>, Box<dyn Error>> {
         let mut directories = Vec::new();
         let mut continuation_token = None;
-
+        let query_prefix = format!("{folder}/");
         loop {
             let mut builder = self
                 .s3_client
                 .list_objects_v2()
                 .bucket(self.bucket.clone())
-                .prefix(folder)
+                .prefix(&query_prefix)
                 .delimiter("/");
             if let Some(token) = continuation_token {
                 builder = builder.continuation_token(token);
@@ -227,21 +227,23 @@ impl S3Catalog {
             let response = builder.send().await?;
             if let Some(prefixes) = response.common_prefixes {
                 for prefix in prefixes {
-                    if let Some(prefix_str) = prefix.prefix {
-                        // Remove the trailing "/" and the initial folder/ prefix (if it exists)
-                        let cleaned_prefix = if folder.is_empty() {
-                            prefix_str.trim_end_matches('/').to_string()
-                        } else {
-                            prefix_str
-                                .trim_start_matches(folder)
-                                .trim_end_matches('/')
-                                .to_string()
-                        };
-
-                        // Check if the cleaned prefix itself contains a "/", if it does, it is not a direct subdirectory
-                        if !cleaned_prefix.contains('/') {
-                            directories.push(cleaned_prefix);
+                    if let Some(cur_prefix) = prefix.prefix {
+                        // Only care about subdirectory, not objects.
+                        //
+                        // Example query:
+                        // Suppose we have namespace "default" and table "test_table", cur prefix returned "default/test_table/".
+                        // Listing subdirectories need to strip query prefix and slash suffix, which is "test_table" in this case.
+                        if !cur_prefix.ends_with("/") {
+                            continue;
                         }
+                        directories.push(
+                            cur_prefix
+                                .strip_suffix('/')
+                                .unwrap()
+                                .strip_prefix(&query_prefix)
+                                .unwrap()
+                                .to_string(),
+                        );
                     }
                 }
             }
@@ -370,9 +372,13 @@ impl Catalog for S3Catalog {
                 )
             })?;
 
-        let mut table_idents = Vec::with_capacity(subdirectories.len());
+        let mut table_idents: Vec<TableIdent> = Vec::with_capacity(subdirectories.len());
         for cur_subdir in subdirectories.iter() {
-            table_idents.push(TableIdent::new(namespace_ident.clone(), cur_subdir.clone()));
+            let cur_table_ident = TableIdent::new(namespace_ident.clone(), cur_subdir.clone());
+            let exists = self.table_exists(&cur_table_ident).await?;
+            if exists {
+                table_idents.push(cur_table_ident);
+            }
         }
         Ok(table_idents)
     }
@@ -399,7 +405,6 @@ impl Catalog for S3Catalog {
         // Create version hint file.
         let version_hint_filepath =
             format!("{}/{}/metadata/version-hint.text", directory, creation.name);
-
         self.s3_client
             .put_object()
             .bucket(self.bucket.clone())
@@ -423,7 +428,6 @@ impl Catalog for S3Catalog {
             directory,
             creation.name.clone()
         );
-
         let table_metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
         let metadata_json = serde_json::to_string(&table_metadata.metadata)?;
         self.s3_client
@@ -617,6 +621,10 @@ mod tests {
         create_test_table(&catalog).await?;
         let table_already_exists = catalog.table_exists(&table_ident).await?;
         assert!(table_already_exists, "Table should exist after creation");
+
+        let tables = catalog.list_tables(&namespace).await?;
+        assert_eq!(tables.len(), 1);
+        assert!(tables.contains(&table_ident));
 
         Ok(())
     }
