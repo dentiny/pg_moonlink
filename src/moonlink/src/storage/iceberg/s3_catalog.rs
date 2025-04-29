@@ -1,3 +1,5 @@
+use futures::future::join_all;
+use futures::StreamExt;
 use std::collections::HashMap;
 /// This module contains the S3 catalog implementation.
 ///
@@ -34,10 +36,6 @@ use std::path::PathBuf;
 use std::vec;
 
 use async_trait::async_trait;
-use aws_sdk_s3::config::{Credentials, Region};
-use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::types::{Delete, ObjectIdentifier};
-use aws_sdk_s3::Client as S3Client;
 use iceberg::io::{FileIO, FileIOBuilder};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
@@ -46,9 +44,18 @@ use iceberg::Result as IcebergResult;
 use iceberg::{
     Catalog, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableUpdate,
 };
+use opendal::layers::RetryLayer;
+use opendal::services::S3;
+use opendal::Operator;
 
+// Object storage usually doesn't have "folder" concept, when creating a new namespace, we create an indicator file under certain folder.
 static NAMESPACE_INDICATOR_OBJECT_NAME: &str = "indicator.text";
-static PROVIDER: &str = "s3-catalog-provider";
+
+// Retry related constants.
+static MIN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
+static MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
+static RETRY_DELAY_FACTOR: f32 = 1.5;
+static MAX_RETRY_COUNT: usize = 3;
 
 pub struct S3CatalogConfig {
     warehouse_location: String,
@@ -56,6 +63,7 @@ pub struct S3CatalogConfig {
     secret_access_key: String,
     region: String,
     bucket: String,
+    endpoint: String,
 }
 
 impl S3CatalogConfig {
@@ -66,6 +74,7 @@ impl S3CatalogConfig {
         secret_access_key: String,
         region: String,
         bucket: String,
+        endpoint: String,
     ) -> Self {
         Self {
             warehouse_location,
@@ -73,6 +82,7 @@ impl S3CatalogConfig {
             secret_access_key,
             region,
             bucket,
+            endpoint,
         }
     }
 }
@@ -80,7 +90,7 @@ impl S3CatalogConfig {
 #[derive(Debug)]
 pub struct S3Catalog {
     file_io: FileIO,
-    s3_client: S3Client,
+    op: Operator,
     warehouse_location: String,
     bucket: String,
 }
@@ -88,26 +98,29 @@ pub struct S3Catalog {
 impl S3Catalog {
     #[allow(dead_code)]
     pub fn new(config: S3CatalogConfig) -> Self {
-        let bucket = config.bucket;
-        let warehouse_location = config.warehouse_location;
-        let creds = Credentials::new(
-            config.access_key_id,
-            config.secret_access_key,
-            /*session_token=*/ None,
-            /*expires_after=*/ None,
-            /*provider_name*/ PROVIDER,
-        );
-        let config = aws_sdk_s3::Config::builder()
-            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
-            .credentials_provider(creds.clone())
-            .region(Region::new(config.region))
-            .endpoint_url(warehouse_location.clone())
-            .force_path_style(true)
-            .build();
-        let client = S3Client::from_conf(config);
+        let bucket = config.bucket.clone();
+        let warehouse_location = config.warehouse_location.clone();
+
+        let builder = S3::default()
+            .bucket(&config.bucket)
+            .region(&config.region)
+            .endpoint(&config.endpoint)
+            .access_key_id(&config.access_key_id)
+            .secret_access_key(&config.secret_access_key);
+        let retry_layer = RetryLayer::new()
+            .with_max_times(MAX_RETRY_COUNT)
+            .with_jitter()
+            .with_factor(RETRY_DELAY_FACTOR)
+            .with_min_delay(MIN_RETRY_DELAY)
+            .with_max_delay(MAX_RETRY_DELAY);
+        let op = Operator::new(builder)
+            .expect("failed to create operator")
+            .layer(retry_layer)
+            .finish();
+
         Self {
             file_io: FileIOBuilder::new("s3").build().unwrap(),
-            s3_client: client,
+            op,
             warehouse_location,
             bucket,
         }
@@ -123,24 +136,11 @@ impl S3Catalog {
         path.to_str().unwrap().to_string()
     }
 
-    /// Check whether the given object exists in the bucket.
     async fn object_exists(&self, object: &str) -> Result<bool, Box<dyn Error>> {
-        match self
-            .s3_client
-            .head_object()
-            .bucket(self.bucket.clone())
-            .key(object)
-            .send()
-            .await
-        {
+        match self.op.stat(object).await {
             Ok(_) => Ok(true),
-            Err(e) => {
-                if e.into_service_error().is_not_found() {
-                    Ok(false)
-                } else {
-                    Err("Failed to check object existence".into())
-                }
-            }
+            Err(e) if e.kind() == opendal::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -149,12 +149,6 @@ impl S3Catalog {
     /// TODO(hjiang): Error handling, temporarily ignord because it's only used in unit test with local minio server.
     #[allow(dead_code)]
     async fn create_bucket(&self) -> Result<(), Box<dyn Error>> {
-        let _ = self
-            .s3_client
-            .create_bucket()
-            .bucket(self.bucket.clone())
-            .send()
-            .await;
         Ok(())
     }
 
@@ -162,47 +156,11 @@ impl S3Catalog {
     /// Expose only for testing purpose.
     #[allow(dead_code)]
     async fn cleanup_bucket(&self) -> Result<(), Box<dyn Error>> {
-        self.create_bucket().await?;
-
-        let mut continuation_token = None;
-        loop {
-            let mut builder = self.s3_client.list_objects_v2().bucket(self.bucket.clone());
-            if let Some(token) = continuation_token {
-                builder = builder.continuation_token(token);
-            }
-            let response = builder.send().await?;
-
-            if let Some(contents) = response.contents {
-                let delete_objects: Vec<ObjectIdentifier> = contents
-                    .into_iter()
-                    .filter_map(|o| o.key)
-                    .map(|key| {
-                        ObjectIdentifier::builder()
-                            .key(key)
-                            .build()
-                            .expect("Failed to build ObjectIdentifier")
-                    })
-                    .collect();
-
-                if !delete_objects.is_empty() {
-                    self.s3_client
-                        .delete_objects()
-                        .bucket(self.bucket.clone())
-                        .delete(
-                            Delete::builder()
-                                .set_objects(Some(delete_objects))
-                                .build()
-                                .expect("Failed to build Delete objects"),
-                        )
-                        .send()
-                        .await?;
-                }
-            }
-
-            continuation_token = response.next_continuation_token;
-            if continuation_token.is_none() {
-                break;
-            }
+        let mut lister = self.op.lister_with("/").recursive(true).await?;
+        while let Some(entry) = lister.next().await {
+            let entry = entry?;
+            let path = entry.path();
+            self.op.delete(path).await?;
         }
         Ok(())
     }
@@ -212,34 +170,15 @@ impl S3Catalog {
         &self,
         folder: &str,
     ) -> Result<Vec<String>, Box<dyn Error>> {
-        let mut objects_list = Vec::new();
-        let mut continuation_token = None;
-        let query_prefix = format!("{folder}/");
-        loop {
-            let mut builder = self
-                .s3_client
-                .list_objects_v2()
-                .bucket(self.bucket.clone())
-                .prefix(&query_prefix);
-            if let Some(token) = continuation_token {
-                builder = builder.continuation_token(token);
-            }
-            let response = builder.send().await?;
-            if let Some(objects) = response.contents {
-                for cur_object in objects {
-                    if let Some(object_name) = cur_object.key {
-                        objects_list.push(object_name.clone());
-                    }
-                }
-            }
-
-            continuation_token = response.next_continuation_token;
-            if continuation_token.is_none() {
-                break;
-            }
+        let prefix = format!("{}/", folder);
+        let mut objects = Vec::new();
+        let mut lister = self.op.lister_with(&prefix).recursive(true).await?;
+        while let Some(entry) = lister.next().await {
+            let entry = entry?;
+            let path = entry.path();
+            objects.push(path.to_string());
         }
-
-        Ok(objects_list)
+        Ok(objects)
     }
 
     /// List all direct sub-directory under the given directory.
@@ -249,65 +188,33 @@ impl S3Catalog {
         &self,
         folder: &str,
     ) -> Result<Vec<String>, Box<dyn Error>> {
-        let mut directories = Vec::new();
-        let mut continuation_token = None;
-        let query_prefix = format!("{folder}/");
-        loop {
-            let mut builder = self
-                .s3_client
-                .list_objects_v2()
-                .bucket(self.bucket.clone())
-                .prefix(&query_prefix)
-                .delimiter("/");
-            if let Some(token) = continuation_token {
-                builder = builder.continuation_token(token);
-            }
-            let response = builder.send().await?;
-            if let Some(prefixes) = response.common_prefixes {
-                for prefix in prefixes {
-                    if let Some(cur_prefix) = prefix.prefix {
-                        // Only care about subdirectory, not objects.
-                        //
-                        // Example query:
-                        // Suppose we have namespace "default" and table "test_table", cur prefix returned "default/test_table/".
-                        // Listing subdirectories need to strip query prefix and slash suffix, which is "test_table" in this case.
-                        if !cur_prefix.ends_with("/") {
-                            continue;
-                        }
-                        directories.push(
-                            cur_prefix
-                                .strip_suffix('/')
-                                .unwrap()
-                                .strip_prefix(&query_prefix)
-                                .unwrap()
-                                .to_string(),
-                        );
-                    }
-                }
-            }
+        let prefix = format!("{}/", folder);
+        let mut dirs = Vec::new();
+        let lister = self.op.list(&prefix).await?;
 
-            continuation_token = response.next_continuation_token;
-            if continuation_token.is_none() {
-                break;
+        let entries = lister;
+        for cur_entry in entries.iter() {
+            // Both directories and objects will be returned, here we only care about sub-directories.
+            if cur_entry.path().ends_with('/') {
+                let dir_name = cur_entry
+                    .path()
+                    .trim_start_matches(&prefix)
+                    .trim_end_matches('/')
+                    .to_string();
+                if !dir_name.is_empty() {
+                    dirs.push(dir_name);
+                }
             }
         }
 
-        Ok(directories)
+        Ok(dirs)
     }
 
     /// Read the whole content for the given object.
     /// Notice, it's not suitable to read large files; as of now it's made for metadata files.
     async fn read_object(&self, object: &str) -> Result<String, Box<dyn Error>> {
-        let response = self
-            .s3_client
-            .get_object()
-            .bucket(self.bucket.clone())
-            .key(object)
-            .send()
-            .await;
-        let bytes = response.unwrap().body.collect().await?;
-        let content = String::from_utf8(bytes.to_vec())?;
-        Ok(content)
+        let content = self.op.read(object).await?;
+        Ok(String::from_utf8(content.to_vec())?)
     }
 
     /// Write the whole content to the given file.
@@ -316,19 +223,13 @@ impl S3Catalog {
         object_filepath: &str,
         content: &str,
     ) -> Result<(), Box<dyn Error>> {
-        self.s3_client
-            .put_object()
-            .bucket(self.bucket.clone())
-            .key(object_filepath)
-            .body(ByteStream::from(content.as_bytes().to_vec()))
-            .send()
-            .await
-            .map_err(|e| {
-                IcebergError::new(
-                    iceberg::ErrorKind::Unexpected,
-                    format!("Failed to write content to s3: {}", e),
-                )
-            })?;
+        let data = content.as_bytes().to_vec();
+        self.op.write(object_filepath, data).await.map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Failed to write content: {}", e),
+            )
+        })?;
         Ok(())
     }
 
@@ -338,27 +239,22 @@ impl S3Catalog {
         &self,
         objects_to_delete: Vec<String>,
     ) -> Result<(), Box<dyn Error>> {
-        let objects_to_delete: Vec<ObjectIdentifier> = objects_to_delete
-            .into_iter()
-            .map(|key| {
-                ObjectIdentifier::builder()
-                    .key(key)
-                    .build()
-                    .expect("Failed to build ObjectIdentifier")
-            })
-            .collect();
+        let futures = objects_to_delete.into_iter().map(|object| {
+            let op = self.op.clone();
+            async move {
+                op.delete(&object).await.map_err(|e| {
+                    IcebergError::new(
+                        iceberg::ErrorKind::Unexpected,
+                        format!("Failed to delete object {}: {}", object, e),
+                    )
+                })
+            }
+        });
 
-        self.s3_client
-            .delete_objects()
-            .bucket(self.bucket.clone())
-            .delete(
-                Delete::builder()
-                    .set_objects(Some(objects_to_delete))
-                    .build()
-                    .expect("Failed to build Delete objects"),
-            )
-            .send()
-            .await?;
+        let results = join_all(futures).await;
+        for result in results {
+            result.map_err(|e| Box::new(e) as Box<dyn Error>)?;
+        }
 
         Ok(())
     }
@@ -470,35 +366,35 @@ impl Catalog for S3Catalog {
 
     /// Check if namespace exists in catalog.
     async fn namespace_exists(&self, namespace_ident: &NamespaceIdent) -> IcebergResult<bool> {
-        let exists = self
-            .object_exists(&S3Catalog::get_namespace_indicator_name(namespace_ident))
+        match self
+            .op
+            .stat(&S3Catalog::get_namespace_indicator_name(namespace_ident))
             .await
-            .map_err(|e| {
-                IcebergError::new(
+        {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                if e.kind() == opendal::ErrorKind::NotFound {
+                    return Ok(false);
+                }
+                Err(IcebergError::new(
                     iceberg::ErrorKind::Unexpected,
-                    format!(
-                        "Failed to check object existence at `namespace_exists`: {}",
-                        e
-                    ),
-                )
-            })?;
-        Ok(exists)
+                    format!("Failed to check object existence: {}", e),
+                ))
+            }
+        }
     }
 
     /// Drop a namespace from the catalog.
     async fn drop_namespace(&self, namespace_ident: &NamespaceIdent) -> IcebergResult<()> {
-        self.s3_client
-            .delete_object()
-            .bucket(self.bucket.clone())
-            .key(S3Catalog::get_namespace_indicator_name(namespace_ident))
-            .send()
-            .await
-            .map_err(|e| {
-                IcebergError::new(
-                    iceberg::ErrorKind::Unexpected,
-                    format!("Failed to drop namespace: {}", e),
-                )
-            })?;
+        let key = S3Catalog::get_namespace_indicator_name(namespace_ident);
+
+        self.op.delete(&key).await.map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Failed to drop namespace: {}", e),
+            )
+        })?;
+
         Ok(())
     }
 
@@ -737,15 +633,15 @@ mod tests {
 
     // Create S3 catalog with local minio deployment.
     async fn create_s3_catalog() -> S3Catalog {
-        let config = S3CatalogConfig::new(
-            /*warehouse_location=*/ "http://minio:9000".to_string(),
-            /*access_key_id=*/ "minioadmin".to_string(),
-            /*secret_access_key=*/ "minioadmin".to_string(),
-            /*region=*/
-            "us-west1".to_string(), // doesn't matter for minio local deployment.
-            /*bucket=*/ TEST_BUCKET.to_string(),
-        );
-        let s3_catalog = S3Catalog::new(config);
+        let config = S3CatalogConfig {
+            warehouse_location: "s3://test-bucket".to_string(),
+            access_key_id: "minioadmin".to_string(),
+            secret_access_key: "minioadmin".to_string(),
+            region: "us-west-1".to_string(),
+            bucket: TEST_BUCKET.to_string(),
+            endpoint: "http://minio:9000".to_string(),
+        };
+        let s3_catalog: S3Catalog = S3Catalog::new(config);
         s3_catalog.cleanup_bucket().await.unwrap();
         s3_catalog
     }
