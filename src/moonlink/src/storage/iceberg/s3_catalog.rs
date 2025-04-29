@@ -93,6 +93,27 @@ impl S3Catalog {
         path.push(NAMESPACE_INDICATOR_OBJECT_NAME);
         path.to_string_lossy().into_owned()
     }
+
+    /// Check whether the given object exists in the bucket.
+    async fn object_exists(&self, key: &str) -> Result<bool, Box<dyn Error>> {
+        match self
+            .s3_client
+            .head_object()
+            .bucket(self.bucket.clone())
+            .key(key)
+            .send()
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                if e.into_service_error().is_not_found() {
+                    Ok(false)
+                } else {
+                    Err("Failed to check object existence".into())
+                }
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -133,18 +154,49 @@ impl Catalog for S3Catalog {
     }
 
     /// Get a namespace information from the catalog, return error if requested namespace doesn't exist.
-    async fn get_namespace(&self, namespace: &NamespaceIdent) -> IcebergResult<Namespace> {
-        todo!()
+    async fn get_namespace(&self, namespace_ident: &NamespaceIdent) -> IcebergResult<Namespace> {
+        let exists = self.namespace_exists(namespace_ident).await?;
+        if exists {
+            return Ok(Namespace::new(namespace_ident.clone()));
+        }
+        Err(IcebergError::new(
+            iceberg::ErrorKind::NamespaceNotFound,
+            format!("Namespace {:?} does not exist", namespace_ident),
+        ))
     }
 
     /// Check if namespace exists in catalog.
-    async fn namespace_exists(&self, namespace: &NamespaceIdent) -> IcebergResult<bool> {
-        todo!()
+    async fn namespace_exists(&self, namespace_ident: &NamespaceIdent) -> IcebergResult<bool> {
+        let exists = self
+            .object_exists(&self.get_namespace_indicator_name(namespace_ident))
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!(
+                        "Failed to check object existence at `namespace_exists`: {}",
+                        e
+                    ),
+                )
+            })?;
+        Ok(exists)
     }
 
     /// Drop a namespace from the catalog.
-    async fn drop_namespace(&self, namespace: &NamespaceIdent) -> IcebergResult<()> {
-        todo!()
+    async fn drop_namespace(&self, namespace_ident: &NamespaceIdent) -> IcebergResult<()> {
+        self.s3_client
+            .delete_object()
+            .bucket(self.bucket.clone())
+            .key(self.get_namespace_indicator_name(namespace_ident))
+            .send()
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to drop namespace: {}", e),
+                )
+            })?;
+        Ok(())
     }
 
     /// List tables from namespace, return error if the given namespace doesn't exist.
