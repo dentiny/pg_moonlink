@@ -493,7 +493,6 @@ impl Catalog for FileSystemCatalog {
             /*current_file_location=*/ Some(metadata_file_path.clone()),
         );
 
-        // TODO(hjiang): As of now, we only take one AddSnapshot update.
         let updates = commit.take_updates();
         for update in &updates {
             match update {

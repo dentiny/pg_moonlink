@@ -50,7 +50,6 @@ use iceberg::{
 static NAMESPACE_INDICATOR_OBJECT_NAME: &str = "indicator.text";
 static PROVIDER: &str = "s3-catalog-provider";
 
-// TODO(hjiang): Able to take credential related information.
 pub struct S3CatalogConfig {
     warehouse_location: String,
     access_key_id: String,
@@ -60,6 +59,7 @@ pub struct S3CatalogConfig {
 }
 
 impl S3CatalogConfig {
+    #[allow(dead_code)]
     pub fn new(
         warehouse_location: String,
         access_key_id: String,
@@ -86,6 +86,7 @@ pub struct S3Catalog {
 }
 
 impl S3Catalog {
+    #[allow(dead_code)]
     pub fn new(config: S3CatalogConfig) -> Self {
         let bucket = config.bucket;
         let warehouse_location = config.warehouse_location;
@@ -107,8 +108,8 @@ impl S3Catalog {
         Self {
             file_io: FileIOBuilder::new("s3").build().unwrap(),
             s3_client: client,
-            warehouse_location: warehouse_location,
-            bucket: bucket,
+            warehouse_location,
+            bucket,
         }
     }
 
@@ -146,6 +147,7 @@ impl S3Catalog {
     /// Create the bucket which is managed by s3 catalog. OK if it already exists.
     ///
     /// TODO(hjiang): Error handling, temporarily ignord because it's only used in unit test with local minio server.
+    #[allow(dead_code)]
     async fn create_bucket(&self) -> Result<(), Box<dyn Error>> {
         let _ = self
             .s3_client
@@ -158,6 +160,7 @@ impl S3Catalog {
 
     /// Delete the bucket for the catalog.
     /// Expose only for testing purpose.
+    #[allow(dead_code)]
     async fn cleanup_bucket(&self) -> Result<(), Box<dyn Error>> {
         self.create_bucket().await?;
 
@@ -398,7 +401,7 @@ impl S3Catalog {
                 format!("Failed to read table metadata file on load table: {}", e),
             )
         })?;
-        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_str.as_bytes())
+        let metadata = serde_json::from_slice::<TableMetadata>(metadata_str.as_bytes())
             .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
 
         Ok((metadata_filepath, metadata))
@@ -586,7 +589,7 @@ impl Catalog for S3Catalog {
 
     /// Load table from the catalog.
     async fn load_table(&self, table_ident: &TableIdent) -> IcebergResult<Table> {
-        let (metadata_filepath, metadata) = self.load_metadata(&table_ident).await?;
+        let (metadata_filepath, metadata) = self.load_metadata(table_ident).await?;
 
         // Build and return the table.
         let metadata_path = format!(
@@ -631,7 +634,7 @@ impl Catalog for S3Catalog {
         version_hint_filepath.push("version-hint.text");
 
         let exists = self
-            .object_exists(&version_hint_filepath.to_str().unwrap().to_owned())
+            .object_exists(version_hint_filepath.to_str().unwrap())
             .await
             .map_err(|e| {
                 IcebergError::new(
@@ -658,7 +661,6 @@ impl Catalog for S3Catalog {
             /*current_file_location=*/ Some(metadata_filepath.clone()),
         );
 
-        // TODO(hjiang): As of now, we only take one AddSnapshot update.
         let updates = commit.take_updates();
         for update in &updates {
             match update {
@@ -721,10 +723,8 @@ impl Catalog for S3Catalog {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::path::Path;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use tempfile::TempDir;
 
     use iceberg::spec::{
         NestedField, PrimitiveType, Schema, SnapshotReference, SnapshotRetention,

@@ -19,8 +19,8 @@ impl ReadStateManager {
             last_read_lsn: AtomicU64::new(0),
             last_read_state: RwLock::new(Arc::new(ReadState::new((vec![], vec![])))),
             table_snapshot,
-            table_snapshot_watch_receiver: table_snapshot_watch_receiver,
-            replication_lsn_rx: replication_lsn_rx,
+            table_snapshot_watch_receiver,
+            replication_lsn_rx,
         }
     }
 
