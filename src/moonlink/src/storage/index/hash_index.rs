@@ -2,14 +2,14 @@ use crate::storage::index::*;
 use crate::storage::storage_utils::{RawDeletionRecord, RecordLocation};
 use std::collections::HashSet;
 use std::sync::Arc;
-impl Index for MemIndex {
-    fn find_record(&self, raw_record: &RawDeletionRecord) -> Option<Vec<&RecordLocation>> {
+impl<'a> Index<'a> for MemIndex {
+    type ReturnType = &'a RecordLocation;
+    fn find_record(&'a self, raw_record: &RawDeletionRecord) -> Option<Vec<&'a RecordLocation>> {
         self.get_vec(&raw_record.lookup_key)
             .map(|v| v.iter().collect())
     }
 }
 
-// UNDONE(The index is just a placeholder, it is all in memory and not persisted)
 impl MooncakeIndex {
     /// Create a new, empty in-memory index
     pub fn new() -> Self {
@@ -32,27 +32,27 @@ impl MooncakeIndex {
     /// Insert a file index (batch of on-disk records)
     ///
     /// This adds a new file index to the collection of file indices
-    pub fn insert_file_index(&mut self, file_index: ParquetFileIndex) {
+    pub fn insert_file_index(&mut self, file_index: FileIndex) {
         self.file_indices.push(file_index);
     }
 }
 
-impl Index for MooncakeIndex {
-    fn find_record(&self, raw_record: &RawDeletionRecord) -> Option<Vec<&RecordLocation>> {
-        let mut res = Vec::new();
+impl<'a> Index<'a> for MooncakeIndex {
+    type ReturnType = RecordLocation;
+    fn find_record(&'a self, raw_record: &RawDeletionRecord) -> Option<Vec<RecordLocation>> {
+        let mut res: Vec<RecordLocation> = Vec::new();
 
         // Check in-memory indices
         for index in self.in_memory_index.iter() {
             if let Some(locations) = index.0.get_vec(&raw_record.lookup_key) {
-                res.extend(locations.iter());
+                res.extend(locations.iter().map(|l| l.clone()));
             }
         }
 
         // Check file indices
         for file_index_meta in &self.file_indices {
-            if let Some(locations) = file_index_meta.index.get_vec(&raw_record.lookup_key) {
-                res.extend(locations.iter());
-            }
+            let locations = file_index_meta.search(&raw_record.lookup_key);
+            res.extend(locations);
         }
 
         if res.is_empty() {

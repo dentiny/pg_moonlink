@@ -13,6 +13,7 @@ parquet.workspace = true
 uuid.workspace = true
 futures.workspace = true
 multimap.workspace = true
+bitstream-io.workspace = true
 arrow-array.workspace = true
 arrow-schema.workspace = true
 iceberg.workspace = true
@@ -22,6 +23,11 @@ url.workspace = true
 roaring.workspace = true
 crc32fast.workspace = true
 opendal.workspace = true
+memmap2 = "0.9.5"
 
 [dev-dependencies]
 tempfile.workspace = true
+pprof = { version = "0.14", features = ["flamegraph"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(profiling_enabled)'] }

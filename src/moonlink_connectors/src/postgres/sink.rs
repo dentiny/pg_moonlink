@@ -16,10 +16,12 @@ use std::fs::create_dir_all;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
+use tokio::sync::watch;
 use tokio_postgres::types::PgLsn;
 
 pub struct Sink {
     table_handlers: HashMap<TableId, TableHandler>,
+    last_committed_lsn_per_table: HashMap<TableId, watch::Sender<u64>>,
     event_senders: HashMap<TableId, Sender<TableEvent>>,
     reader_notifier: Sender<ReadStateManager>,
     base_path: PathBuf,
@@ -31,6 +33,7 @@ impl Sink {
         let event_senders = HashMap::new();
         Self {
             table_handlers: HashMap::new(),
+            last_committed_lsn_per_table: HashMap::new(),
             event_senders,
             reader_notifier,
             base_path,
@@ -65,8 +68,11 @@ impl BatchSink for Sink {
                 table_id as u64,
                 table_path,
             );
+            let (table_commit_tx, table_commit_rx) = watch::channel(0u64);
+            self.last_committed_lsn_per_table
+                .insert(table_id, table_commit_tx);
             let read_state_manager =
-                ReadStateManager::new(&table, self.replication_state.subscribe());
+                ReadStateManager::new(&table, self.replication_state.subscribe(), table_commit_rx);
             let table_handler = TableHandler::new(table);
             self.event_senders
                 .insert(table_id, table_handler.get_event_sender());
@@ -119,6 +125,11 @@ impl BatchSink for Sink {
                             })
                             .await
                             .unwrap();
+                        self.last_committed_lsn_per_table
+                            .get_mut(table_id)
+                            .unwrap()
+                            .send(commit_body.commit_lsn())
+                            .unwrap();
                     }
                     tables_in_transaction.clear();
                 }
@@ -131,6 +142,11 @@ impl BatchSink for Sink {
                                 xact_id: stream_commit_body.xid(),
                             })
                             .await
+                            .unwrap();
+                        self.last_committed_lsn_per_table
+                            .get_mut(table_id)
+                            .unwrap()
+                            .send(stream_commit_body.commit_lsn())
                             .unwrap();
                     }
                 }

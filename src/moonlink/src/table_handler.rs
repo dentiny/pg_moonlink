@@ -214,7 +214,8 @@ mod tests {
         // Create a TableHandler
         let table = MooncakeTable::new(schema, "test_table".to_string(), 1, path);
         let (replication_tx, replication_rx) = watch::channel(0u64);
-        let read_state_manager = ReadStateManager::new(&table, replication_rx);
+        let (table_commit_tx, table_commit_rx) = watch::channel(0u64);
+        let read_state_manager = ReadStateManager::new(&table, replication_rx, table_commit_rx);
         let handler = TableHandler::new(table);
         let event_sender = handler.get_event_sender();
 
@@ -240,9 +241,11 @@ mod tests {
             .unwrap();
 
         // Set replication LSN to allow read
+        table_commit_tx.send(1).unwrap();
         replication_tx.send(100).unwrap();
-
         check_read_snapshot(&read_state_manager, 1, &[1]).await;
+        // Test read after snapshot lsn
+        check_read_snapshot(&read_state_manager, 100, &[1]).await;
 
         // Test shutdown
         event_sender.send(TableEvent::_Shutdown).await.unwrap();
@@ -270,7 +273,8 @@ mod tests {
         // Create a TableHandler
         let table = MooncakeTable::new(schema, "test_table".to_string(), 1, path);
         let (replication_tx, replication_rx) = watch::channel(0u64);
-        let read_state_manager = ReadStateManager::new(&table, replication_rx);
+        let (table_commit_tx, table_commit_rx) = watch::channel(0u64);
+        let read_state_manager = ReadStateManager::new(&table, replication_rx, table_commit_rx);
         let handler = TableHandler::new(table);
         let event_sender = handler.get_event_sender();
 
@@ -315,7 +319,7 @@ mod tests {
 
         // Set replication LSN to allow read
         replication_tx.send(100).unwrap();
-
+        table_commit_tx.send(1).unwrap();
         check_read_snapshot(&read_state_manager, 1, &[1, 2, 3]).await;
 
         // Test shutdown
@@ -344,7 +348,8 @@ mod tests {
         // Create a TableHandler
         let table = MooncakeTable::new(schema, "test_table".to_string(), 1, path);
         let (replication_tx, replication_rx) = watch::channel(0u64);
-        let read_state_manager = ReadStateManager::new(&table, replication_rx);
+        let (table_commit_tx, table_commit_rx) = watch::channel(0u64);
+        let read_state_manager = ReadStateManager::new(&table, replication_rx, table_commit_rx);
         let handler = TableHandler::new(table);
         let event_sender = handler.get_event_sender();
 
@@ -375,6 +380,7 @@ mod tests {
 
         // Set replication LSN to allow read
         replication_tx.send(101).unwrap();
+        table_commit_tx.send(101).unwrap();
 
         check_read_snapshot(&read_state_manager, 101, &[10]).await;
 
@@ -400,7 +406,8 @@ mod tests {
         // Create a TableHandler
         let table = MooncakeTable::new(schema, "test_table".to_string(), 1, path);
         let (replication_tx, replication_rx) = watch::channel(0u64);
-        let read_state_manager = ReadStateManager::new(&table, replication_rx);
+        let (table_commit_tx, table_commit_rx) = watch::channel(0u64);
+        let read_state_manager = ReadStateManager::new(&table, replication_rx, table_commit_rx);
         let handler = TableHandler::new(table);
         let event_sender = handler.get_event_sender();
 
@@ -455,7 +462,7 @@ mod tests {
 
         // Set replication LSN to allow read
         replication_tx.send(101).unwrap();
-
+        table_commit_tx.send(101).unwrap();
         check_read_snapshot(&read_state_manager, 101, &[11]).await;
         // Shutdown the handler
         event_sender.send(TableEvent::_Shutdown).await.unwrap();
@@ -479,7 +486,8 @@ mod tests {
         // Create a TableHandler
         let table = MooncakeTable::new(schema, "test_table".to_string(), 1, path);
         let (replication_tx, replication_rx) = watch::channel(0u64);
-        let read_state_manager = ReadStateManager::new(&table, replication_rx);
+        let (table_commit_tx, table_commit_rx) = watch::channel(0u64);
+        let read_state_manager = ReadStateManager::new(&table, replication_rx, table_commit_rx);
         let handler = TableHandler::new(table);
         let event_sender = handler.get_event_sender();
 
@@ -507,6 +515,7 @@ mod tests {
             .await
             .unwrap();
 
+        table_commit_tx.send(100).unwrap();
         tokio::time::sleep(Duration::from_secs(1)).await;
 
         // Now create a transaction that will be aborted
@@ -562,7 +571,8 @@ mod tests {
         // Create a TableHandler
         let table = MooncakeTable::new(schema, "test_table".to_string(), 1, path);
         let (replication_tx, replication_rx) = watch::channel(0u64);
-        let read_state_manager = ReadStateManager::new(&table, replication_rx);
+        let (table_commit_tx, table_commit_rx) = watch::channel(0u64);
+        let read_state_manager = ReadStateManager::new(&table, replication_rx, table_commit_rx);
         let handler = TableHandler::new(table);
         let event_sender = handler.get_event_sender();
 
@@ -616,7 +626,7 @@ mod tests {
 
         // Set replication LSN to allow read
         replication_tx.send(103).unwrap();
-
+        table_commit_tx.send(103).unwrap();
         check_read_snapshot(&read_state_manager, 103, &[30]).await;
         // Shutdown the handler
         event_sender.send(TableEvent::_Shutdown).await.unwrap();
