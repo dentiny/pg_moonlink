@@ -30,7 +30,6 @@ use std::collections::HashMap;
 ///
 /// For S3 catalog, all files are stored under the warehouse location, in detail: <warehouse-location>/<namespace>/<table-name>/.
 use std::error::Error;
-use std::fmt::format;
 use std::path::PathBuf;
 use std::vec;
 
@@ -47,10 +46,9 @@ use iceberg::Result as IcebergResult;
 use iceberg::{
     Catalog, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableUpdate,
 };
-use parquet::file::metadata;
 
-const NAMESPACE_INDICATOR_OBJECT_NAME: &str = "indicator.text";
-const PROVIDER: &str = "s3-catalog-provider";
+static NAMESPACE_INDICATOR_OBJECT_NAME: &str = "indicator.text";
+static PROVIDER: &str = "s3-catalog-provider";
 
 // TODO(hjiang): Able to take credential related information.
 pub struct S3CatalogConfig {
@@ -303,10 +301,32 @@ impl S3Catalog {
             .bucket(self.bucket.clone())
             .key(object)
             .send()
-            .await?;
-        let bytes = response.body.collect().await?;
+            .await;
+        let bytes = response.unwrap().body.collect().await?;
         let content = String::from_utf8(bytes.to_vec())?;
         Ok(content)
+    }
+
+    /// Write the whole content to the given file.
+    async fn write_object(
+        &self,
+        object_filepath: &str,
+        content: &str,
+    ) -> Result<(), Box<dyn Error>> {
+        self.s3_client
+            .put_object()
+            .bucket(self.bucket.clone())
+            .key(object_filepath)
+            .body(ByteStream::from(content.as_bytes().to_vec()))
+            .send()
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to write content to s3: {}", e),
+                )
+            })?;
+        Ok(())
     }
 
     /// Delete all given objects.
@@ -418,20 +438,18 @@ impl Catalog for S3Catalog {
                 ));
             }
         }
+        self.write_object(
+            &S3Catalog::get_namespace_indicator_name(namespace_ident),
+            /*content=*/ "",
+        )
+        .await
+        .map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Failed to write metadata file at namespace creation: {}", e),
+            )
+        })?;
 
-        self.s3_client
-            .put_object()
-            .bucket(self.bucket.clone())
-            .key(S3Catalog::get_namespace_indicator_name(namespace_ident))
-            .body(ByteStream::default())
-            .send()
-            .await
-            .map_err(|e| {
-                IcebergError::new(
-                    iceberg::ErrorKind::Unexpected,
-                    format!("Failed to create namespace: {}", e),
-                )
-            })?;
         Ok(Namespace::new(namespace_ident.clone()))
     }
 
@@ -532,20 +550,12 @@ impl Catalog for S3Catalog {
         // Create version hint file.
         let version_hint_filepath =
             format!("{}/{}/metadata/version-hint.text", directory, creation.name);
-        self.s3_client
-            .put_object()
-            .bucket(self.bucket.clone())
-            .key(version_hint_filepath)
-            .body(ByteStream::from("0".as_bytes().to_vec()))
-            .send()
+        self.write_object(&version_hint_filepath, /*content=*/ "0")
             .await
             .map_err(|e| {
                 IcebergError::new(
                     iceberg::ErrorKind::Unexpected,
-                    format!(
-                        "Failed to create version hint file on table creation: {}",
-                        e
-                    ),
+                    format!("Failed to write version hint file at table creation: {}", e),
                 )
             })?;
 
@@ -557,17 +567,12 @@ impl Catalog for S3Catalog {
         );
         let table_metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
         let metadata_json = serde_json::to_string(&table_metadata.metadata)?;
-        self.s3_client
-            .put_object()
-            .bucket(self.bucket.clone())
-            .key(metadata_filepath)
-            .body(ByteStream::from(metadata_json.as_bytes().to_vec()))
-            .send()
+        self.write_object(&metadata_filepath, /*content=*/ &metadata_json)
             .await
             .map_err(|e| {
                 IcebergError::new(
                     iceberg::ErrorKind::Unexpected,
-                    format!("Failed to create metadata file on table creation: {}", e),
+                    format!("Failed to write metadata file at namespace creation: {}", e),
                 )
             })?;
 
@@ -646,7 +651,69 @@ impl Catalog for S3Catalog {
     ///
     /// TODO(hjiang): Implement table requirements, which indicates user-defined compare-and-swap logic.
     async fn update_table(&self, mut commit: TableCommit) -> IcebergResult<Table> {
-        todo!()
+        let (metadata_filepath, metadata) = self.load_metadata(commit.identifier()).await?;
+        let version = metadata.next_sequence_number();
+        let mut builder = TableMetadataBuilder::new_from_metadata(
+            metadata.clone(),
+            /*current_file_location=*/ Some(metadata_filepath.clone()),
+        );
+
+        // TODO(hjiang): As of now, we only take one AddSnapshot update.
+        let updates = commit.take_updates();
+        for update in &updates {
+            match update {
+                TableUpdate::AddSnapshot { snapshot } => {
+                    builder = builder.add_snapshot(snapshot.clone())?;
+                }
+                TableUpdate::SetSnapshotRef {
+                    ref_name,
+                    reference,
+                } => {
+                    builder = builder.set_ref(ref_name, reference.clone())?;
+                }
+                _ => {
+                    unreachable!("Only snapshot updates are expected in this implementation");
+                }
+            }
+        }
+
+        // Construct new metadata with updates.
+        let metadata = builder.build()?.metadata;
+
+        // Write metadata file.
+        let metadata_directory = format!(
+            "{}/{}/metadata",
+            commit.identifier().namespace().to_url_string(),
+            commit.identifier().name()
+        );
+        let new_metadata_filepath = format!("{}/v{}.metadata.json", metadata_directory, version,);
+        let metadata_json = serde_json::to_string(&metadata)?;
+        self.write_object(&new_metadata_filepath, &metadata_json)
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to write metadata file at table update: {}", e),
+                )
+            })?;
+
+        // Write version hint file.
+        let version_hint_path = format!("{}/version-hint.text", metadata_directory);
+        self.write_object(&version_hint_path, &format!("{version}"))
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to write version hint file at table update: {}", e),
+                )
+            })?;
+
+        Table::builder()
+            .identifier(commit.identifier().clone())
+            .file_io(self.file_io.clone())
+            .metadata(metadata)
+            .metadata_location(metadata_filepath)
+            .build()
     }
 }
 
@@ -800,6 +867,91 @@ mod tests {
         catalog.drop_table(&table_ident).await?;
         let table_already_exists = catalog.table_exists(&table_ident).await?;
         assert!(!table_already_exists, "Table should not exist after drop");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_update_table() -> IcebergResult<()> {
+        let catalog = create_s3_catalog().await;
+        create_test_table(&catalog).await?;
+
+        let namespace = NamespaceIdent::from_strs(["default"])?;
+        let table_name = "test_table".to_string();
+        let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
+        catalog.load_metadata(&table_ident).await?;
+
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+
+        let mut table_updates = vec![];
+        table_updates.append(&mut vec![
+            TableUpdate::AddSnapshot {
+                snapshot: iceberg::spec::Snapshot::builder()
+                    .with_snapshot_id(1)
+                    .with_sequence_number(1)
+                    .with_timestamp_ms(millis as i64)
+                    .with_schema_id(0)
+                    .with_manifest_list(format!(
+                        "s3://{}/{}/snap-8161620281254644995-0-01966b87-6e93-7bc1-9e12-f1980d9737d3.avro",
+                        namespace.to_url_string(),
+                        table_name
+                    ))
+                    .with_parent_snapshot_id(None)
+                    .with_summary(iceberg::spec::Summary {
+                        operation: iceberg::spec::Operation::Append,
+                        additional_properties: HashMap::new(),
+                    })
+                    .build(),
+            },
+            TableUpdate::SetSnapshotRef {
+                ref_name: MAIN_BRANCH.to_string(),
+                reference: SnapshotReference {
+                    snapshot_id: 1,
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: None,
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
+                },
+            }
+        ]);
+
+        // TODO(hjiang): This is a hack to create `TableCommit`, because its builder is only exposed to crate instead of public.
+        #[repr(C)]
+        struct TableCommitProxy {
+            ident: TableIdent,
+            requirements: Vec<iceberg::TableRequirement>,
+            updates: Vec<TableUpdate>,
+        }
+        let table_commit_proxy = TableCommitProxy {
+            ident: table_ident.clone(),
+            requirements: vec![],
+            updates: table_updates,
+        };
+        let table_commit =
+            unsafe { std::mem::transmute::<TableCommitProxy, TableCommit>(table_commit_proxy) };
+
+        // Check table metadata.
+        let table = catalog.update_table(table_commit).await?;
+        let table_metadata = table.metadata();
+        assert_eq!(
+            **table_metadata.current_schema(),
+            get_test_schema().await.unwrap(),
+            "Schema should match"
+        );
+        assert_eq!(
+            table.identifier(),
+            &table_ident,
+            "Updated table identifier should match"
+        );
+        assert_eq!(
+            table_metadata.current_snapshot_id(),
+            Some(1),
+            "Current snapshot ID should be 1"
+        );
 
         Ok(())
     }
