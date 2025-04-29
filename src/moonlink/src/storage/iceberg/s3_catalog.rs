@@ -83,6 +83,7 @@ impl S3CatalogConfig {
 pub struct S3Catalog {
     file_io: FileIO,
     s3_client: S3Client,
+    warehouse_location: String,
     bucket: String,
 }
 
@@ -108,6 +109,7 @@ impl S3Catalog {
         Self {
             file_io: FileIOBuilder::new("s3").build().unwrap(),
             s3_client: client,
+            warehouse_location: warehouse_location,
             bucket: bucket,
         }
     }
@@ -255,6 +257,21 @@ impl S3Catalog {
         }
 
         Ok(directories)
+    }
+
+    /// Read the whole content for the given object.
+    /// Notice, it's not suitable to read large files; as of now it's made for metadata files.
+    async fn read_object(&self, object: &str) -> Result<String, Box<dyn Error>> {
+        let response = self
+            .s3_client
+            .get_object()
+            .bucket(self.bucket.clone())
+            .key(object)
+            .send()
+            .await?;
+        let bytes = response.body.collect().await?;
+        let content = String::from_utf8(bytes.to_vec())?;
+        Ok(content)
     }
 }
 
@@ -453,8 +470,55 @@ impl Catalog for S3Catalog {
     }
 
     /// Load table from the catalog.
-    async fn load_table(&self, table: &TableIdent) -> IcebergResult<Table> {
-        todo!()
+    async fn load_table(&self, table_ident: &TableIdent) -> IcebergResult<Table> {
+        // Read version hint for the table to get latest version.
+        let version_hint_filepath = format!(
+            "{}/{}/metadata/version-hint.text",
+            table_ident.namespace().to_url_string(),
+            table_ident.name(),
+        );
+        let version_str = self
+            .read_object(&version_hint_filepath)
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to read version hint file on load table: {}", e),
+                )
+            })?;
+        let version = version_str
+            .trim()
+            .parse::<u32>()
+            .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
+
+        // Read and parse table metadata.
+        let metadata_filepath = format!(
+            "{}/{}/metadata/v{}.metadata.json",
+            table_ident.namespace().to_url_string(),
+            table_ident.name(),
+            version,
+        );
+        let metadata_str = self.read_object(&metadata_filepath).await.map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Failed to read table metadata file on load table: {}", e),
+            )
+        })?;
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_str.as_bytes())
+            .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
+
+        // Build and return the table.
+        let metadata_path = format!(
+            "{}/{}/{}",
+            self.warehouse_location, self.bucket, metadata_filepath
+        );
+        let table = Table::builder()
+            .metadata_location(metadata_path)
+            .metadata(metadata)
+            .identifier(table_ident.clone())
+            .file_io(self.file_io.clone())
+            .build()?;
+        Ok(table)
     }
 
     /// Drop a table from the catalog.
@@ -625,6 +689,20 @@ mod tests {
         let tables = catalog.list_tables(&namespace).await?;
         assert_eq!(tables.len(), 1);
         assert!(tables.contains(&table_ident));
+
+        // Load table and check.
+        let table = catalog.load_table(&table_ident).await?;
+        let expected_schema = get_test_schema().await?;
+        assert_eq!(
+            table.identifier(),
+            &table_ident,
+            "Loaded table identifier should match"
+        );
+        assert_eq!(
+            *table.metadata().current_schema().as_ref(),
+            expected_schema,
+            "Loaded table schema should match"
+        );
 
         Ok(())
     }

@@ -313,13 +313,13 @@ impl Catalog for FileSystemCatalog {
     }
 
     /// Load table from the catalog.
-    async fn load_table(&self, table: &TableIdent) -> IcebergResult<Table> {
+    async fn load_table(&self, table_ident: &TableIdent) -> IcebergResult<Table> {
         // Construct the path to the version hint file
         let version_hint_path = format!(
             "{}/{}/{}{}",
             self.warehouse_location,
-            table.namespace().to_url_string(),
-            table.name(),
+            table_ident.namespace().to_url_string(),
+            table_ident.name(),
             "/metadata/version-hint.text"
         );
 
@@ -337,8 +337,8 @@ impl Catalog for FileSystemCatalog {
         let metadata_path = format!(
             "{}/{}/{}/metadata/v{}.metadata.json",
             self.warehouse_location,
-            table.namespace().to_url_string(),
-            table.name(),
+            table_ident.namespace().to_url_string(),
+            table_ident.name(),
             version
         );
 
@@ -352,7 +352,7 @@ impl Catalog for FileSystemCatalog {
         let table = Table::builder()
             .metadata_location(metadata_path)
             .metadata(metadata)
-            .identifier(table.clone())
+            .identifier(table_ident.clone())
             .file_io(self.file_io.clone())
             .build()?;
         Ok(table)
