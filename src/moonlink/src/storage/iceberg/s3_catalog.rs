@@ -206,6 +206,41 @@ impl S3Catalog {
         Ok(())
     }
 
+    /// List all objects under the given directory.
+    async fn list_objects_under_directory(
+        &self,
+        folder: &str,
+    ) -> Result<Vec<String>, Box<dyn Error>> {
+        let mut objects_list = Vec::new();
+        let mut continuation_token = None;
+        let query_prefix = format!("{folder}/");
+        loop {
+            let mut builder = self
+                .s3_client
+                .list_objects_v2()
+                .bucket(self.bucket.clone())
+                .prefix(&query_prefix);
+            if let Some(token) = continuation_token {
+                builder = builder.continuation_token(token);
+            }
+            let response = builder.send().await?;
+            if let Some(objects) = response.contents {
+                for cur_object in objects {
+                    if let Some(object_name) = cur_object.key {
+                        objects_list.push(object_name.clone());
+                    }
+                }
+            }
+
+            continuation_token = response.next_continuation_token;
+            if continuation_token.is_none() {
+                break;
+            }
+        }
+
+        Ok(objects_list)
+    }
+
     /// List all direct sub-directory under the given directory.
     ///
     /// For example, we have directory "a", "a/b", "a/b/c", listing direct subdirectories for "a" will return "a/b".
@@ -272,6 +307,37 @@ impl S3Catalog {
         let bytes = response.body.collect().await?;
         let content = String::from_utf8(bytes.to_vec())?;
         Ok(content)
+    }
+
+    /// Delete all given objects.
+    /// TODO(hjiang): Add test and documentation on partial failure.
+    async fn delete_all_objects(
+        &self,
+        objects_to_delete: Vec<String>,
+    ) -> Result<(), Box<dyn Error>> {
+        let objects_to_delete: Vec<ObjectIdentifier> = objects_to_delete
+            .into_iter()
+            .map(|key| {
+                ObjectIdentifier::builder()
+                    .key(key)
+                    .build()
+                    .expect("Failed to build ObjectIdentifier")
+            })
+            .collect();
+
+        self.s3_client
+            .delete_objects()
+            .bucket(self.bucket.clone())
+            .delete(
+                Delete::builder()
+                    .set_objects(Some(objects_to_delete))
+                    .build()
+                    .expect("Failed to build Delete objects"),
+            )
+            .send()
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -523,7 +589,23 @@ impl Catalog for S3Catalog {
 
     /// Drop a table from the catalog.
     async fn drop_table(&self, table: &TableIdent) -> IcebergResult<()> {
-        todo!()
+        let directory = format!("{}/{}", table.namespace().to_url_string(), table.name());
+        let objects = self
+            .list_objects_under_directory(&directory)
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to get objects under {}: {}", directory, e),
+                )
+            })?;
+        self.delete_all_objects(objects).await.map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Failed to delete objects: {}", e),
+            )
+        })?;
+        Ok(())
     }
 
     /// Check if a table exists in the catalog.
@@ -703,6 +785,11 @@ mod tests {
             expected_schema,
             "Loaded table schema should match"
         );
+
+        // Drop the table and check.
+        catalog.drop_table(&table_ident).await?;
+        let table_already_exists = catalog.table_exists(&table_ident).await?;
+        assert!(!table_already_exists, "Table should not exist after drop");
 
         Ok(())
     }
