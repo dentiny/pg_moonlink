@@ -2,10 +2,11 @@ use std::collections::HashMap;
 /// This module contains the S3 catalog implementation.
 ///
 /// TODO(hjiang):
-/// 0. Better error handling.
-/// 1. Implement property related functionalities.
-/// 2. The initial version access everything via filesystem, for performance consideration we should cache metadata in memory.
-/// 3. (not related to functionality) Set snapshot retention policy at metadata.
+/// 1. Better error handling.
+/// 2. Implement `list_namespace` function, for now it's not required in snapshot <-> iceberg interaction.
+/// 3. Implement property related functionalities.
+/// 4. The initial version access everything via filesystem, for performance consideration we should cache metadata in memory.
+/// 5. (not related to functionality) Set snapshot retention policy at metadata.
 ///
 /// Iceberg table format from object storage's perspective:
 /// - namespace_indicator.txt
@@ -29,6 +30,7 @@ use std::collections::HashMap;
 /// For S3 catalog, all files are stored under the warehouse location, in detail: <warehouse-location>/<namespace>/<table-name>/.
 use std::error::Error;
 use std::path::PathBuf;
+use std::vec;
 
 use async_trait::async_trait;
 use aws_sdk_s3::config::{Credentials, Region};
@@ -52,9 +54,26 @@ pub struct S3CatalogConfig {
     warehouse_location: String,
     access_key_id: String,
     secret_access_key: String,
-    provider_name: String,
     region: String,
     bucket: String,
+}
+
+impl S3CatalogConfig {
+    pub fn new(
+        warehouse_location: String,
+        access_key_id: String,
+        secret_access_key: String,
+        region: String,
+        bucket: String,
+    ) -> Self {
+        Self {
+            warehouse_location,
+            access_key_id,
+            secret_access_key,
+            region,
+            bucket,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -88,10 +107,14 @@ impl S3Catalog {
     }
 
     /// Get object name of the indicator object for the given namespace.
-    fn get_namespace_indicator_name(&self, namespace: &iceberg::NamespaceIdent) -> String {
-        let mut path = PathBuf::from(namespace.to_url_string());
+    fn get_namespace_indicator_name(namespace: &iceberg::NamespaceIdent) -> String {
+        let mut path = PathBuf::new();
+        for part in namespace.as_ref() {
+            path.push(part);
+        }
         path.push(NAMESPACE_INDICATOR_OBJECT_NAME);
-        path.to_string_lossy().into_owned()
+        let object_name = path.to_str().unwrap().to_string();
+        object_name
     }
 
     /// Check whether the given object exists in the bucket.
@@ -114,17 +137,74 @@ impl S3Catalog {
             }
         }
     }
+
+    /// Create the bucket which is managed by s3 catalog. OK if it already exists.
+    ///
+    /// TODO(hjiang): Error handling, temporarily ignord because it's only used in unit test with local minio server.
+    async fn create_bucket(&self) -> Result<(), Box<dyn Error>> {
+        let _ = self
+            .s3_client
+            .create_bucket()
+            .bucket(self.bucket.clone())
+            .send()
+            .await;
+        Ok(())
+    }
+
+    /// Delete the bucket for the catalog.
+    /// Expose only for testing purpose.
+    async fn cleanup_bucket(&self) -> Result<(), Box<dyn Error>> {
+        self.create_bucket().await?;
+
+        let mut continuation_token = None;
+        loop {
+            let mut builder = self.s3_client.list_objects_v2().bucket(self.bucket.clone());
+            if let Some(token) = continuation_token {
+                builder = builder.continuation_token(token);
+            }
+            let response = builder.send().await?;
+
+            if let Some(contents) = response.contents {
+                let delete_objects: Vec<ObjectIdentifier> = contents
+                    .into_iter()
+                    .filter_map(|o| o.key)
+                    .map(|key| {
+                        ObjectIdentifier::builder()
+                            .key(key)
+                            .build()
+                            .expect("Failed to build ObjectIdentifier")
+                    })
+                    .collect();
+
+                if !delete_objects.is_empty() {
+                    self.s3_client
+                        .delete_objects()
+                        .bucket(self.bucket.clone())
+                        .delete(
+                            Delete::builder()
+                                .set_objects(Some(delete_objects))
+                                .build()
+                                .expect("Failed to build Delete objects"),
+                        )
+                        .send()
+                        .await?;
+                }
+            }
+
+            continuation_token = response.next_continuation_token;
+            if continuation_token.is_none() {
+                break;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl Catalog for S3Catalog {
-    /// List namespaces under the parent namespace, return error if parent namespace doesn't exist.
-    /// It's worth noting only one layer of namespace will be returned.
-    /// For example, suppose we create three namespaces: (1) "a", (2) "a/b", (3) "b".
-    /// List all namespaces under root namespace will return "a" and "b", but not "a/b".
     async fn list_namespaces(
         &self,
-        parent: Option<&NamespaceIdent>,
+        _parent: Option<&NamespaceIdent>,
     ) -> IcebergResult<Vec<NamespaceIdent>> {
         todo!()
     }
@@ -137,10 +217,27 @@ impl Catalog for S3Catalog {
         namespace_ident: &iceberg::NamespaceIdent,
         _properties: HashMap<String, String>,
     ) -> IcebergResult<iceberg::Namespace> {
+        let segments = namespace_ident.clone().inner();
+        let mut segment_vec = vec![];
+        for cur_segment in &segments[..segments.len().saturating_sub(1)] {
+            segment_vec.push(cur_segment.clone());
+            let parent_namespace_ident = NamespaceIdent::from_vec(segment_vec.clone())?;
+            let exists = self.namespace_exists(&parent_namespace_ident).await?;
+            if !exists {
+                return Err(IcebergError::new(
+                    iceberg::ErrorKind::NamespaceNotFound,
+                    format!(
+                        "Parent Namespace {:?} doesn't exists",
+                        parent_namespace_ident
+                    ),
+                ));
+            }
+        }
+
         self.s3_client
             .put_object()
             .bucket(self.bucket.clone())
-            .key(self.get_namespace_indicator_name(namespace_ident))
+            .key(S3Catalog::get_namespace_indicator_name(namespace_ident))
             .body(ByteStream::default())
             .send()
             .await
@@ -168,7 +265,7 @@ impl Catalog for S3Catalog {
     /// Check if namespace exists in catalog.
     async fn namespace_exists(&self, namespace_ident: &NamespaceIdent) -> IcebergResult<bool> {
         let exists = self
-            .object_exists(&self.get_namespace_indicator_name(namespace_ident))
+            .object_exists(&S3Catalog::get_namespace_indicator_name(namespace_ident))
             .await
             .map_err(|e| {
                 IcebergError::new(
@@ -187,7 +284,7 @@ impl Catalog for S3Catalog {
         self.s3_client
             .delete_object()
             .bucket(self.bucket.clone())
-            .key(self.get_namespace_indicator_name(namespace_ident))
+            .key(S3Catalog::get_namespace_indicator_name(namespace_ident))
             .send()
             .await
             .map_err(|e| {
@@ -246,5 +343,76 @@ impl Catalog for S3Catalog {
     /// TODO(hjiang): Implement table requirements, which indicates user-defined compare-and-swap logic.
     async fn update_table(&self, mut commit: TableCommit) -> IcebergResult<Table> {
         todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tempfile::TempDir;
+
+    use iceberg::spec::{
+        NestedField, PrimitiveType, Schema, SnapshotReference, SnapshotRetention,
+        Type as IcebergType, MAIN_BRANCH,
+    };
+    use iceberg::NamespaceIdent;
+    use iceberg::Result as IcebergResult;
+
+    const TEST_BUCKET: &str = "test-bucket";
+
+    // Create S3 catalog with local minio deployment.
+    async fn create_s3_catalog() -> S3Catalog {
+        let config = S3CatalogConfig::new(
+            /*warehouse_location=*/ "http://minio:9000".to_string(),
+            /*access_key_id=*/ "minioadmin".to_string(),
+            /*secret_access_key=*/ "minioadmin".to_string(),
+            /*region=*/
+            "us-west1".to_string(), // doesn't matter for minio local deployment.
+            /*bucket=*/ TEST_BUCKET.to_string(),
+        );
+        let s3_catalog = S3Catalog::new(config);
+        s3_catalog.cleanup_bucket().await.unwrap();
+        s3_catalog
+    }
+
+    #[tokio::test]
+    async fn test_s3_catalog_namespace_operations() -> IcebergResult<()> {
+        let catalog = create_s3_catalog().await;
+        let namespace = NamespaceIdent::from_vec(vec!["default".to_string(), "ns".to_string()])?;
+
+        // Ensure namespace does not exist.
+        let exists = catalog.namespace_exists(&namespace).await?;
+        assert!(!exists, "Namespace should not exist before creation");
+
+        // Create parent namespace.
+        catalog
+            .create_namespace(
+                &NamespaceIdent::from_vec(vec!["default".to_string()]).unwrap(),
+                /*properties=*/ HashMap::new(),
+            )
+            .await?;
+
+        // Create namespace and check.
+        catalog
+            .create_namespace(&namespace, /*properties=*/ HashMap::new())
+            .await?;
+
+        let exists = catalog.namespace_exists(&namespace).await?;
+        assert!(exists, "Namespace should exist after creation");
+
+        // Get the namespace and check.
+        let ns = catalog.get_namespace(&namespace).await?;
+        assert_eq!(ns.name(), &namespace, "Namespace should match created one");
+
+        // Drop the namespace and check.
+        catalog.drop_namespace(&namespace).await?;
+        let exists = catalog.namespace_exists(&namespace).await?;
+        assert!(!exists, "Namespace should not exist after drop");
+
+        Ok(())
     }
 }
