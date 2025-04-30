@@ -2,6 +2,13 @@
 // 1. the start offset and blob size for each deletion vector
 // 2. append blob metadata into metadata
 // So here to workaround the limitation and to avoid/reduce changes to iceberg-rust ourselves, we use a proxy to reinterpret the memory directly.
+//
+// deletion vector spec:
+// issue collection: https://github.com/apache/iceberg/issues/11122
+// deletion vector table spec: https://github.com/apache/iceberg/pull/11240
+//
+// 1. deletion vector is referenced by manifest entry
+// 2. hierarchy: manifest entry -> data file, one possible data file type is puffin
 
 use futures::future::ok;
 use iceberg::io::FileIO;
