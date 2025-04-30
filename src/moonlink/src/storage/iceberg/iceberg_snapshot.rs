@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType as ArrowType;
 use arrow_schema::Schema as ArrowSchema;
+use iceberg::puffin::CompressionCodec;
+use iceberg::puffin::PuffinWriter;
 use iceberg::spec::ManifestContentType;
 use iceberg::spec::{DataFile, DataFileFormat};
 use iceberg::spec::{
@@ -18,6 +20,7 @@ use iceberg::spec::{
 use iceberg::table::Table as IcebergTable;
 use iceberg::transaction::Transaction;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+use iceberg::writer::file_writer::location_generator::LocationGenerator;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
@@ -79,6 +82,21 @@ fn arrow_type_to_iceberg_type(data_type: &ArrowType) -> IcebergType {
         // TODO(hjiang): Support more arrow types.
         _ => panic!("Unsupported Arrow data type: {:?}", data_type),
     }
+}
+
+// Get puffin writer with the given file io.
+async fn create_puffin_writer(table: &IcebergTable) -> IcebergResult<PuffinWriter> {
+    let location_generator = DefaultLocationGenerator::new(table.metadata().clone())?;
+    let out_file = table.file_io().new_output(
+        location_generator.generate_location(&format!("{}-puffin.bin", Uuid::new_v4())),
+    )?;
+    let puffin_writer = PuffinWriter::new(
+        &out_file,
+        /*properties=*/ HashMap::new(),
+        /*compress_footer=*/ false,
+    )
+    .await?;
+    Ok(puffin_writer)
 }
 
 // Get or create an iceberg table in the given catalog from the given namespace and table name.
@@ -157,8 +175,9 @@ async fn write_record_batch_to_iceberg(
     }
 
     let data_files = data_file_writer.close().await?;
-    assert!(
-        data_files.len() == 1,
+    assert_eq!(
+        data_files.len(),
+        1,
         "Should only have one parquet file written"
     );
 
@@ -184,7 +203,9 @@ pub trait IcebergSnapshot {
 }
 
 impl IcebergSnapshot for Snapshot {
-    // TODO(hjiang): Extract into multiple functions.
+    // TODO(hjiang):
+    // 1. Extract into multiple functions, for example, data file persistence, deletion vector persistence, iceberg table transaction.
+    // 2. Parallalize IO operations, now they're implemented in sequential style.
     async fn _export_to_iceberg(&mut self) -> IcebergResult<()> {
         let table_name = self.metadata.name.clone();
         let namespace = vec!["default"];
@@ -203,8 +224,14 @@ impl IcebergSnapshot for Snapshot {
             // Record deleted rows in the deletion vector.
             let deleted_rows = deletion_vector.collect_deleted_rows();
             if !deleted_rows.is_empty() {
-                let mut _iceberg_deletion_vector = DeletionVector::new();
-                _iceberg_deletion_vector.mark_rows_deleted(deleted_rows);
+                // TODO(hjiang): Currently one deletion vector is stored in one puffin file, need to revisit later.
+                let mut iceberg_deletion_vector = DeletionVector::new();
+                iceberg_deletion_vector.mark_rows_deleted(deleted_rows);
+                let blob = iceberg_deletion_vector._serialize();
+
+                let mut puffin_writer = create_puffin_writer(&iceberg_table).await?;
+                puffin_writer.add(blob, CompressionCodec::None).await?;
+                puffin_writer.close().await?;
             }
 
             // Write data files to iceberg table.

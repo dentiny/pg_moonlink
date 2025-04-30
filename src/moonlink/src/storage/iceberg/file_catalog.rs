@@ -1,12 +1,15 @@
+use crate::storage::iceberg::puffin_writer_proxy::{get_puffin_metadata, PuffinBlobMetadataProxy};
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
 use iceberg::io::FileIO;
+use iceberg::puffin::PuffinWriter;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
-use iceberg::Error as IcebergError;
 use iceberg::Result as IcebergResult;
+use iceberg::{puffin, Error as IcebergError};
 use iceberg::{
     Catalog, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableUpdate,
 };
@@ -43,6 +46,8 @@ use iceberg::{
 pub struct FileSystemCatalog {
     file_io: FileIO,
     warehouse_location: String,
+    // Used to record puffin blob metadata.
+    puffin_blob_metadata: Option<Vec<PuffinBlobMetadataProxy>>,
 }
 
 impl FileSystemCatalog {
@@ -55,7 +60,18 @@ impl FileSystemCatalog {
                 .build()
                 .unwrap(),
             warehouse_location,
+            puffin_blob_metadata: None,
         }
+    }
+
+    pub(crate) fn record_puffin_metadata(&mut self, puffin_writer: PuffinWriter) {
+        if self.puffin_blob_metadata.is_none() {
+            self.puffin_blob_metadata = Some(Vec::new());
+        }
+        self.puffin_blob_metadata
+            .as_mut()
+            .unwrap()
+            .extend(get_puffin_metadata(puffin_writer))
     }
 
     /// Load metadata for the given table.
