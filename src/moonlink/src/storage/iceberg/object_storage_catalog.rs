@@ -1,15 +1,14 @@
 use futures::future::join_all;
 use futures::StreamExt;
 use std::collections::HashMap;
-/// This module contains the S3 catalog implementation.
+/// This module contains the object storage catalog implementation, currently only S3 is supported.
 ///
 /// TODO(hjiang):
-/// 1. Better error handling.
-/// 2. Implement property related functionalities.
-/// 3. (low priority) Implement `list_namespace` function, for now it's not required in snapshot <-> iceberg interaction.
-/// 4. (low priority) Implement `rename_table` function, for now it's not required in snapshot <-> iceberg interaction.
-/// 5. The initial version access everything via filesystem, for performance consideration we should cache metadata in memory.
-/// 6. (not related to functionality) Set snapshot retention policy at metadata.
+/// 1. Implement property related functionalities.
+/// 2. (low priority) Implement `list_namespace` function, for now it's not required in snapshot <-> iceberg interaction.
+/// 3. (low priority) Implement `rename_table` function, for now it's not required in snapshot <-> iceberg interaction.
+/// 4. The initial version access everything via network IO, for performance consideration we should cache metadata in memory.
+/// 5. (not related to functionality) Set snapshot retention policy at metadata.
 ///
 /// Iceberg table format from object storage's perspective:
 /// - namespace_indicator.txt
@@ -55,7 +54,7 @@ static NAMESPACE_INDICATOR_OBJECT_NAME: &str = "indicator.text";
 static MIN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
 static MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
 static RETRY_DELAY_FACTOR: f32 = 1.5;
-static MAX_RETRY_COUNT: usize = 3;
+static MAX_RETRY_COUNT: usize = 5;
 
 pub struct S3CatalogConfig {
     warehouse_location: String,
@@ -144,14 +143,6 @@ impl S3Catalog {
         }
     }
 
-    /// Create the bucket which is managed by s3 catalog. OK if it already exists.
-    ///
-    /// TODO(hjiang): Error handling, temporarily ignord because it's only used in unit test with local minio server.
-    #[allow(dead_code)]
-    async fn create_bucket(&self) -> Result<(), Box<dyn Error>> {
-        Ok(())
-    }
-
     /// Delete the bucket for the catalog.
     /// Expose only for testing purpose.
     #[allow(dead_code)]
@@ -195,15 +186,16 @@ impl S3Catalog {
         let entries = lister;
         for cur_entry in entries.iter() {
             // Both directories and objects will be returned, here we only care about sub-directories.
-            if cur_entry.path().ends_with('/') {
-                let dir_name = cur_entry
-                    .path()
-                    .trim_start_matches(&prefix)
-                    .trim_end_matches('/')
-                    .to_string();
-                if !dir_name.is_empty() {
-                    dirs.push(dir_name);
-                }
+            if !cur_entry.path().ends_with('/') {
+                continue;
+            }
+            let dir_name = cur_entry
+                .path()
+                .trim_start_matches(&prefix)
+                .trim_end_matches('/')
+                .to_string();
+            if !dir_name.is_empty() {
+                dirs.push(dir_name);
             }
         }
 
@@ -241,19 +233,12 @@ impl S3Catalog {
     ) -> Result<(), Box<dyn Error>> {
         let futures = objects_to_delete.into_iter().map(|object| {
             let op = self.op.clone();
-            async move {
-                op.delete(&object).await.map_err(|e| {
-                    IcebergError::new(
-                        iceberg::ErrorKind::Unexpected,
-                        format!("Failed to delete object {}: {}", object, e),
-                    )
-                })
-            }
+            async move { op.delete(&object).await }
         });
 
         let results = join_all(futures).await;
         for result in results {
-            result.map_err(|e| Box::new(e) as Box<dyn Error>)?;
+            result?;
         }
 
         Ok(())
@@ -429,7 +414,7 @@ impl Catalog for S3Catalog {
 
     async fn update_namespace(
         &self,
-        _namespace: &NamespaceIdent,
+        _namespace_ident: &NamespaceIdent,
         _properties: HashMap<String, String>,
     ) -> IcebergResult<()> {
         todo!()
@@ -637,7 +622,7 @@ mod tests {
             warehouse_location: "s3://test-bucket".to_string(),
             access_key_id: "minioadmin".to_string(),
             secret_access_key: "minioadmin".to_string(),
-            region: "us-west-1".to_string(),
+            region: "auto".to_string(), // minio doesn't care about region.
             bucket: TEST_BUCKET.to_string(),
             endpoint: "http://minio:9000".to_string(),
         };

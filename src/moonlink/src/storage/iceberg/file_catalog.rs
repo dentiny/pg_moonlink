@@ -179,31 +179,31 @@ impl Catalog for FileSystemCatalog {
     }
 
     /// Get a namespace information from the catalog, return error if requested namespace doesn't exist.
-    async fn get_namespace(&self, namespace: &NamespaceIdent) -> IcebergResult<Namespace> {
-        let path = self.get_namespace_path(Some(namespace));
+    async fn get_namespace(&self, namespace_ident: &NamespaceIdent) -> IcebergResult<Namespace> {
+        let path = self.get_namespace_path(Some(namespace_ident));
         if path.is_dir() {
-            Ok(Namespace::new(namespace.clone()))
+            Ok(Namespace::new(namespace_ident.clone()))
         } else {
             Err(IcebergError::new(
                 iceberg::ErrorKind::NamespaceNotFound,
-                format!("Namespace {:?} does not exist", namespace),
+                format!("Namespace {:?} does not exist", namespace_ident),
             ))
         }
     }
 
     /// Check if namespace exists in catalog.
-    async fn namespace_exists(&self, namespace: &NamespaceIdent) -> IcebergResult<bool> {
-        let path = self.get_namespace_path(Some(namespace));
+    async fn namespace_exists(&self, namespace_ident: &NamespaceIdent) -> IcebergResult<bool> {
+        let path = self.get_namespace_path(Some(namespace_ident));
         Ok(path.is_dir())
     }
 
     /// Drop a namespace from the catalog.
-    async fn drop_namespace(&self, namespace: &NamespaceIdent) -> IcebergResult<()> {
-        let path = self.get_namespace_path(Some(namespace));
+    async fn drop_namespace(&self, namespace_ident: &NamespaceIdent) -> IcebergResult<()> {
+        let path = self.get_namespace_path(Some(namespace_ident));
         if !path.exists() {
             return Err(IcebergError::new(
                 iceberg::ErrorKind::NamespaceNotFound,
-                format!("Namespace {:?} does not exist", namespace),
+                format!("Namespace {:?} does not exist", namespace_ident),
             ));
         }
 
@@ -217,13 +217,16 @@ impl Catalog for FileSystemCatalog {
     }
 
     /// List tables from namespace, return error if the given namespace doesn't exist.
-    async fn list_tables(&self, namespace: &NamespaceIdent) -> IcebergResult<Vec<TableIdent>> {
+    async fn list_tables(
+        &self,
+        namespace_ident: &NamespaceIdent,
+    ) -> IcebergResult<Vec<TableIdent>> {
         // Check if the given namespace exists.
-        let namespace_path = self.get_namespace_path(Some(namespace));
+        let namespace_path = self.get_namespace_path(Some(namespace_ident));
         if !namespace_path.is_dir() {
             return Err(IcebergError::new(
                 iceberg::ErrorKind::NamespaceNotFound,
-                format!("Namespace {:?} does not exist", namespace),
+                format!("Namespace {:?} does not exist", namespace_ident),
             ));
         }
 
@@ -254,7 +257,7 @@ impl Catalog for FileSystemCatalog {
                 // Check if this is a valid table (has metadata directory).
                 let metadata_path = path.join("metadata");
                 if metadata_path.is_dir() {
-                    tables.push(TableIdent::new(namespace.clone(), table_name));
+                    tables.push(TableIdent::new(namespace_ident.clone(), table_name));
                 }
             }
         }
@@ -264,7 +267,7 @@ impl Catalog for FileSystemCatalog {
 
     async fn update_namespace(
         &self,
-        _namespace: &NamespaceIdent,
+        _namespace_ident: &NamespaceIdent,
         _properties: HashMap<String, String>,
     ) -> IcebergResult<()> {
         todo!()
@@ -273,29 +276,25 @@ impl Catalog for FileSystemCatalog {
     /// Create a new table inside the namespace.
     async fn create_table(
         &self,
-        namespace: &NamespaceIdent,
+        namespace_ident: &NamespaceIdent,
         creation: TableCreation,
     ) -> IcebergResult<Table> {
-        let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
+        let table_ident = TableIdent::new(namespace_ident.clone(), creation.name.clone());
         // TODO(hjiang): Confirm the location field inside of `TableCreation`.
         let warehouse_location = self.warehouse_location.clone();
-        let metadata_path = format!(
+        let metadata_directory = format!(
             "{}/{}/{}/metadata",
             warehouse_location,
-            namespace.to_url_string(),
+            namespace_ident.to_url_string(),
             creation.name,
         );
-        let version_hint_path = format!(
-            "{}/{}/{}/metadata/version-hint.text",
-            warehouse_location,
-            namespace.to_url_string(),
-            creation.name
-        );
+        let version_hint_path = format!("{}/version-hint.text", metadata_directory,);
 
         // Create the initial table metadata.
         let table_metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
+
         // Write the initial metadata file.
-        let metadata_file_path = format!("{metadata_path}/v0.metadata.json");
+        let metadata_file_path = format!("{metadata_directory}/v0.metadata.json");
         let metadata_json = serde_json::to_string(&table_metadata.metadata)?;
         let output = self.file_io.new_output(&metadata_file_path)?;
         output.write(metadata_json.into()).await?;
@@ -315,13 +314,13 @@ impl Catalog for FileSystemCatalog {
     /// Load table from the catalog.
     async fn load_table(&self, table_ident: &TableIdent) -> IcebergResult<Table> {
         // Construct the path to the version hint file
-        let version_hint_path = format!(
-            "{}/{}/{}{}",
+        let metadata_directory = format!(
+            "{}/{}/{}/metadata",
             self.warehouse_location,
             table_ident.namespace().to_url_string(),
             table_ident.name(),
-            "/metadata/version-hint.text"
         );
+        let version_hint_path = format!("{}/version-hint.text", metadata_directory,);
 
         // Read the version hint to get the latest metadata version
         let version_hint_input = self.file_io.new_input(&version_hint_path)?;
@@ -334,13 +333,7 @@ impl Catalog for FileSystemCatalog {
             .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
 
         // Construct the path to the metadata file
-        let metadata_path = format!(
-            "{}/{}/{}/metadata/v{}.metadata.json",
-            self.warehouse_location,
-            table_ident.namespace().to_url_string(),
-            table_ident.name(),
-            version
-        );
+        let metadata_path = format!("{}/v{}.metadata.json", metadata_directory, version,);
 
         // Read and parse table metadata.
         let input_file = self.file_io.new_input(&metadata_path)?;
