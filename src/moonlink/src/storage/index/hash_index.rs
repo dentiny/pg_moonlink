@@ -45,7 +45,7 @@ impl<'a> Index<'a> for MooncakeIndex {
         // Check in-memory indices
         for index in self.in_memory_index.iter() {
             if let Some(locations) = index.0.get_vec(&raw_record.lookup_key) {
-                res.extend(locations.iter().map(|l| l.clone()));
+                res.extend(locations.iter().cloned());
             }
         }
 

@@ -8,7 +8,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::io::Cursor;
 use std::io::SeekFrom;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 // Constants
@@ -59,7 +59,7 @@ impl IndexBlock {
         bucket_start_idx: u32,
         bucket_end_idx: u32,
         bucket_start_offset: u64,
-        directory: &PathBuf,
+        directory: &Path,
         file_name: String,
     ) -> Self {
         let file = File::open(directory.join(&file_name)).unwrap();
@@ -74,7 +74,7 @@ impl IndexBlock {
     }
 
     fn iter<'a>(
-        self: &'a Self,
+        &'a self,
         metadata: &'a GlobalIndex,
         file_id_remap: &'a Vec<u32>,
     ) -> IndexBlockIterator<'a> {
@@ -83,7 +83,7 @@ impl IndexBlock {
 
     #[inline]
     fn read_bucket(
-        self: &Self,
+        &self,
         bucket_idx: u32,
         reader: &mut BitReader<Cursor<&[u8]>, BigEndian>,
         metadata: &GlobalIndex,
@@ -104,7 +104,7 @@ impl IndexBlock {
 
     #[inline]
     fn read_entry(
-        self: &Self,
+        &self,
         reader: &mut BitReader<Cursor<&[u8]>, BigEndian>,
         metadata: &GlobalIndex,
     ) -> (u64, usize, usize) {
@@ -121,7 +121,7 @@ impl IndexBlock {
     }
 
     fn read(
-        self: &Self,
+        &self,
         target_lower_hash: u64,
         bucket_idx: u32,
         metadata: &GlobalIndex,
@@ -145,7 +145,7 @@ impl IndexBlock {
                 if hash == target_lower_hash {
                     results.push(RecordLocation::DiskFile(
                         FileId(metadata.files[seg_idx].clone()),
-                        row_idx as usize,
+                        row_idx,
                     ));
                 }
             }
@@ -191,7 +191,7 @@ struct IndexBlockBuilder {
 impl IndexBlockBuilder {
     pub fn new(bucket_start_idx: u32, bucket_end_idx: u32, directory: PathBuf) -> Self {
         let file_name = format!("index_block_{}.bin", uuid::Uuid::new_v4());
-        let file = File::create(&directory.join(&file_name)).unwrap();
+        let file = File::create(directory.join(&file_name)).unwrap();
         let buf_writer = BufWriter::new(file);
         let entry_writer = BitWriter::endian(buf_writer, BigEndian);
         Self {
@@ -215,7 +215,7 @@ impl IndexBlockBuilder {
     ) {
         while (hash >> metadata.hash_lower_bits) != self.current_bucket as u64 {
             self.current_bucket += 1;
-            self.buckets[self.current_bucket as usize] = self.current_entry as u32;
+            self.buckets[self.current_bucket as usize] = self.current_entry;
         }
         self.entry_writer
             .write_unsigned_var(
@@ -234,7 +234,7 @@ impl IndexBlockBuilder {
 
     pub fn build(mut self, metadata: &GlobalIndex) -> IndexBlock {
         for i in self.current_bucket + 1..self.bucket_end_idx {
-            self.buckets[i as usize] = self.current_entry as u32;
+            self.buckets[i as usize] = self.current_entry;
         }
         let bucket_start_offset = (self.current_entry as u64)
             * (metadata.hash_lower_bits + metadata.seg_id_bits + metadata.row_id_bits) as u64;
@@ -293,15 +293,14 @@ impl GlobalIndexBuilder {
         self.num_rows = indices.iter().map(|index| index.num_rows).sum();
         self.files = indices
             .iter()
-            .map(|index| index.files.clone())
-            .flatten()
+            .flat_map(|index| index.files.clone())
             .collect();
         let mut file_id_remaps = vec![];
         let mut file_id_after_remap = 0;
         for index in &indices {
             let mut file_id_remap = vec![INVALID_FILE_ID; index.files.len()];
-            for i in 0..index.files.len() {
-                file_id_remap[i] = file_id_after_remap;
+            for (_, item) in file_id_remap.iter_mut().enumerate().take(index.files.len()) {
+                *item = file_id_after_remap;
                 file_id_after_remap += 1;
             }
             file_id_remaps.push(file_id_remap);
@@ -324,13 +323,13 @@ impl GlobalIndexBuilder {
         let seg_id_bits = 32 - (self.files.len() as u32).trailing_zeros();
         let mut global_index = GlobalIndex {
             files: self.files,
-            num_rows: num_rows as u32,
+            num_rows,
             hash_bits: HASH_BITS,
             hash_upper_bits: upper_bits,
             hash_lower_bits: lower_bits,
             seg_id_bits,
             row_id_bits: 32,
-            bucket_bits: bucket_bits,
+            bucket_bits,
             index_blocks: vec![],
         };
         let mut index_blocks = Vec::new();
@@ -391,7 +390,7 @@ impl<'a> IndexBlockIterator<'a> {
     }
 }
 
-impl<'a> Iterator for IndexBlockIterator<'a> {
+impl Iterator for IndexBlockIterator<'_> {
     type Item = (u64, usize, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -444,7 +443,7 @@ impl<'a> GlobalIndexIterator<'a> {
     }
 }
 
-impl<'a> Iterator for GlobalIndexIterator<'a> {
+impl Iterator for GlobalIndexIterator<'_> {
     type Item = (u64, usize, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -473,20 +472,19 @@ struct HeapItem<'a> {
     iter: GlobalIndexIterator<'a>,
 }
 
-impl<'a> PartialEq for HeapItem<'a> {
+impl PartialEq for HeapItem<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.value.0 == other.value.0
     }
 }
-impl<'a> Eq for HeapItem<'a> {}
+impl Eq for HeapItem<'_> {}
 
-impl<'a> PartialOrd for HeapItem<'a> {
+impl PartialOrd for HeapItem<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        // Reverse for min-heap
-        other.value.0.partial_cmp(&self.value.0)
+        Some(self.cmp(other))
     }
 }
-impl<'a> Ord for HeapItem<'a> {
+impl Ord for HeapItem<'_> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Reverse for min-heap
         other.value.0.cmp(&self.value.0)
@@ -505,7 +503,7 @@ impl<'a> GlobalIndexMergingIterator<'a> {
     }
 }
 
-impl<'a> Iterator for GlobalIndexMergingIterator<'a> {
+impl Iterator for GlobalIndexMergingIterator<'_> {
     type Item = (u64, usize, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -629,7 +627,7 @@ mod tests {
         let index = builder.build_from_flush(vec);
         for i in 0..num_samples {
             if let Some(RecordLocation::DiskFile(FileId(_file_id), row_idx)) =
-                index.search(&(i as u64)).get(0)
+                index.search(&(i as u64)).first()
             {
                 assert_eq!(*row_idx, i);
             } else {
@@ -675,7 +673,7 @@ mod tests {
 
         for i in 0u64..100u64 {
             let ret = merged.search(&i);
-            let record_location = ret.get(0).unwrap();
+            let record_location = ret.first().unwrap();
             let RecordLocation::DiskFile(FileId(file_id), _) = record_location else {
                 panic!("No record location found for {}", i);
             };

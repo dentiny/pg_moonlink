@@ -146,11 +146,7 @@ impl DiskSliceWriter {
                 };
                 let old_location = (*self.batch_id_to_idx.get(batch_id).unwrap(), *row_idx);
                 let new_location = self.row_offset_mapping.get(&old_location);
-                if let Some(new_location) = new_location {
-                    Some((*key, new_location.0, new_location.1))
-                } else {
-                    None
-                }
+                new_location.map(|new_location| (*key, new_location.0, new_location.1))
             })
             .collect::<Vec<_>>();
         let mut index_builder = GlobalIndexBuilder::new();
