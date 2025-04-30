@@ -5,23 +5,6 @@ use iceberg::{Catalog, Result as IcebergResult};
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use url::Url;
 
-#[derive(Debug, Clone)]
-pub enum CatalogInfo {
-    /// Connection to a REST catalog server.
-    _Rest { uri: String },
-    /// Local filesystem based catalog.
-    FileSystem { _warehouse_location: String },
-}
-
-// Default to use filesystem catalog with a default warehouse location.
-impl Default for CatalogInfo {
-    fn default() -> Self {
-        CatalogInfo::FileSystem {
-            _warehouse_location: "/tmp/moonlink_iceberg_warehouse".to_string(),
-        }
-    }
-}
-
 /// Create a catelog based on the provided type.
 ///
 /// TODO(hjiang): Support security configuration for REST catalog.

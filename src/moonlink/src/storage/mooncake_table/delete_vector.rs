@@ -23,7 +23,7 @@ impl BatchDeletionVector {
     }
 
     /// Mark a row as deleted
-    pub(super) fn delete_row(&mut self, row_idx: usize) -> bool {
+    pub(crate) fn delete_row(&mut self, row_idx: usize) -> bool {
         // Set the bit at row_idx to 1 (deleted)
         if self.deletion_vector.is_none() {
             self.deletion_vector = Some(vec![0xFF; self.max_rows / 8 + 1]);
@@ -50,7 +50,7 @@ impl BatchDeletionVector {
         Ok(filtered_batch)
     }
 
-    pub(super) fn is_deleted(&self, row_idx: usize) -> bool {
+    pub(crate) fn is_deleted(&self, row_idx: usize) -> bool {
         if self.deletion_vector.is_none() {
             false
         } else {

@@ -1,4 +1,6 @@
-use crate::storage::iceberg::puffin_writer_proxy::{get_puffin_metadata, PuffinBlobMetadataProxy};
+use crate::storage::iceberg::puffin_writer_proxy::{
+    get_puffin_metadata_and_close, PuffinBlobMetadataProxy,
+};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -8,11 +10,13 @@ use iceberg::io::FileIO;
 use iceberg::puffin::PuffinWriter;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
+use iceberg::Error as IcebergError;
 use iceberg::Result as IcebergResult;
-use iceberg::{puffin, Error as IcebergError};
 use iceberg::{
     Catalog, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableUpdate,
 };
+
+use super::puffin_writer_proxy::append_puffin_metadata_and_rewrite;
 
 /// This module contains the filesystem catalog implementation, which serves for local development and hermetic unit test purpose;
 /// For initial versions, it's focusing more on simplicity and correctness rather than performance.
@@ -47,7 +51,8 @@ pub struct FileSystemCatalog {
     file_io: FileIO,
     warehouse_location: String,
     // Used to record puffin blob metadata.
-    puffin_blob_metadata: Option<Vec<PuffinBlobMetadataProxy>>,
+    // Maps from "puffin filepath" tp "puffin blob metadata".
+    puffin_blobs: HashMap<String, Vec<PuffinBlobMetadataProxy>>,
 }
 
 impl FileSystemCatalog {
@@ -60,18 +65,24 @@ impl FileSystemCatalog {
                 .build()
                 .unwrap(),
             warehouse_location,
-            puffin_blob_metadata: None,
+            puffin_blobs: HashMap::new(),
         }
     }
 
-    pub(crate) fn record_puffin_metadata(&mut self, puffin_writer: PuffinWriter) {
-        if self.puffin_blob_metadata.is_none() {
-            self.puffin_blob_metadata = Some(Vec::new());
-        }
-        self.puffin_blob_metadata
-            .as_mut()
-            .unwrap()
-            .extend(get_puffin_metadata(puffin_writer))
+    // Get puffin metadata from the writer, and close it.
+    //
+    // TODO(hjiang): iceberg-rust currently doesn't support puffin write, to workaround and reduce code change,
+    // we record puffin metadata ourselves and rewrite manifest file before transaction commits.
+    pub(crate) async fn record_puffin_metadata_and_close(
+        &mut self,
+        puffin_filepath: String,
+        puffin_writer: PuffinWriter,
+    ) -> IcebergResult<()> {
+        self.puffin_blobs.insert(
+            puffin_filepath,
+            get_puffin_metadata_and_close(puffin_writer).await?,
+        );
+        Ok(())
     }
 
     /// Load metadata for the given table.
@@ -502,6 +513,18 @@ impl Catalog for FileSystemCatalog {
             /*current_file_location=*/ Some(metadata_file_path.clone()),
         );
 
+        // Manifest files and manifest list has persisted into storage, make modifications based on puffin blobs.
+        for (puffin_filepath, puffin_blob_metadata) in self.puffin_blobs.iter() {
+            append_puffin_metadata_and_rewrite(
+                &metadata,
+                &self.file_io,
+                &puffin_filepath,
+                puffin_blob_metadata.clone(),
+            )
+            .await?;
+        }
+
+        // Manifest files and manifest list has persisted into storage, update metadata and persist.
         let updates = commit.take_updates();
         for update in &updates {
             match update {
