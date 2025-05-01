@@ -14,16 +14,12 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
 
-use arrow::datatypes::DataType as ArrowType;
 use arrow_schema::Schema as ArrowSchema;
+use iceberg::arrow as IcebergArrow;
 use iceberg::puffin::CompressionCodec;
 use iceberg::spec::ManifestContentType;
 use iceberg::spec::{DataFile, DataFileFormat};
-use iceberg::spec::{
-    NestedField, NestedFieldRef, PrimitiveType, Schema as IcebergSchema, Type as IcebergType,
-};
 use iceberg::table::Table as IcebergTable;
 use iceberg::transaction::Transaction;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
@@ -50,49 +46,7 @@ use uuid::Uuid;
 // (unrelated to functionality) 3. Update rest catalog service ip/port, currently it's hard-coded to devcontainer's config, which should be parsed from env variable or config files.
 // (unrelated to functionality) 4. Add timeout to rest catalog access.
 // (unrelated to functionality) 5. Use real namespace and table name, which we should be able to get it from moonlink, it's hard-coded to "default" and "test_table" for now.
-
-// Convert arrow schema to icerberg schema.
-fn arrow_to_iceberg_schema(arrow_schema: &ArrowSchema) -> IcebergSchema {
-    let mut field_id_counter = 1;
-
-    let iceberg_fields: Vec<NestedFieldRef> = arrow_schema
-        .fields
-        .iter()
-        .map(|f| {
-            let iceberg_type = arrow_type_to_iceberg_type(f.data_type());
-            let field = if f.is_nullable() {
-                NestedField::optional(field_id_counter, f.name().clone(), iceberg_type)
-            } else {
-                NestedField::required(field_id_counter, f.name().clone(), iceberg_type)
-            };
-            field_id_counter += 1;
-            Arc::new(field)
-        })
-        .collect();
-
-    IcebergSchema::builder()
-        .with_schema_id(0)
-        .with_fields(iceberg_fields)
-        .build()
-        .expect("Failed to build Iceberg schema")
-}
-
 // Convert arrow data type to iceberg data type.
-fn arrow_type_to_iceberg_type(data_type: &ArrowType) -> IcebergType {
-    match data_type {
-        ArrowType::Boolean => IcebergType::Primitive(PrimitiveType::Boolean),
-        ArrowType::Int32 => IcebergType::Primitive(PrimitiveType::Int),
-        ArrowType::Int64 => IcebergType::Primitive(PrimitiveType::Long),
-        ArrowType::Float32 => IcebergType::Primitive(PrimitiveType::Float),
-        ArrowType::Float64 => IcebergType::Primitive(PrimitiveType::Double),
-        ArrowType::Utf8 => IcebergType::Primitive(PrimitiveType::String),
-        ArrowType::Binary => IcebergType::Primitive(PrimitiveType::Binary),
-        ArrowType::Timestamp(_, _) => IcebergType::Primitive(PrimitiveType::Timestamp),
-        ArrowType::Date32 => IcebergType::Primitive(PrimitiveType::Date),
-        // TODO(hjiang): Support more arrow types.
-        _ => panic!("Unsupported Arrow data type: {:?}", data_type),
-    }
-}
 
 // Get or create an iceberg table in the given catalog from the given namespace and table name.
 async fn get_or_create_iceberg_table<C: Catalog + ?Sized>(
@@ -114,7 +68,7 @@ async fn get_or_create_iceberg_table<C: Catalog + ?Sized>(
                     .await?;
             }
 
-            let iceberg_schema = arrow_to_iceberg_schema(arrow_schema);
+            let iceberg_schema = IcebergArrow::arrow_schema_to_schema(arrow_schema)?;
             let tbl_creation = TableCreation::builder()
                 .name(table_name.to_string())
                 .location(format!(
