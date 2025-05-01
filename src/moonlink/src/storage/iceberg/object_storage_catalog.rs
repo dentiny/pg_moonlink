@@ -110,6 +110,10 @@ impl S3Catalog {
     #[allow(dead_code)]
     pub fn new(config: S3CatalogConfig) -> Self {
         let bucket = config.bucket.clone();
+        let region = config.region.clone();
+        let endpoint = config.endpoint.clone();
+        let access_key_id = config.access_key_id.clone();
+        let secret_access_key = config.secret_access_key.clone();
         let warehouse_location = config.warehouse_location.clone();
 
         let builder = S3::default()
@@ -129,8 +133,14 @@ impl S3Catalog {
             .layer(retry_layer)
             .finish();
 
+
         Self {
-            file_io: FileIOBuilder::new("s3").build().unwrap(),
+            file_io: FileIOBuilder::new("s3")
+                .with_prop(iceberg::io::S3_REGION, region)
+                .with_prop(iceberg::io::S3_ENDPOINT, endpoint)
+                .with_prop(iceberg::io::S3_ACCESS_KEY_ID, access_key_id)
+                .with_prop(iceberg::io::S3_SECRET_ACCESS_KEY, secret_access_key)
+                .build().unwrap(),
             op,
             warehouse_location,
             bucket,
@@ -463,6 +473,9 @@ impl Catalog for S3Catalog {
         // Create version hint file.
         let version_hint_filepath =
             format!("{}/{}/metadata/version-hint.text", directory, creation.name);
+
+        println!("when create table, version hint filepath = {}", version_hint_filepath);
+
         self.write_object(&version_hint_filepath, /*content=*/ "0")
             .await
             .map_err(|e| {
@@ -478,14 +491,23 @@ impl Catalog for S3Catalog {
             directory,
             creation.name.clone()
         );
+
+        println!("when create table, metadata filepath = {}", metadata_filepath);
+
+
+        println!("\n\nwhen create table, table creation = {:?}\n\n", creation);
+
         let table_metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
+
+        println!("\n\nwhen create table, table metadata = {:?}\n\n", table_metadata);
+
         let metadata_json = serde_json::to_string(&table_metadata.metadata)?;
         self.write_object(&metadata_filepath, /*content=*/ &metadata_json)
             .await
             .map_err(|e| {
                 IcebergError::new(
                     iceberg::ErrorKind::Unexpected,
-                    format!("Failed to write metadata file at namespace creation: {}", e),
+                    format!("Failed to write metadata file at table creation: {}", e),
                 )
             })?;
 
@@ -564,17 +586,12 @@ impl Catalog for S3Catalog {
     ///
     /// TODO(hjiang): Implement table requirements, which indicates user-defined compare-and-swap logic.
     async fn update_table(&self, mut commit: TableCommit) -> IcebergResult<Table> {
-
-        println!("update table for object stoeage catalog : {:?}:{:?}", file!(), line!());
-
         let (metadata_filepath, metadata) = self.load_metadata(commit.identifier()).await?;
         let version = metadata.next_sequence_number();
         let mut builder = TableMetadataBuilder::new_from_metadata(
             metadata.clone(),
             /*current_file_location=*/ Some(metadata_filepath.clone()),
         );
-
-        println!("update table and builder : {:?}:{:?}", file!(), line!());
 
         let updates = commit.take_updates();
         for update in &updates {
@@ -665,13 +682,15 @@ mod tests {
     };
     use iceberg::NamespaceIdent;
     use iceberg::Result as IcebergResult;
+    use aws_sdk_s3::Client as S3Client;
+    use aws_sdk_s3::config::{Credentials, Region};
 
     const TEST_BUCKET: &str = "test-bucket";
 
     // Create S3 catalog with local minio deployment.
     async fn create_s3_catalog() -> S3Catalog {
         let config = S3CatalogConfig {
-            warehouse_location: "s3://test-bucket".to_string(),
+            warehouse_location: format!("s3://{}", TEST_BUCKET).to_string(),
             access_key_id: "minioadmin".to_string(),
             secret_access_key: "minioadmin".to_string(),
             region: "auto".to_string(), // minio doesn't care about region.

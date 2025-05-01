@@ -24,6 +24,8 @@ roaring.workspace = true
 crc32fast.workspace = true
 opendal.workspace = true
 memmap2 = "0.9.5"
+aws-sdk-s3.workspace = true
+aws-config.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
