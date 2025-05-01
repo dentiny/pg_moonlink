@@ -156,6 +156,9 @@ impl IcebergSnapshot for Snapshot {
     // 2. Parallalize IO operations, now they're implemented in sequential style.
     #[allow(clippy::await_holding_refcell_ref)]
     async fn _export_to_iceberg(&mut self) -> IcebergResult<()> {
+
+        println!("before parse warehouse uri at {:?}:{:?}", file!(), line!());
+
         let url = Url::parse(&self.warehouse_uri)
             .or_else(|_| Url::from_file_path(self.warehouse_uri.clone()))
             .map_err(|e| {
@@ -169,6 +172,8 @@ impl IcebergSnapshot for Snapshot {
                 )
             })?;
 
+            println!("after parse warehouse uri at {:?}:{:?}", file!(), line!());
+
         // Create catalog based on warehouse uri.
         //
         // TODO(hjiang):
@@ -180,16 +185,22 @@ impl IcebergSnapshot for Snapshot {
         let mut opt_catalog: Option<Rc<RefCell<dyn Catalog>>> = None;
         let mut filesystem_catalog: Option<Rc<RefCell<FileSystemCatalog>>> = None;
         let mut object_storage_catalog: Option<Rc<RefCell<S3Catalog>>> = None;
-        if self.warehouse_uri.starts_with("http://minio") {
+        if self.warehouse_uri.starts_with("s3://test-bucket") {
+
+            println!("befoee freate catalog {:?}:{:?}", file!(), line!());
+
             let config = S3CatalogConfig::new(
                 /*warehouse_location=*/ "s3://test-bucket".to_string(),
                 /*access_key_id=*/ "minioadmin".to_string(),
                 /*secret_access_key=*/ "minioadmin".to_string(),
                 /*region=*/ "auto".to_string(), // minio doesn't care about region.
-                /*bucket=*/ "bucket".to_string(),
+                /*bucket=*/ "test-bucket".to_string(),
                 /*endpoint=*/ "http://minio:9000".to_string(),
             );
             let internal_s3_config = Rc::new(RefCell::new(S3Catalog::new(config)));
+
+            println!("afetr freate catalog {:?}:{:?}", file!(), line!());
+
             object_storage_catalog = Some(internal_s3_config.clone());
             let catalog_rc: Rc<RefCell<dyn Catalog>> = internal_s3_config.clone();
             opt_catalog = Some(catalog_rc);
@@ -218,6 +229,8 @@ impl IcebergSnapshot for Snapshot {
         let iceberg_table =
             get_or_create_iceberg_table(&*catalog.borrow(), &namespace, &table_name, arrow_schema)
                 .await?;
+
+        println!("after get oceberg tale {:?}:{:?}", file!(), line!());
 
         let txn = Transaction::new(&iceberg_table);
         let mut action =
@@ -381,9 +394,17 @@ mod tests {
     }
 
     async fn delete_all_tables<C: Catalog + ?Sized>(catalog: &C) -> IcebergResult<()> {
+        println!("before lisrt all namespace: {:?}:{:?}", file!(), line!());
+
         let namespaces = catalog.list_namespaces(/*parent=*/ None).await?;
+
+        println!("after lisrt all namespace: {:?}:{:?}", file!(), line!());
+
         for namespace in namespaces {
             let tables = catalog.list_tables(&namespace).await?;
+
+            println!("after lisrt all tales: {:?}:{:?}", file!(), line!());
+
             for table in tables {
                 catalog.drop_table(&table).await.ok();
                 println!("Deleted table: {:?} in namespace {:?}", table, namespace);
@@ -395,12 +416,38 @@ mod tests {
 
     async fn delete_all_namespaces<C: Catalog + ?Sized>(catalog: &C) -> IcebergResult<()> {
         let namespaces = catalog.list_namespaces(/*parent=*/ None).await?;
+
+        println!("after lisrt all namespace: {:?}:{:?}", file!(), line!());
+
         for namespace in namespaces {
             catalog.drop_namespace(&namespace).await.ok();
             println!("Deleted namespace: {:?}", namespace);
         }
 
         Ok(())
+    }
+
+    /// Test util function to create arrow schema.
+    fn create_test_arrow_schema() -> Arc<ArrowSchema> {
+        Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int32, false).with_metadata(HashMap::from([
+                ("PARQUET:field_id".to_string(), "1".to_string()),
+            ])),
+            ArrowField::new("name", ArrowDataType::Utf8, false).with_metadata(HashMap::from([
+                ("PARQUET:field_id".to_string(), "2".to_string()),
+            ])),
+        ]))
+    }
+
+    // Test util function to create arrow record batch.
+    fn create_test_arrow_record_batch(arrow_schema: Arc<ArrowSchema>) -> RecordBatch {
+        RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])), // id column
+                Arc::new(StringArray::from(vec!["a", "b", "c"])), // name column
+            ],
+        ).unwrap()
     }
 
     /// Test snapshot store and load for different types of catalogs based on the given warehouse.
@@ -413,28 +460,21 @@ mod tests {
         deletion_vector_supported: bool,
     ) -> IcebergResult<()> {
         // Create Arrow schema and record batch.
-        let arrow_schema =
-            Arc::new(ArrowSchema::new(vec![
-                ArrowField::new("id", ArrowDataType::Int32, false).with_metadata(HashMap::from([
-                    ("PARQUET:field_id".to_string(), "1".to_string()),
-                ])),
-                ArrowField::new("name", ArrowDataType::Utf8, false).with_metadata(HashMap::from([
-                    ("PARQUET:field_id".to_string(), "2".to_string()),
-                ])),
-            ]));
-        let batch = RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3])), // id column
-                Arc::new(StringArray::from(vec!["a", "b", "c"])), // name column
-            ],
-        )?;
+        let arrow_schema = create_test_arrow_schema();
+        let batch = create_test_arrow_record_batch(arrow_schema.clone());
+
+        println!("befoee ceeate catalog {:?}:{:?}", file!(), line!());
 
         // Cleanup namespace and table before testing.
         let catalog = create_catalog(warehouse_uri)?;
+
+        println!("creeate catalog {:?}:{:?}", file!(), line!());
+
         // Cleanup states before testing.
-        delete_all_tables(&*catalog).await?;
-        delete_all_namespaces(&*catalog).await?;
+        // delete_all_tables(&*catalog).await?;
+        // delete_all_namespaces(&*catalog).await?;
+
+        println!("delete all tables and namespaces at {:?}:{:?}", file!(), line!());
 
         // Write record batch to Parquet file.
         let tmp_dir = tempdir()?;
@@ -443,6 +483,8 @@ mod tests {
         let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), None)?;
         writer.write(&batch)?;
         writer.close()?;
+
+        println!("arrow write {:?}:{:?}", file!(), line!());
 
         let metadata = Arc::new(TableMetadata {
             name: "test_table".to_string(),
@@ -461,6 +503,9 @@ mod tests {
         snapshot.disk_files = disk_files;
 
         snapshot._export_to_iceberg().await?;
+
+        println!("export to iceberg at {:?}:{:?}", file!(), line!());
+
         let loaded_snapshot = snapshot._async_load_from_iceberg().await?;
         assert_eq!(
             loaded_snapshot.disk_files.len(),
@@ -544,4 +589,13 @@ mod tests {
             .await?;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_store_and_load_snapshot_with_minio_catalog() -> IcebergResult<()> {
+        let warehouse_uri = "s3://test-bucket";
+        test_store_and_load_snapshot_impl(warehouse_uri, /*deletion_vector_supported=*/ false)
+            .await?;
+        Ok(())
+    }
+
 }

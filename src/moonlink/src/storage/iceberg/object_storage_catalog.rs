@@ -159,7 +159,7 @@ impl S3Catalog {
     /// Delete the bucket for the catalog.
     /// Expose only for testing purpose.
     #[allow(dead_code)]
-    async fn cleanup_bucket(&self) -> Result<(), Box<dyn Error>> {
+    pub(crate) async fn cleanup_bucket(&self) -> Result<(), Box<dyn Error>> {
         let mut lister = self.op.lister_with("/").recursive(true).await?;
         while let Some(entry) = lister.next().await {
             let entry = entry?;
@@ -564,12 +564,17 @@ impl Catalog for S3Catalog {
     ///
     /// TODO(hjiang): Implement table requirements, which indicates user-defined compare-and-swap logic.
     async fn update_table(&self, mut commit: TableCommit) -> IcebergResult<Table> {
+
+        println!("update table for object stoeage catalog : {:?}:{:?}", file!(), line!());
+
         let (metadata_filepath, metadata) = self.load_metadata(commit.identifier()).await?;
         let version = metadata.next_sequence_number();
         let mut builder = TableMetadataBuilder::new_from_metadata(
             metadata.clone(),
             /*current_file_location=*/ Some(metadata_filepath.clone()),
         );
+
+        println!("update table and builder : {:?}:{:?}", file!(), line!());
 
         let updates = commit.take_updates();
         for update in &updates {
@@ -600,6 +605,9 @@ impl Catalog for S3Catalog {
         );
         let new_metadata_filepath = format!("{}/v{}.metadata.json", metadata_directory, version,);
         let metadata_json = serde_json::to_string(&metadata)?;
+
+        println!("before write object for object stoeage catalog : {:?}:{:?}", file!(), line!());
+
         self.write_object(&new_metadata_filepath, &metadata_json)
             .await
             .map_err(|e| {
@@ -608,6 +616,8 @@ impl Catalog for S3Catalog {
                     format!("Failed to write metadata file at table update: {}", e),
                 )
             })?;
+
+            println!("after write object for object stoeage catalog : {:?}:{:?}", file!(), line!());
 
         // Manifest files and manifest list has persisted into storage, make modifications based on puffin blobs.
         //
