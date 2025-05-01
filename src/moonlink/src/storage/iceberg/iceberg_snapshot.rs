@@ -4,6 +4,7 @@ use crate::storage::iceberg::deletion_vector::{
     DELETION_VECTOR_CADINALITY, DELETION_VECTOR_REFERENCED_DATA_FILE,
 };
 use crate::storage::iceberg::file_catalog::FileSystemCatalog;
+use crate::storage::iceberg::object_storage_catalog::{S3Catalog, S3CatalogConfig};
 use crate::storage::iceberg::puffin_utils;
 use crate::storage::iceberg::validation::validate_puffin_manifest_entry;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
@@ -173,11 +174,26 @@ impl IcebergSnapshot for Snapshot {
         // TODO(hjiang):
         // 1. This is a hacky way to check whether catalog is moonlink self-implemented ones, which support deletion vector.
         // We should revisit to check more rust-idiomatic way.
-        // 2. Implement deletion vector write logic for object storage catalog and integrate here.
+        // 2. Logic to decide which catalog to use should be rewritten here; when we release the pg_mooncake and moonlink,
+        // likely only filesystem catalog and object storage catalog will be used due to deletion vector support.
         #[allow(unused_assignments)]
         let mut opt_catalog: Option<Rc<RefCell<dyn Catalog>>> = None;
         let mut filesystem_catalog: Option<Rc<RefCell<FileSystemCatalog>>> = None;
-        if url.scheme() == "file" {
+        let mut object_storage_catalog: Option<Rc<RefCell<S3Catalog>>> = None;
+        if self.warehouse_uri.starts_with("http://minio") {
+            let config = S3CatalogConfig::new(
+                /*warehouse_location=*/ "s3://test-bucket".to_string(),
+                /*access_key_id=*/ "minioadmin".to_string(),
+                /*secret_access_key=*/ "minioadmin".to_string(),
+                /*region=*/ "auto".to_string(), // minio doesn't care about region.
+                /*bucket=*/ "bucket".to_string(),
+                /*endpoint=*/ "http://minio:9000".to_string(),
+            );
+            let internal_s3_config = Rc::new(RefCell::new(S3Catalog::new(config)));
+            object_storage_catalog = Some(internal_s3_config.clone());
+            let catalog_rc: Rc<RefCell<dyn Catalog>> = internal_s3_config.clone();
+            opt_catalog = Some(catalog_rc);
+        } else if url.scheme() == "file" {
             let absolute_path = url.path();
             let internal_fs_catalog = Rc::new(RefCell::new(FileSystemCatalog::new(
                 absolute_path.to_string(),
@@ -249,6 +265,11 @@ impl IcebergSnapshot for Snapshot {
 
                 if let Some(filesystem_catalog_val) = &mut filesystem_catalog {
                     filesystem_catalog_val
+                        .borrow_mut()
+                        .record_puffin_metadata_and_close(puffin_filepath, puffin_writer)
+                        .await?;
+                } else if let Some(object_storage_catalog_val) = &mut object_storage_catalog {
+                    object_storage_catalog_val
                         .borrow_mut()
                         .record_puffin_metadata_and_close(puffin_filepath, puffin_writer)
                         .await?;

@@ -1,3 +1,8 @@
+use super::puffin_writer_proxy::append_puffin_metadata_and_rewrite;
+use crate::storage::iceberg::puffin_writer_proxy::{
+    get_puffin_metadata_and_close, PuffinBlobMetadataProxy,
+};
+
 use futures::future::join_all;
 use futures::StreamExt;
 use std::collections::HashMap;
@@ -36,6 +41,7 @@ use std::vec;
 
 use async_trait::async_trait;
 use iceberg::io::{FileIO, FileIOBuilder};
+use iceberg::puffin::PuffinWriter;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::Error as IcebergError;
@@ -92,8 +98,14 @@ pub struct S3Catalog {
     op: Operator,
     warehouse_location: String,
     bucket: String,
+    // Used to record puffin blob metadata.
+    // Maps from "puffin filepath" to "puffin blob metadata".
+    puffin_blobs: HashMap<String, Vec<PuffinBlobMetadataProxy>>,
 }
 
+// TODO(hjiang):
+// 1. Before release we should support not only S3, but also R2, GCS, etc; necessary change should be minimal, only need to setup configuration like secret id and secret key.
+// 2. Add integration test to actual object storage before pg_mooncake release.
 impl S3Catalog {
     #[allow(dead_code)]
     pub fn new(config: S3CatalogConfig) -> Self {
@@ -122,6 +134,7 @@ impl S3Catalog {
             op,
             warehouse_location,
             bucket,
+            puffin_blobs: HashMap::new(),
         }
     }
 
@@ -241,6 +254,22 @@ impl S3Catalog {
             result?;
         }
 
+        Ok(())
+    }
+
+    // Get puffin metadata from the writer, and close it.
+    //
+    // TODO(hjiang): iceberg-rust currently doesn't support puffin write, to workaround and reduce code change,
+    // we record puffin metadata ourselves and rewrite manifest file before transaction commits.
+    pub(crate) async fn record_puffin_metadata_and_close(
+        &mut self,
+        puffin_filepath: String,
+        puffin_writer: PuffinWriter,
+    ) -> IcebergResult<()> {
+        self.puffin_blobs.insert(
+            puffin_filepath,
+            get_puffin_metadata_and_close(puffin_writer).await?,
+        );
         Ok(())
     }
 
@@ -579,6 +608,19 @@ impl Catalog for S3Catalog {
                     format!("Failed to write metadata file at table update: {}", e),
                 )
             })?;
+
+        // Manifest files and manifest list has persisted into storage, make modifications based on puffin blobs.
+        //
+        // TODO(hjiang): Add unit test for update and check manifest population.
+        for (puffin_filepath, puffin_blob_metadata) in self.puffin_blobs.iter() {
+            append_puffin_metadata_and_rewrite(
+                &metadata,
+                &self.file_io,
+                puffin_filepath,
+                puffin_blob_metadata.clone(),
+            )
+            .await?;
+        }
 
         // Write version hint file.
         let version_hint_path = format!("{}/version-hint.text", metadata_directory);
