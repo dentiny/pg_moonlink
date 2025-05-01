@@ -218,8 +218,10 @@ impl IcebergSnapshot for Snapshot {
 
         // Create catalog based on warehouse uri.
         //
-        // TODO(hjiang): This is a hacky way to check whether catalog is moonlink self-implemented ones, which support deletion vector.
+        // TODO(hjiang):
+        // 1. This is a hacky way to check whether catalog is moonlink self-implemented ones, which support deletion vector.
         // We should revisit to check more rust-idiomatic way.
+        // 2. Implement deletion vector write logic for object storage catalog and integrate here.
         #[allow(unused_assignments)]
         let mut opt_catalog: Option<Rc<RefCell<dyn Catalog>>> = None;
         let mut filesystem_catalog: Option<Rc<RefCell<FileSystemCatalog>>> = None;
@@ -431,6 +433,8 @@ mod tests {
     /// Test snapshot store and load for different types of catalogs based on the given warehouse.
     ///
     /// * `deletion_vector_supported` - whether the given catalog supports deletion vector; if false, skip checking deletion vector load.
+    ///
+    /// TODO(hjiang): This test case only write once, thus one snapshot; should test situations where we write multiple times.
     async fn test_store_and_load_snapshot_impl(
         warehouse_uri: &str,
         deletion_vector_supported: bool,

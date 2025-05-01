@@ -91,6 +91,7 @@ impl DeletionVector {
     ///
     /// Serialization storage format:
     /// | len for magic and vector | magic | vector | crc32c |
+    /// crc32c field is checksum of the magic bytes and serialized vector as 4 bytes in big-endian.
     pub fn serialize(&self, properties: HashMap<String, String>) -> Blob {
         DeletionVector::check_properties(&properties);
 
@@ -208,6 +209,7 @@ impl DeletionVector {
         DeletionVector::deserialize(blob)
     }
 
+    /// Convert self to `BatchDeletionVector`, after which self ownership is terminated.
     pub fn take_as_batch_delete_vector(self) -> BatchDeletionVector {
         let mut batch_delete_vector = BatchDeletionVector::new(HARD_CODE_DELETE_VECTOR_MAX_ROW);
         for row_idx in self.bitmap.iter() {

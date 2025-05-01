@@ -1,3 +1,4 @@
+use super::puffin_writer_proxy::append_puffin_metadata_and_rewrite;
 use crate::storage::iceberg::puffin_writer_proxy::{
     get_puffin_metadata_and_close, PuffinBlobMetadataProxy,
 };
@@ -15,8 +16,6 @@ use iceberg::Result as IcebergResult;
 use iceberg::{
     Catalog, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableUpdate,
 };
-
-use super::puffin_writer_proxy::append_puffin_metadata_and_rewrite;
 
 /// This module contains the filesystem catalog implementation, which serves for local development and hermetic unit test purpose;
 /// For initial versions, it's focusing more on simplicity and correctness rather than performance.
@@ -51,7 +50,7 @@ pub struct FileSystemCatalog {
     file_io: FileIO,
     warehouse_location: String,
     // Used to record puffin blob metadata.
-    // Maps from "puffin filepath" tp "puffin blob metadata".
+    // Maps from "puffin filepath" to "puffin blob metadata".
     puffin_blobs: HashMap<String, Vec<PuffinBlobMetadataProxy>>,
 }
 

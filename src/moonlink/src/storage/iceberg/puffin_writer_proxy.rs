@@ -1,6 +1,6 @@
 // iceberg-rust currently doesn't support puffin related features, to write deletion vector into iceberg metadata, we need two things at least:
 // 1. the start offset and blob size for each deletion vector
-// 2. append blob metadata into metadata
+// 2. append blob metadata into manifest file
 // So here to workaround the limitation and to avoid/reduce changes to iceberg-rust ourselves, we use a few proxy types to reinterpret the memory directly.
 //
 // deletion vector spec:
