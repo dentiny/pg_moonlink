@@ -108,9 +108,7 @@ pub async fn append_commit_flush_snapshot(
 ) -> Result<()> {
     append_rows(table, rows)?;
     table.commit(lsn);
-    let flush_handle = table.flush(lsn);
-    let disk_slice = flush_handle.await.unwrap()?;
-    table.commit_flush(disk_slice)?;
+    table.flush(lsn).await?;
     snapshot(table).await;
     Ok(())
 }
