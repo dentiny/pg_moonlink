@@ -4,12 +4,12 @@ use crate::storage::iceberg::deletion_vector::{
     DELETION_VECTOR_CADINALITY, DELETION_VECTOR_REFERENCED_DATA_FILE,
 };
 use crate::storage::iceberg::file_catalog::FileSystemCatalog;
-use crate::storage::iceberg::object_storage_catalog::{S3Catalog, S3CatalogConfig};
+use crate::storage::iceberg::object_storage_catalog::S3Catalog;
 use crate::storage::iceberg::puffin_utils;
+use crate::storage::iceberg::test_utils;
 use crate::storage::iceberg::validation::validate_puffin_manifest_entry;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 use crate::storage::mooncake_table::Snapshot;
-use crate::storage::iceberg::test_utils;
 
 use futures::executor::block_on;
 use std::cell::RefCell;
@@ -51,6 +51,7 @@ use uuid::Uuid;
 // Get or create an iceberg table in the given catalog from the given namespace and table name.
 async fn get_or_create_iceberg_table<C: Catalog + ?Sized>(
     catalog: &C,
+    warehouse_uri: &str,
     namespace: &[&str],
     table_name: &str,
     arrow_schema: &ArrowSchema,
@@ -59,10 +60,7 @@ async fn get_or_create_iceberg_table<C: Catalog + ?Sized>(
         NamespaceIdent::from_vec(namespace.iter().map(|s| s.to_string()).collect()).unwrap();
     let table_ident = TableIdent::new(namespace_ident.clone(), table_name.to_string());
     match catalog.load_table(&table_ident).await {
-        Ok(table) => {
-            println!("when load table, it already exists: {:?}", table);
-            Ok(table)
-        },
+        Ok(table) => Ok(table),
         Err(_) => {
             let namespace_already_exists = catalog.namespace_exists(&namespace_ident).await?;
             if !namespace_already_exists {
@@ -75,7 +73,8 @@ async fn get_or_create_iceberg_table<C: Catalog + ?Sized>(
             let tbl_creation = TableCreation::builder()
                 .name(table_name.to_string())
                 .location(format!(
-                    "s3://test-bucket/{}/{}",
+                    "{}/{}/{}",
+                    warehouse_uri,
                     namespace_ident.to_url_string(),
                     table_name
                 ))
@@ -97,9 +96,6 @@ async fn write_record_batch_to_iceberg(
     parquet_filepath: &PathBuf,
 ) -> IcebergResult<DataFile> {
     let location_generator = DefaultLocationGenerator::new(table.metadata().clone())?;
-
-    println!("\n\nlocation generator = {:?}\n\n", location_generator);
-
     let file_name_generator = DefaultFileNameGenerator::new(
         /*prefix=*/ Uuid::new_v4().to_string(),
         /*suffix=*/ None,
@@ -187,19 +183,10 @@ impl IcebergSnapshot for Snapshot {
         let mut opt_catalog: Option<Rc<RefCell<dyn Catalog>>> = None;
         let mut filesystem_catalog: Option<Rc<RefCell<FileSystemCatalog>>> = None;
         let mut object_storage_catalog: Option<Rc<RefCell<S3Catalog>>> = None;
-        if self.warehouse_uri.starts_with("s3://test-bucket") {
 
-            println!("on store, we are hitting s3 catalog!!!1");
-
-            let config = S3CatalogConfig::new(
-                /*warehouse_location=*/ "s3://test-bucket".to_string(),
-                /*access_key_id=*/ "minioadmin".to_string(),
-                /*secret_access_key=*/ "minioadmin".to_string(),
-                /*region=*/ "auto".to_string(), // minio doesn't care about region.
-                /*bucket=*/ "test-bucket".to_string(),
-                /*endpoint=*/ "http://minio:9000".to_string(),
-            );
-            let internal_s3_config = Rc::new(RefCell::new(S3Catalog::new(config)));
+        // Special handle testing situation.
+        if self.warehouse_uri == test_utils::MINIO_TEST_WAREHOUSE_URI {
+            let internal_s3_config = Rc::new(RefCell::new(test_utils::create_minio_s3_catalog()));
             object_storage_catalog = Some(internal_s3_config.clone());
             let catalog_rc: Rc<RefCell<dyn Catalog>> = internal_s3_config.clone();
             opt_catalog = Some(catalog_rc);
@@ -225,9 +212,14 @@ impl IcebergSnapshot for Snapshot {
         let table_name = self.metadata.name.clone();
         let namespace = vec!["default"];
         let arrow_schema = self.metadata.schema.as_ref();
-        let iceberg_table =
-            get_or_create_iceberg_table(&*catalog.borrow(), &namespace, &table_name, arrow_schema)
-                .await?;
+        let iceberg_table = get_or_create_iceberg_table(
+            &*catalog.borrow(),
+            &self.warehouse_uri,
+            &namespace,
+            &table_name,
+            arrow_schema,
+        )
+        .await?;
 
         let txn = Transaction::new(&iceberg_table);
         let mut action =
@@ -265,7 +257,6 @@ impl IcebergSnapshot for Snapshot {
                     DefaultLocationGenerator::new(iceberg_table.metadata().clone())?;
                 let puffin_filepath =
                     location_generator.generate_location(&format!("{}-puffin.bin", Uuid::new_v4()));
-                let puffin_filepath = "s3://test-bucket/default/test_table/data/786628da-283e-4611-af23-b7ef925469f0-puffin.bin".to_string();
                 let mut puffin_writer = puffin_utils::create_puffin_writer(
                     iceberg_table.file_io(),
                     puffin_filepath.clone(),
@@ -307,8 +298,14 @@ impl IcebergSnapshot for Snapshot {
         let table_name = self.metadata.name.clone();
         let arrow_schema = self.metadata.schema.as_ref();
         let catalog = create_catalog(&self.warehouse_uri)?;
-        let iceberg_table =
-            get_or_create_iceberg_table(&*catalog, &namespace, &table_name, arrow_schema).await?;
+        let iceberg_table = get_or_create_iceberg_table(
+            &*catalog,
+            &self.warehouse_uri,
+            &namespace,
+            &table_name,
+            arrow_schema,
+        )
+        .await?;
 
         let table_metadata = iceberg_table.metadata();
         let snapshot_meta = table_metadata.current_snapshot().unwrap();
@@ -370,6 +367,7 @@ impl IcebergSnapshot for Snapshot {
 mod tests {
     use super::*;
 
+    use crate::storage::iceberg::test_utils;
     use crate::storage::{
         iceberg::catalog_utils::create_catalog,
         mooncake_table::{Snapshot, TableConfig, TableMetadata},
@@ -385,12 +383,14 @@ mod tests {
     use iceberg::io::FileRead;
     use parquet::arrow::ArrowWriter;
 
+    /// Create test batch deletion vector.
     fn create_test_batch_deletion_vector() -> BatchDeletionVector {
         let mut deletion_vector = BatchDeletionVector::new(/*max_rows=*/ 3);
         deletion_vector.delete_row(2);
         deletion_vector
     }
 
+    /// Delete all tables within all namespaces for the given catalog.
     async fn delete_all_tables<C: Catalog + ?Sized>(catalog: &C) -> IcebergResult<()> {
         let namespaces = catalog.list_namespaces(/*parent=*/ None).await?;
         for namespace in namespaces {
@@ -404,6 +404,7 @@ mod tests {
         Ok(())
     }
 
+    /// Delete all namespaces for the given catalog.
     async fn delete_all_namespaces<C: Catalog + ?Sized>(catalog: &C) -> IcebergResult<()> {
         let namespaces = catalog.list_namespaces(/*parent=*/ None).await?;
         for namespace in namespaces {
@@ -417,12 +418,14 @@ mod tests {
     /// Test util function to create arrow schema.
     fn create_test_arrow_schema() -> Arc<ArrowSchema> {
         Arc::new(ArrowSchema::new(vec![
-            ArrowField::new("id", ArrowDataType::Int32, false).with_metadata(HashMap::from([
-                ("PARQUET:field_id".to_string(), "1".to_string()),
-            ])),
-            ArrowField::new("name", ArrowDataType::Utf8, false).with_metadata(HashMap::from([
-                ("PARQUET:field_id".to_string(), "2".to_string()),
-            ])),
+            ArrowField::new("id", ArrowDataType::Int32, false).with_metadata(HashMap::from([(
+                "PARQUET:field_id".to_string(),
+                "1".to_string(),
+            )])),
+            ArrowField::new("name", ArrowDataType::Utf8, false).with_metadata(HashMap::from([(
+                "PARQUET:field_id".to_string(),
+                "2".to_string(),
+            )])),
         ]))
     }
 
@@ -434,7 +437,8 @@ mod tests {
                 Arc::new(Int32Array::from(vec![1, 2, 3])), // id column
                 Arc::new(StringArray::from(vec!["a", "b", "c"])), // name column
             ],
-        ).unwrap()
+        )
+        .unwrap()
     }
 
     /// Test snapshot store and load for different types of catalogs based on the given warehouse.
@@ -443,21 +447,13 @@ mod tests {
     ///
     /// TODO(hjiang): This test case only write once, thus one snapshot; should test situations where we write multiple times.
     async fn test_store_and_load_snapshot_impl(
+        catalog: Box<dyn Catalog>,
         warehouse_uri: &str,
         deletion_vector_supported: bool,
     ) -> IcebergResult<()> {
         // Create Arrow schema and record batch.
         let arrow_schema = create_test_arrow_schema();
         let batch = create_test_arrow_record_batch(arrow_schema.clone());
-
-        // Cleanup namespace and table before testing.
-        let catalog = create_catalog(warehouse_uri)?;
-
-        // Cleanup states before testing.
-        // delete_all_tables(&*catalog).await?;
-        // delete_all_namespaces(&*catalog).await?;
-
-        println!("delete all tables and namespaces at {:?}:{:?}", file!(), line!());
 
         // Write record batch to Parquet file.
         let tmp_dir = tempdir()?;
@@ -466,8 +462,6 @@ mod tests {
         let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), None)?;
         writer.write(&batch)?;
         writer.close()?;
-
-        println!("arrow write {:?}:{:?}", file!(), line!());
 
         let metadata = Arc::new(TableMetadata {
             name: "test_table".to_string(),
@@ -496,8 +490,14 @@ mod tests {
 
         let namespace = vec!["default_namespace"];
         let table_name = "test_table";
-        let iceberg_table =
-            get_or_create_iceberg_table(&*catalog, &namespace, table_name, &arrow_schema).await?;
+        let iceberg_table = get_or_create_iceberg_table(
+            &*catalog,
+            warehouse_uri,
+            &namespace,
+            table_name,
+            &arrow_schema,
+        )
+        .await?;
         let file_io = iceberg_table.file_io();
 
         // Check the loaded data file exists.
@@ -529,6 +529,8 @@ mod tests {
         );
 
         // Check loaded deletion vector.
+        //
+        // TODO(hjiang): Add deletion vector support check for s3 catalog.
         if deletion_vector_supported {
             let collect_deleted_rows = loaded_deletion_vector.collect_deleted_rows();
             assert_eq!(
@@ -556,8 +558,15 @@ mod tests {
     #[tokio::test]
     async fn test_store_and_load_snapshot_with_rest_catalog() -> IcebergResult<()> {
         let warehouse_uri = "http://iceberg:8181";
-        test_store_and_load_snapshot_impl(warehouse_uri, /*deletion_vector_supported=*/ false)
-            .await?;
+        let catalog = create_catalog(warehouse_uri)?;
+        delete_all_tables(&*catalog).await?;
+        delete_all_namespaces(&*catalog).await?;
+        test_store_and_load_snapshot_impl(
+            catalog,
+            warehouse_uri,
+            /*deletion_vector_supported=*/ false,
+        )
+        .await?;
         Ok(())
     }
 
@@ -565,18 +574,31 @@ mod tests {
     async fn test_store_and_load_snapshot_with_filesystem_catalog() -> IcebergResult<()> {
         let tmp_dir = tempdir()?;
         let warehouse_path = tmp_dir.path().to_str().unwrap();
-        test_store_and_load_snapshot_impl(warehouse_path, /*deletion_vector_supported=*/ true)
-            .await?;
+        let catalog = create_catalog(warehouse_path)?;
+        delete_all_tables(&*catalog).await?;
+        delete_all_namespaces(&*catalog).await?;
+        test_store_and_load_snapshot_impl(
+            catalog,
+            warehouse_path,
+            /*deletion_vector_supported=*/ true,
+        )
+        .await?;
         Ok(())
     }
 
     #[tokio::test]
     async fn test_store_and_load_snapshot_with_minio_catalog() -> IcebergResult<()> {
-        test_utils::create_test_s3_bucket().await?;
-        let warehouse_uri = "s3://test-bucket";
-        test_store_and_load_snapshot_impl(warehouse_uri, /*deletion_vector_supported=*/ false)
-            .await?;
+        // Intentionally ignore possible errors.
+        test_utils::delete_test_s3_bucket().await.ok();
+        test_utils::create_test_s3_bucket().await.ok();
+
+        let catalog = create_catalog(test_utils::MINIO_TEST_WAREHOUSE_URI)?;
+        test_store_and_load_snapshot_impl(
+            catalog,
+            test_utils::MINIO_TEST_WAREHOUSE_URI,
+            /*deletion_vector_supported=*/ false,
+        )
+        .await?;
         Ok(())
     }
-
 }

@@ -231,13 +231,21 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
     let manifest = manifest_file.load_manifest(file_io).await?;
     let (manifest_entries, manifest_metadata) = manifest.into_parts();
 
-    println!("before rewtite manigest fule object stoeage catalog : {:?}:{:?}", file!(), line!());
+    println!(
+        "before rewtite manigest fule object stoeage catalog : {:?}:{:?}",
+        file!(),
+        line!()
+    );
 
     // Rewrite the manifest file.
     // There's only one moonlink process/thread writing manifest file, so we don't need to write to temporary file and rename.
     let output_file = file_io.new_output(manifest_file_path)?;
 
-    println!("after rewtite manigest fule object stoeage catalog : {:?}:{:?}", file!(), line!());
+    println!(
+        "after rewtite manigest fule object stoeage catalog : {:?}:{:?}",
+        file!(),
+        line!()
+    );
 
     let mut manifest_writer = ManifestWriterBuilder::new(
         output_file,
@@ -256,7 +264,11 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
         )?;
     }
 
-    println!("after manget entey object stoeage catalog : {:?}:{:?}", file!(), line!());
+    println!(
+        "after manget entey object stoeage catalog : {:?}:{:?}",
+        file!(),
+        line!()
+    );
 
     // Append puffin blobs into existing manifest entries.
     //
@@ -300,12 +312,20 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
         manifest_writer.add_file(data_file, cur_blob_metadata.sequence_number)?;
     }
 
-    println!("after add manifest writer object stoeage catalog : {:?}:{:?}", file!(), line!());
+    println!(
+        "after add manifest writer object stoeage catalog : {:?}:{:?}",
+        file!(),
+        line!()
+    );
 
     // Flush manifest file.
     manifest_writer.write_manifest_file().await?;
 
-    println!("afetr write object stoeage catalog : {:?}:{:?}", file!(), line!());
+    println!(
+        "afetr write object stoeage catalog : {:?}:{:?}",
+        file!(),
+        line!()
+    );
 
     Ok(())
 }

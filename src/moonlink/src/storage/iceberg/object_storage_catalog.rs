@@ -133,14 +133,14 @@ impl S3Catalog {
             .layer(retry_layer)
             .finish();
 
-
         Self {
             file_io: FileIOBuilder::new("s3")
                 .with_prop(iceberg::io::S3_REGION, region)
                 .with_prop(iceberg::io::S3_ENDPOINT, endpoint)
                 .with_prop(iceberg::io::S3_ACCESS_KEY_ID, access_key_id)
                 .with_prop(iceberg::io::S3_SECRET_ACCESS_KEY, secret_access_key)
-                .build().unwrap(),
+                .build()
+                .unwrap(),
             op,
             warehouse_location,
             bucket,
@@ -164,19 +164,6 @@ impl S3Catalog {
             Err(e) if e.kind() == opendal::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(e.into()),
         }
-    }
-
-    /// Delete the bucket for the catalog.
-    /// Expose only for testing purpose.
-    #[allow(dead_code)]
-    pub(crate) async fn cleanup_bucket(&self) -> Result<(), Box<dyn Error>> {
-        let mut lister = self.op.lister_with("/").recursive(true).await?;
-        while let Some(entry) = lister.next().await {
-            let entry = entry?;
-            let path = entry.path();
-            self.op.delete(path).await?;
-        }
-        Ok(())
     }
 
     /// List all objects under the given directory.
@@ -474,7 +461,10 @@ impl Catalog for S3Catalog {
         let version_hint_filepath =
             format!("{}/{}/metadata/version-hint.text", directory, creation.name);
 
-        println!("when create table, version hint filepath = {}", version_hint_filepath);
+        println!(
+            "when create table, version hint filepath = {}",
+            version_hint_filepath
+        );
 
         self.write_object(&version_hint_filepath, /*content=*/ "0")
             .await
@@ -492,14 +482,19 @@ impl Catalog for S3Catalog {
             creation.name.clone()
         );
 
-        println!("when create table, metadata filepath = {}", metadata_filepath);
-
+        println!(
+            "when create table, metadata filepath = {}",
+            metadata_filepath
+        );
 
         println!("\n\nwhen create table, table creation = {:?}\n\n", creation);
 
         let table_metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
 
-        println!("\n\nwhen create table, table metadata = {:?}\n\n", table_metadata);
+        println!(
+            "\n\nwhen create table, table metadata = {:?}\n\n",
+            table_metadata
+        );
 
         let metadata_json = serde_json::to_string(&table_metadata.metadata)?;
         self.write_object(&metadata_filepath, /*content=*/ &metadata_json)
@@ -623,7 +618,11 @@ impl Catalog for S3Catalog {
         let new_metadata_filepath = format!("{}/v{}.metadata.json", metadata_directory, version,);
         let metadata_json = serde_json::to_string(&metadata)?;
 
-        println!("before write object for object stoeage catalog : {:?}:{:?}", file!(), line!());
+        println!(
+            "before write object for object stoeage catalog : {:?}:{:?}",
+            file!(),
+            line!()
+        );
 
         self.write_object(&new_metadata_filepath, &metadata_json)
             .await
@@ -634,7 +633,11 @@ impl Catalog for S3Catalog {
                 )
             })?;
 
-            println!("after write object for object stoeage catalog : {:?}:{:?}", file!(), line!());
+        println!(
+            "after write object for object stoeage catalog : {:?}:{:?}",
+            file!(),
+            line!()
+        );
 
         // Manifest files and manifest list has persisted into storage, make modifications based on puffin blobs.
         //
@@ -682,24 +685,14 @@ mod tests {
     };
     use iceberg::NamespaceIdent;
     use iceberg::Result as IcebergResult;
-    use aws_sdk_s3::Client as S3Client;
-    use aws_sdk_s3::config::{Credentials, Region};
-
-    const TEST_BUCKET: &str = "test-bucket";
 
     // Create S3 catalog with local minio deployment.
     async fn create_s3_catalog() -> S3Catalog {
-        let config = S3CatalogConfig {
-            warehouse_location: format!("s3://{}", TEST_BUCKET).to_string(),
-            access_key_id: "minioadmin".to_string(),
-            secret_access_key: "minioadmin".to_string(),
-            region: "auto".to_string(), // minio doesn't care about region.
-            bucket: TEST_BUCKET.to_string(),
-            endpoint: "http://minio:9000".to_string(),
-        };
-        let s3_catalog: S3Catalog = S3Catalog::new(config);
-        s3_catalog.cleanup_bucket().await.unwrap();
-        s3_catalog
+        // Intentionally ignore error.
+        test_utils::delete_test_s3_bucket().await.ok();
+        test_utils::create_test_s3_bucket().await.ok();
+
+        test_utils::create_minio_s3_catalog()
     }
 
     // Test util function to get iceberg schema,
@@ -726,7 +719,12 @@ mod tests {
         let schema = get_test_schema().await?;
         let table_creation = TableCreation::builder()
             .name(table_name.clone())
-            .location(format!("s3://{}/{}", namespace.to_url_string(), table_name))
+            .location(format!(
+                "{}/{}/{}",
+                test_utils::MINIO_TEST_WAREHOUSE_URI,
+                namespace.to_url_string(),
+                table_name
+            ))
             .schema(schema.clone())
             .build();
 

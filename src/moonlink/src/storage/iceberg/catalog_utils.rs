@@ -33,7 +33,7 @@ pub fn create_catalog(warehouse_uri: &str) -> IcebergResult<Box<dyn Catalog>> {
 
         println!("we are creating the correct config!!");
 
-        return Ok(Box::new(S3Catalog::new(config)))
+        return Ok(Box::new(S3Catalog::new(config)));
     }
 
     if url.scheme() == "file" {
