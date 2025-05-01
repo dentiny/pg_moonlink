@@ -29,8 +29,8 @@ uuid = { version = "1.16.0", features = ["v4"] }
 arrow-array = "54.2.1"
 arrow-schema = "54.2.1"
 serde_json = { version = "1.0", features = ["std"] }
-iceberg = { git = "https://github.com/dentiny/iceberg-rust.git", branch = "hjiang/sync-manifest-entry-schema"}
-iceberg-catalog-rest = { git = "https://github.com/dentiny/iceberg-rust.git", branch = "hjiang/sync-manifest-entry-schema" }
+iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "b4bc6dd15ae4f7a4b1c9ce555e3458089a83e228"}
+iceberg-catalog-rest = { git = "https://github.com/apache/iceberg-rust.git", rev = "b4bc6dd15ae4f7a4b1c9ce555e3458089a83e228" }
 url = "2.5"
 roaring = { version = "0.10.12", git = "https://github.com/RoaringBitmap/roaring-rs.git" }
 crc32fast = "1.3"
