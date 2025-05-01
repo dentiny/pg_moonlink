@@ -19,7 +19,6 @@ use std::sync::Arc;
 use arrow::datatypes::DataType as ArrowType;
 use arrow_schema::Schema as ArrowSchema;
 use iceberg::puffin::CompressionCodec;
-use iceberg::puffin::PuffinWriter;
 use iceberg::spec::ManifestContentType;
 use iceberg::spec::{DataFile, DataFileFormat};
 use iceberg::spec::{
@@ -202,6 +201,7 @@ impl IcebergSnapshot for Snapshot {
     // TODO(hjiang):
     // 1. Extract into multiple functions, for example, data file persistence, deletion vector persistence, iceberg table transaction.
     // 2. Parallalize IO operations, now they're implemented in sequential style.
+    #[allow(clippy::await_holding_refcell_ref)]
     async fn _export_to_iceberg(&mut self) -> IcebergResult<()> {
         let url = Url::parse(&self.warehouse_uri)
             .or_else(|_| Url::from_file_path(self.warehouse_uri.clone()))
@@ -286,7 +286,7 @@ impl IcebergSnapshot for Snapshot {
                 let puffin_filepath =
                     location_generator.generate_location(&format!("{}-puffin.bin", Uuid::new_v4()));
                 let mut puffin_writer = puffin_utils::create_puffin_writer(
-                    &iceberg_table.file_io(),
+                    iceberg_table.file_io(),
                     puffin_filepath.clone(),
                 )
                 .await?;
@@ -351,7 +351,7 @@ impl IcebergSnapshot for Snapshot {
                     validate_puffin_manifest_entry(entry)?;
                     let deletion_vector =
                         DeletionVector::load_from_dv_blob(file_io.clone(), data_file).await?;
-                    let batch_deletion_vector = deletion_vector.to_batch_delete_vector();
+                    let batch_deletion_vector = deletion_vector.take_as_batch_delete_vector();
                     let referenced_path_buf: PathBuf =
                         data_file.referenced_data_file().unwrap().into();
                     disk_file_to_deletion_vector.insert(referenced_path_buf, batch_deletion_vector);
@@ -364,10 +364,9 @@ impl IcebergSnapshot for Snapshot {
                     DataFileFormat::Parquet,
                     "Data file is of file format parquet."
                 );
-                if !disk_file_to_deletion_vector.contains_key(&file_path) {
-                    disk_file_to_deletion_vector
-                        .insert(file_path, BatchDeletionVector::new(/*max_rows=*/ 0));
-                }
+                disk_file_to_deletion_vector
+                    .entry(file_path)
+                    .or_insert_with(|| BatchDeletionVector::new(/*max_rows=*/ 0));
             }
         }
 

@@ -1,11 +1,10 @@
 /// This module contains util structs and functions for puffin access.
 use std::collections::HashMap;
 
-use iceberg::io::{FileIO, FileRead};
+use iceberg::io::FileIO;
 use iceberg::puffin::PuffinWriter;
 use iceberg::puffin::{Blob, PuffinReader};
 use iceberg::spec::DataFile;
-use iceberg::table::Table as IcebergTable;
 use iceberg::{Error as IcebergError, Result as IcebergResult};
 
 /// Get puffin writer with the given file io.

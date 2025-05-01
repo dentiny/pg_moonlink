@@ -554,7 +554,7 @@ impl Catalog for FileSystemCatalog {
             append_puffin_metadata_and_rewrite(
                 &metadata,
                 &self.file_io,
-                &puffin_filepath,
+                puffin_filepath,
                 puffin_blob_metadata.clone(),
             )
             .await?;

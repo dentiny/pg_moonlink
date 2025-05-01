@@ -2,14 +2,12 @@ use crate::storage::iceberg::puffin_utils;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
-use iceberg::io::{FileIO, FileRead};
-use iceberg::puffin::CompressionCodec;
-use iceberg::puffin::{Blob, FileMetadata as PuffinFileMetadata, PuffinReader};
-use iceberg::spec::{DataFile, ManifestEntry};
+use iceberg::io::FileIO;
+use iceberg::puffin::Blob;
+use iceberg::spec::DataFile;
 use iceberg::{Error as IcebergError, Result as IcebergResult};
-use roaring::{bitmap, RoaringBitmap};
+use roaring::RoaringBitmap;
 
 // Magic bytes for deletion vector for puffin file.
 #[allow(dead_code)]
@@ -215,7 +213,7 @@ impl DeletionVector {
         DeletionVector::_deserialize(blob)
     }
 
-    pub fn to_batch_delete_vector(self) -> BatchDeletionVector {
+    pub fn take_as_batch_delete_vector(self) -> BatchDeletionVector {
         let mut batch_delete_vector = BatchDeletionVector::new(HARD_CODE__DELETE_VECTOR_MAX_ROW);
         for row_idx in self.bitmap.iter() {
             batch_delete_vector.delete_row(row_idx as usize);
