@@ -56,7 +56,6 @@ struct PuffinWriterProxy {
 
 /// Data file carries data file path, partition tuple, metrics, …
 #[derive(Debug, PartialEq, Clone, Eq)]
-#[allow(dead_code)]
 pub struct DataFileProxy {
     /// field id: 134
     ///
@@ -193,7 +192,6 @@ pub struct DataFileProxy {
 
 /// Get puffin blob metadata within the puffin write, and close the writer.
 /// This function is supposed to be called after all blobs added.
-#[allow(dead_code)]
 pub(crate) async fn get_puffin_metadata_and_close(
     puffin_writer: PuffinWriter,
 ) -> IcebergResult<Vec<PuffinBlobMetadataProxy>> {
@@ -213,7 +211,6 @@ pub(crate) async fn get_puffin_metadata_and_close(
 //
 /// # Arguments
 /// path: filepath for the puffin file.
-#[allow(dead_code)]
 pub(crate) async fn append_puffin_metadata_and_rewrite(
     table_metadata: &TableMetadata,
     file_io: &FileIO,
@@ -235,10 +232,7 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
     let (manifest_entries, manifest_metadata) = manifest.into_parts();
 
     // Rewrite the manifest file.
-    //
-    // TODO(hjiang): The correct way for overwrite is write a temporary file and atomic rename, but `FileIO` doesn't provide such functionality.
-    // It's OK for object storage, but problematic for local filesystem, which we might need to do special handling.
-    // For example, if `path` schema indicates local path, do swap.
+    // There's only one moonlink process/thread writing manifest file, so we don't need to write to temporary file and rename.
     let output_file = file_io.new_output(manifest_file_path)?;
 
     let mut manifest_writer = ManifestWriterBuilder::new(

@@ -278,7 +278,7 @@ impl IcebergSnapshot for Snapshot {
                         deleted_row_count.to_string(),
                     ),
                 ]);
-                let blob = iceberg_deletion_vector._serialize(blob_properties);
+                let blob = iceberg_deletion_vector.serialize(blob_properties);
 
                 // TODO(hjiang): Current iceberg-rust doesn't support deletion vector officially, so we do our own hack to rewrite manifest file by our own catalog implementation.
                 let location_generator =
