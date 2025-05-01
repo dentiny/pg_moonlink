@@ -1,8 +1,15 @@
-use std::collections::HashMap;
+use crate::storage::iceberg::puffin_utils;
+use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 
-use iceberg::puffin::Blob;
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use iceberg::io::{FileIO, FileRead};
+use iceberg::puffin::CompressionCodec;
+use iceberg::puffin::{Blob, FileMetadata as PuffinFileMetadata, PuffinReader};
+use iceberg::spec::{DataFile, ManifestEntry};
 use iceberg::{Error as IcebergError, Result as IcebergResult};
-use roaring::RoaringBitmap;
+use roaring::{bitmap, RoaringBitmap};
 
 // Magic bytes for deletion vector for puffin file.
 #[allow(dead_code)]
@@ -12,10 +19,20 @@ const DELETION_VECTOR_MAGIC_BYTES: [u8; 4] = [0xD1, 0xD3, 0x39, 0x64];
 #[allow(dead_code)]
 const MIN_SERIALIZED_DELETION_VECTOR_BLOB: usize = 12;
 
+// Deletion vector puffin blob properties which must be contained.
+#[allow(dead_code)]
+pub(crate) static DELETION_VECTOR_CADINALITY: &str = "cardinality";
+#[allow(dead_code)]
+pub(crate) static DELETION_VECTOR_REFERENCED_DATA_FILE: &str = "referenced-data-file";
+
+// Max number of rows in a batch. Use to convert puffin deletion vector to moonlink batch delete vector.
+// TODO(hjiang): Confirm max batch size when integrate iceberg system with moonlink.
+const HARD_CODE__DELETE_VECTOR_MAX_ROW: usize = 4096;
+
 #[allow(dead_code)]
 pub(crate) struct DeletionVector {
     /// Bitmap representing deleted rows.
-    bitmap: RoaringBitmap,
+    pub(crate) bitmap: RoaringBitmap,
 }
 
 // TODO(hjiang): Ideally moonlink doesn't need to operate on `Blob` directly, iceberg-rust should provide high-level interface to operate on deleted rows, but before it's supported officially, we use this hacky way to construct a `iceberg::puffin::blob::Blob`.
@@ -63,11 +80,27 @@ impl DeletionVector {
             })
     }
 
+    /// Sanity check required blob properties have been properly set.
+    fn check_properties(properties: &HashMap<String, String>) {
+        assert!(
+            properties.contains_key(DELETION_VECTOR_CADINALITY),
+            "Deletion vector blob properties should contain {}",
+            DELETION_VECTOR_CADINALITY
+        );
+        assert!(
+            properties.contains_key(DELETION_VECTOR_REFERENCED_DATA_FILE),
+            "Deletion vector blob properties should contain {}",
+            DELETION_VECTOR_REFERENCED_DATA_FILE
+        );
+    }
+
     /// Serialize the deletion vector into `IcebergBlobProxy` to write to puffin files.
     ///
     /// Serialization storage format:
     /// | len for magic and vector | magic | vector | crc32c |
-    pub fn _serialize(&self) -> Blob {
+    pub fn _serialize(&self, properties: HashMap<String, String>) -> Blob {
+        DeletionVector::check_properties(&properties);
+
         let serialized_bitmap = self._serialize_roaring_bitmap();
 
         // Calculate combined length (magic bytes + bitmap).
@@ -105,7 +138,7 @@ impl DeletionVector {
             snapshot_id: 0, // TODO: Set appropriate values, we should pass in TableMetadata here.
             sequence_number: 0, // TODO: Set appropriate values, we should pass in TableMetadata here.
             data,
-            properties: HashMap::new(),
+            properties,
         };
         unsafe { std::mem::transmute::<IcebergBlobProxy, Blob>(blob_proxy) }
     }
@@ -173,16 +206,45 @@ impl DeletionVector {
         // Deserialize the bitmap.
         DeletionVector::_deserialize_roaring_map(bitmap_data)
     }
+
+    /// Load deletion vector from puffin file blob.
+    ///
+    /// TODO(hjiang): Add unit test for load blob from local filesystem.
+    pub async fn load_from_dv_blob(file_io: FileIO, puffin_file: &DataFile) -> IcebergResult<Self> {
+        let blob = puffin_utils::load_blob_from_puffin_file(file_io, puffin_file).await?;
+        DeletionVector::_deserialize(blob)
+    }
+
+    pub fn to_batch_delete_vector(self) -> BatchDeletionVector {
+        let mut batch_delete_vector = BatchDeletionVector::new(HARD_CODE__DELETE_VECTOR_MAX_ROW);
+        for row_idx in self.bitmap.iter() {
+            batch_delete_vector.delete_row(row_idx as usize);
+        }
+        batch_delete_vector
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn create_test_blob_properties(deleted_rows: usize) -> HashMap<String, String> {
+        let mut properties = HashMap::new();
+        properties.insert(
+            DELETION_VECTOR_CADINALITY.to_string(),
+            deleted_rows.to_string(),
+        );
+        properties.insert(
+            DELETION_VECTOR_REFERENCED_DATA_FILE.to_string(),
+            "/tmp/iceberg/data/filename".to_string(),
+        );
+        properties
+    }
+
     #[test]
     fn test_empty_deletion_vector() {
         let dv = DeletionVector::new();
-        let blob = dv._serialize();
+        let blob = dv._serialize(create_test_blob_properties(/*deleted_rows=*/ 0));
         let deserialized_dv = DeletionVector::_deserialize(blob).unwrap();
         assert!(dv.bitmap.is_empty());
         assert!(deserialized_dv.bitmap.is_empty());
@@ -193,7 +255,9 @@ mod tests {
         let mut dv = DeletionVector::new();
         let deleted_rows = vec![1, 3, 5, 7, 1000];
         dv.mark_rows_deleted(deleted_rows.clone());
-        let blob = dv._serialize();
+        let blob = dv._serialize(create_test_blob_properties(
+            /*deleted_rows=*/ deleted_rows.len(),
+        ));
         let deserialized_dv = DeletionVector::_deserialize(blob).unwrap();
         for row in deleted_rows {
             assert!(deserialized_dv.bitmap.contains(row as u32));

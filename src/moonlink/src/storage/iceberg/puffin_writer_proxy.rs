@@ -9,6 +9,10 @@
 //
 // puffin blob spec: https://iceberg.apache.org/puffin-spec/?h=deletion#deletion-vector-v1-blob-type
 
+use crate::storage::iceberg::deletion_vector::{
+    DELETION_VECTOR_CADINALITY, DELETION_VECTOR_REFERENCED_DATA_FILE,
+};
+
 use std::collections::HashMap;
 
 use iceberg::io::FileIO;
@@ -25,12 +29,6 @@ use iceberg::Result as IcebergResult;
 enum PuffinFlagProxy {
     FooterPayloadCompressed = 0,
 }
-
-// Deletion vector puffin blob properties which must be contained.
-#[allow(dead_code)]
-pub(crate) static DELETION_VECTOR_CADINALITY: &str = "cardinality";
-#[allow(dead_code)]
-pub(crate) static DELETION_VECTOR_REFERENCED_DATA_FILE: &str = "referenced-data-file";
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -261,14 +259,11 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
     }
 
     // Append puffin blobs into existing manifest entries.
+    //
+    // TODO(hjiang): Add sanity check for sequence number between table metadata and deletion vector.
     for cur_blob_metadata in blob_metadata.iter() {
-        assert_eq!(
-            cur_blob_metadata.sequence_number, latest_seq_no,
-            "Sequence number should match between deletion vector and table metadata"
-        );
-
         let new_data_file = DataFileProxy {
-            content: DataContentType::PositionDeletes,
+            content: DataContentType::Data,
             file_path: puffin_filepath.to_string(),
             file_format: DataFileFormat::Puffin,
             partition: Struct::empty(),
@@ -294,9 +289,9 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
             referenced_data_file: Some(
                 cur_blob_metadata
                     .properties
-                    .get(DELETION_VECTOR_CADINALITY)
+                    .get(DELETION_VECTOR_REFERENCED_DATA_FILE)
                     .unwrap()
-                    .to_string(),
+                    .clone(),
             ),
             content_offset: Some(cur_blob_metadata.offset as i64),
             content_size_in_bytes: Some(cur_blob_metadata.length as i64),

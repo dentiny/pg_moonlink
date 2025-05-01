@@ -513,17 +513,6 @@ impl Catalog for FileSystemCatalog {
             /*current_file_location=*/ Some(metadata_file_path.clone()),
         );
 
-        // Manifest files and manifest list has persisted into storage, make modifications based on puffin blobs.
-        for (puffin_filepath, puffin_blob_metadata) in self.puffin_blobs.iter() {
-            append_puffin_metadata_and_rewrite(
-                &metadata,
-                &self.file_io,
-                &puffin_filepath,
-                puffin_blob_metadata.clone(),
-            )
-            .await?;
-        }
-
         // Manifest files and manifest list has persisted into storage, update metadata and persist.
         let updates = commit.take_updates();
         for update in &updates {
@@ -557,6 +546,19 @@ impl Catalog for FileSystemCatalog {
         let metadata_json = serde_json::to_string(&metadata)?;
         let output = self.file_io.new_output(&metadata_file_path)?;
         output.write(metadata_json.into()).await?;
+
+        // Manifest files and manifest list has persisted into storage, make modifications based on puffin blobs.
+        //
+        // TODO(hjiang): Add unit test for update and check manifest population.
+        for (puffin_filepath, puffin_blob_metadata) in self.puffin_blobs.iter() {
+            append_puffin_metadata_and_rewrite(
+                &metadata,
+                &self.file_io,
+                &puffin_filepath,
+                puffin_blob_metadata.clone(),
+            )
+            .await?;
+        }
 
         // Write version hint file.
         let version_hint_path = format!("{}/version-hint.text", metadata_directory);
