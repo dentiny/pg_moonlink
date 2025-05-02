@@ -652,8 +652,9 @@ mod tests {
 
     // Create S3 catalog with local minio deployment.
     async fn create_s3_catalog() -> S3Catalog {
-        let (bucket_name, warehouse_uri) = test_utils::get_test_minio_bucket_and_warehouse();
-        test_utils::create_test_s3_bucket(bucket_name.clone())
+        let (bucket_name, warehouse_uri) =
+            crate::storage::iceberg::test_utils::get_test_minio_bucket_and_warehouse();
+        test_utils::test_utils::create_test_s3_bucket(bucket_name.clone())
             .await
             .unwrap();
         test_utils::create_minio_s3_catalog(&bucket_name, &warehouse_uri)

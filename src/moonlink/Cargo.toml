@@ -17,21 +17,20 @@ bitstream-io.workspace = true
 arrow-array.workspace = true
 arrow-schema.workspace = true
 iceberg.workspace = true
-iceberg-catalog-rest.workspace = true
 serde_json.workspace = true
 url.workspace = true
 roaring.workspace = true
 crc32fast.workspace = true
 opendal.workspace = true
 memmap2 = "0.9.5"
-aws-sdk-s3.workspace = true
-tokio-retry = "0.3"
-randomizer.workspace = true
+randomizer = "0.1.2"
 
 [dev-dependencies]
 tempfile.workspace = true
 pprof = { version = "0.14", features = ["flamegraph"] }
 rand = "0.9.1"
+aws-sdk-s3 = "1.14.0"
+tokio-retry = "0.3"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(profiling_enabled)'] }

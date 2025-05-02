@@ -563,8 +563,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_and_load_snapshot_with_minio_catalog() -> IcebergResult<()> {
-        let (bucket_name, warehouse_uri) = test_utils::get_test_minio_bucket_and_warehouse();
-        test_utils::create_test_s3_bucket(bucket_name.clone()).await?;
+        let (bucket_name, warehouse_uri) =
+            crate::storage::iceberg::test_utils::get_test_minio_bucket_and_warehouse();
+        test_utils::test_utils::create_test_s3_bucket(bucket_name.clone()).await?;
 
         let catalog = create_catalog(&warehouse_uri)?;
         test_store_and_load_snapshot_impl(catalog, &warehouse_uri).await?;
