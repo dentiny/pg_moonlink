@@ -12,8 +12,12 @@ use url::Url;
 /// Here we simply deduce catalog type from warehouse because both filesystem and object storage catalog are only able to handle certain scheme.
 pub fn create_catalog(warehouse_uri: &str) -> IcebergResult<Box<dyn Catalog>> {
     // Special handle testing situation.
-    if warehouse_uri == test_utils::MINIO_TEST_WAREHOUSE_URI {
-        return Ok(Box::new(test_utils::create_minio_s3_catalog()));
+    if warehouse_uri.starts_with(test_utils::MINIO_TEST_WAREHOUSE_URI_PREFIX) {
+        let test_bucket = test_utils::get_test_minio_bucket(warehouse_uri);
+        return Ok(Box::new(test_utils::create_minio_s3_catalog(
+            &test_bucket,
+            warehouse_uri,
+        )));
     }
 
     let url = Url::parse(warehouse_uri)

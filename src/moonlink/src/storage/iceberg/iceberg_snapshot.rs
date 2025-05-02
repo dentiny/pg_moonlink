@@ -184,8 +184,15 @@ impl IcebergSnapshot for Snapshot {
         let mut object_storage_catalog: Option<Rc<RefCell<S3Catalog>>> = None;
 
         // Special handle testing situation.
-        if self.warehouse_uri == test_utils::MINIO_TEST_WAREHOUSE_URI {
-            let internal_s3_config = Rc::new(RefCell::new(test_utils::create_minio_s3_catalog()));
+        if self
+            .warehouse_uri
+            .starts_with(test_utils::MINIO_TEST_WAREHOUSE_URI_PREFIX)
+        {
+            let test_bucket = test_utils::get_test_minio_bucket(&self.warehouse_uri);
+            let internal_s3_config = Rc::new(RefCell::new(test_utils::create_minio_s3_catalog(
+                &test_bucket,
+                &self.warehouse_uri,
+            )));
             object_storage_catalog = Some(internal_s3_config.clone());
             let catalog_rc: Rc<RefCell<dyn Catalog>> = internal_s3_config.clone();
             opt_catalog = Some(catalog_rc);
@@ -556,12 +563,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_and_load_snapshot_with_minio_catalog() -> IcebergResult<()> {
-        // Intentionally ignore possible errors.
-        test_utils::delete_test_s3_bucket().await?;
-        test_utils::create_test_s3_bucket().await?;
+        let (bucket_name, warehouse_uri) = test_utils::get_test_minio_bucket_and_warehouse();
+        test_utils::delete_test_s3_bucket(bucket_name.clone()).await?;
+        test_utils::create_test_s3_bucket(bucket_name.clone()).await?;
 
-        let catalog = create_catalog(test_utils::MINIO_TEST_WAREHOUSE_URI)?;
-        test_store_and_load_snapshot_impl(catalog, test_utils::MINIO_TEST_WAREHOUSE_URI).await?;
+        let catalog = create_catalog(&warehouse_uri)?;
+        test_store_and_load_snapshot_impl(catalog, &warehouse_uri).await?;
         Ok(())
     }
 }
