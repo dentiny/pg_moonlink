@@ -8,6 +8,8 @@ use aws_sdk_s3::types::{Delete, ObjectIdentifier};
 use aws_sdk_s3::Client as S3Client;
 use iceberg::Error as IcebergError;
 use iceberg::Result as IcebergResult;
+use tokio_retry::strategy::{jitter, ExponentialBackoff};
+use tokio_retry::Retry;
 
 /// Minio related constants.
 #[allow(dead_code)]
@@ -20,6 +22,10 @@ pub(crate) static MINIO_ACCESS_KEY_ID: &str = "minioadmin";
 pub(crate) static MINIO_SECRET_ACCESS_KEY: &str = "minioadmin";
 #[allow(dead_code)]
 pub(crate) static MINIO_ENDPOINT: &str = "http://minio:9000";
+#[allow(dead_code)]
+static TEST_RETRY_COUNT: usize = 5;
+#[allow(dead_code)]
+static TEST_RETRY_INIT_MILLISEC: u64 = 100;
 
 /// Create a S3 catalog, which communicates with local minio server.
 #[allow(dead_code)]
@@ -77,7 +83,7 @@ async fn bucket_exists(s3_client: &S3Client, bucket: &str) -> IcebergResult<bool
 
 /// Create test bucket in minio server.
 #[allow(dead_code)]
-pub(crate) async fn create_test_s3_bucket() -> IcebergResult<()> {
+async fn create_test_s3_bucket_impl() -> IcebergResult<()> {
     let s3_client = create_s3_client().await;
     let exists = bucket_exists(&s3_client, MINIO_TEST_BUCKET).await?;
     if exists {
@@ -99,9 +105,19 @@ pub(crate) async fn create_test_s3_bucket() -> IcebergResult<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
+pub(crate) async fn create_test_s3_bucket() -> IcebergResult<()> {
+    let retry_strategy = ExponentialBackoff::from_millis(TEST_RETRY_INIT_MILLISEC)
+        .map(jitter)
+        .take(TEST_RETRY_COUNT);
+
+    Retry::spawn(retry_strategy, create_test_s3_bucket_impl).await?;
+    Ok(())
+}
+
 /// Delete test bucket in minio server.
 #[allow(dead_code)]
-pub(crate) async fn delete_test_s3_bucket() -> IcebergResult<()> {
+async fn delete_test_s3_bucket_impl() -> IcebergResult<()> {
     let s3_client = create_s3_client().await;
     let exist = bucket_exists(&s3_client, MINIO_TEST_BUCKET).await?;
     if !exist {
@@ -165,5 +181,15 @@ pub(crate) async fn delete_test_s3_bucket() -> IcebergResult<()> {
             })?;
     }
 
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub(crate) async fn delete_test_s3_bucket() -> IcebergResult<()> {
+    let retry_strategy = ExponentialBackoff::from_millis(TEST_RETRY_INIT_MILLISEC)
+        .map(jitter)
+        .take(TEST_RETRY_COUNT);
+
+    Retry::spawn(retry_strategy, delete_test_s3_bucket_impl).await?;
     Ok(())
 }

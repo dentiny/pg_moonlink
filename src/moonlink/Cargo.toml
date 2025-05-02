@@ -25,6 +25,7 @@ crc32fast.workspace = true
 opendal.workspace = true
 memmap2 = "0.9.5"
 aws-sdk-s3.workspace = true
+tokio-retry = "0.3"
 
 [dev-dependencies]
 tempfile.workspace = true

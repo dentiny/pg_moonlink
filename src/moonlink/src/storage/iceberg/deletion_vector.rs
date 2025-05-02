@@ -50,10 +50,16 @@ impl DeletionVector {
 
     /// Marks a row as deleted.
     pub fn mark_rows_deleted(&mut self, rows: Vec<usize>) {
-        let rows_as_u32: Vec<u32> = rows.into_iter().map(|x| {
-            assert!(x <= u32::MAX as usize, "Row index is larger than max value of u32");
-            x as u32
-    }).collect();
+        let rows_as_u32: Vec<u32> = rows
+            .into_iter()
+            .map(|x| {
+                assert!(
+                    x <= u32::MAX as usize,
+                    "Row index is larger than max value of u32"
+                );
+                x as u32
+            })
+            .collect();
         self.bitmap.extend(rows_as_u32);
     }
 
