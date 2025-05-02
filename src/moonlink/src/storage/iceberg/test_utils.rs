@@ -107,6 +107,7 @@ async fn create_test_s3_bucket_impl(bucket: Arc<String>) -> IcebergResult<()> {
     Ok(())
 }
 
+/// Creates the provided bucket with exponential backoff retry; this function assumes the bucket doesn't exist, otherwise it will return error.
 #[allow(dead_code)]
 pub(crate) async fn create_test_s3_bucket(bucket: String) -> IcebergResult<()> {
     let retry_strategy = ExponentialBackoff::from_millis(TEST_RETRY_INIT_MILLISEC)
@@ -188,6 +189,7 @@ async fn delete_test_s3_bucket_impl(bucket: Arc<String>) -> IcebergResult<()> {
     Ok(())
 }
 
+/// Delete the provided bucket with exponential backoff retry; this function assume bucket already exists and return error if not.
 #[allow(dead_code)]
 pub(crate) async fn delete_test_s3_bucket(bucket: String) -> IcebergResult<()> {
     let retry_strategy = ExponentialBackoff::from_millis(TEST_RETRY_INIT_MILLISEC)
