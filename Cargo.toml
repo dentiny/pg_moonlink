@@ -38,6 +38,7 @@ opendal = { version = "0.53.1", features = ["services-s3"] }
 bitstream-io = "3.2.0"
 aws-sdk-s3 = "1.14.0"
 tokio-retry = "0.3"
+randomizer = "0.1.2"
 
 [profile.release-with-debug]
 inherits = "release"

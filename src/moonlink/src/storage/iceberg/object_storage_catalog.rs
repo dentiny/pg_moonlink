@@ -57,11 +57,12 @@ use opendal::Operator;
 static NAMESPACE_INDICATOR_OBJECT_NAME: &str = "indicator.text";
 
 // Retry related constants.
-static MIN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
+static MIN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 static MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
 static RETRY_DELAY_FACTOR: f32 = 1.5;
 static MAX_RETRY_COUNT: usize = 5;
 
+#[derive(Debug)]
 pub struct S3CatalogConfig {
     warehouse_location: String,
     access_key_id: String,
@@ -383,15 +384,7 @@ impl Catalog for S3Catalog {
             .await
         {
             Ok(_) => Ok(true),
-            Err(e) => {
-                if e.kind() == opendal::ErrorKind::NotFound {
-                    return Ok(false);
-                }
-                Err(IcebergError::new(
-                    iceberg::ErrorKind::Unexpected,
-                    format!("Failed to check object existence: {}", e),
-                ))
-            }
+            Err(_) => return Ok(false),
         }
     }
 
@@ -545,7 +538,10 @@ impl Catalog for S3Catalog {
             .map_err(|e| {
                 IcebergError::new(
                     iceberg::ErrorKind::Unexpected,
-                    format!("Failed to check object existence: {}", e),
+                    format!(
+                        "Failed to check object existence when get table existence: {}",
+                        e
+                    ),
                 )
             })?;
         Ok(exists)
@@ -656,11 +652,11 @@ mod tests {
 
     // Create S3 catalog with local minio deployment.
     async fn create_s3_catalog() -> S3Catalog {
-        // Intentionally ignore error.
-        test_utils::delete_test_s3_bucket().await.unwrap();
-        test_utils::create_test_s3_bucket().await.unwrap();
-
-        test_utils::create_minio_s3_catalog()
+        let (bucket_name, warehouse_uri) = test_utils::get_test_minio_bucket_and_warehouse();
+        test_utils::create_test_s3_bucket(bucket_name.clone())
+            .await
+            .unwrap();
+        test_utils::create_minio_s3_catalog(&bucket_name, &warehouse_uri)
     }
 
     // Test util function to get iceberg schema,
@@ -689,7 +685,7 @@ mod tests {
             .name(table_name.clone())
             .location(format!(
                 "{}/{}/{}",
-                test_utils::MINIO_TEST_WAREHOUSE_URI,
+                catalog.warehouse_location,
                 namespace.to_url_string(),
                 table_name
             ))

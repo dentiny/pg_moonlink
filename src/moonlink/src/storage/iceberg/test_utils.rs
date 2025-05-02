@@ -1,21 +1,24 @@
 /// This module provides a few test util functions.
 use crate::storage::iceberg::object_storage_catalog::{S3Catalog, S3CatalogConfig};
 
+use std::sync::Arc;
+
 use aws_sdk_s3::config::{Credentials, Region};
-use aws_sdk_s3::error::SdkError;
-use aws_sdk_s3::operation::head_bucket::HeadBucketError;
 use aws_sdk_s3::types::{Delete, ObjectIdentifier};
 use aws_sdk_s3::Client as S3Client;
 use iceberg::Error as IcebergError;
 use iceberg::Result as IcebergResult;
+use randomizer::Randomizer;
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 
 /// Minio related constants.
+///
+/// Local minio warehouse needs special handling, so we simply prefix with special token.
 #[allow(dead_code)]
-pub(crate) static MINIO_TEST_BUCKET: &str = "test-bucket";
+pub(crate) static MINIO_TEST_BUCKET_PREFIX: &str = "test-minio-warehouse-";
 #[allow(dead_code)]
-pub(crate) static MINIO_TEST_WAREHOUSE_URI: &str = "s3://test-bucket";
+pub(crate) static MINIO_TEST_WAREHOUSE_URI_PREFIX: &str = "s3://test-minio-warehouse-";
 #[allow(dead_code)]
 pub(crate) static MINIO_ACCESS_KEY_ID: &str = "minioadmin";
 #[allow(dead_code)]
@@ -26,16 +29,41 @@ pub(crate) static MINIO_ENDPOINT: &str = "http://minio:9000";
 static TEST_RETRY_COUNT: usize = 5;
 #[allow(dead_code)]
 static TEST_RETRY_INIT_MILLISEC: u64 = 100;
+#[allow(dead_code)]
+static TEST_BUCKET_NAME_LEN: usize = 10;
+
+#[allow(dead_code)]
+pub(crate) fn get_test_minio_bucket_and_warehouse(
+) -> (String /*bucket_name*/, String /*warehouse_url*/) {
+    // minio bucket name only allows lowercase case letters, digits and hyphen.
+    let random_string = Randomizer::ALPHANUMERIC(TEST_BUCKET_NAME_LEN)
+        .string()
+        .unwrap()
+        .to_lowercase();
+    (
+        format!("{}{}", MINIO_TEST_BUCKET_PREFIX, random_string),
+        format!("{}{}", MINIO_TEST_WAREHOUSE_URI_PREFIX, random_string),
+    )
+}
+
+#[allow(dead_code)]
+pub(crate) fn get_test_minio_bucket(warehouse_uri: &str) -> String {
+    let random_string = warehouse_uri
+        .strip_prefix(MINIO_TEST_WAREHOUSE_URI_PREFIX)
+        .unwrap()
+        .to_string();
+    format!("{}{}", MINIO_TEST_BUCKET_PREFIX, random_string)
+}
 
 /// Create a S3 catalog, which communicates with local minio server.
 #[allow(dead_code)]
-pub(crate) fn create_minio_s3_catalog() -> S3Catalog {
+pub(crate) fn create_minio_s3_catalog(bucket: &str, warehouse_uri: &str) -> S3Catalog {
     let config = S3CatalogConfig::new(
-        /*warehouse_location=*/ MINIO_TEST_WAREHOUSE_URI.to_string(),
+        /*warehouse_location=*/ warehouse_uri.to_string(),
         /*access_key_id=*/ MINIO_ACCESS_KEY_ID.to_string(),
         /*secret_access_key=*/ MINIO_SECRET_ACCESS_KEY.to_string(),
         /*region=*/ "auto".to_string(), // minio doesn't care about region.
-        /*bucket=*/ MINIO_TEST_BUCKET.to_string(),
+        /*bucket=*/ bucket.to_string(),
         /*endpoint=*/ MINIO_ENDPOINT.to_string(),
     );
     S3Catalog::new(config)
@@ -61,38 +89,13 @@ async fn create_s3_client() -> S3Client {
     S3Client::from_conf(config.clone())
 }
 
-/// Check if a bucket exists in minio server.
-async fn bucket_exists(s3_client: &S3Client, bucket: &str) -> IcebergResult<bool> {
-    match s3_client.head_bucket().bucket(bucket).send().await {
-        Ok(_) => Ok(true),
-        Err(err) => {
-            if let SdkError::ServiceError(service_err) = err {
-                match service_err.err() {
-                    HeadBucketError::NotFound(_) => Ok(false),
-                    _ => Ok(true),
-                }
-            } else {
-                Err(IcebergError::new(
-                    iceberg::ErrorKind::Unexpected,
-                    format!("Failed to check bucket existence: {}", err),
-                ))
-            }
-        }
-    }
-}
-
 /// Create test bucket in minio server.
 #[allow(dead_code)]
-async fn create_test_s3_bucket_impl() -> IcebergResult<()> {
+async fn create_test_s3_bucket_impl(bucket: Arc<String>) -> IcebergResult<()> {
     let s3_client = create_s3_client().await;
-    let exists = bucket_exists(&s3_client, MINIO_TEST_BUCKET).await?;
-    if exists {
-        return Ok(());
-    }
-
     s3_client
         .create_bucket()
-        .bucket(MINIO_TEST_BUCKET.to_string())
+        .bucket(bucket.to_string())
         .send()
         .await
         .map_err(|e| {
@@ -101,32 +104,33 @@ async fn create_test_s3_bucket_impl() -> IcebergResult<()> {
                 format!("Failed to create the test bucket in minio {}", e),
             )
         })?;
-
     Ok(())
 }
 
 #[allow(dead_code)]
-pub(crate) async fn create_test_s3_bucket() -> IcebergResult<()> {
+pub(crate) async fn create_test_s3_bucket(bucket: String) -> IcebergResult<()> {
     let retry_strategy = ExponentialBackoff::from_millis(TEST_RETRY_INIT_MILLISEC)
         .map(jitter)
         .take(TEST_RETRY_COUNT);
 
-    Retry::spawn(retry_strategy, create_test_s3_bucket_impl).await?;
+    Retry::spawn(retry_strategy, {
+        let bucket_name = Arc::new(bucket);
+        move || {
+            let bucket_name = Arc::clone(&bucket_name);
+            async move { create_test_s3_bucket_impl(bucket_name).await }
+        }
+    })
+    .await?;
     Ok(())
 }
 
 /// Delete test bucket in minio server.
 #[allow(dead_code)]
-async fn delete_test_s3_bucket_impl() -> IcebergResult<()> {
+async fn delete_test_s3_bucket_impl(bucket: Arc<String>) -> IcebergResult<()> {
     let s3_client = create_s3_client().await;
-    let exist = bucket_exists(&s3_client, MINIO_TEST_BUCKET).await?;
-    if !exist {
-        return Ok(());
-    }
-
     let objects = s3_client
         .list_objects_v2()
-        .bucket(MINIO_TEST_BUCKET.to_string())
+        .bucket(bucket.to_string())
         .send()
         .await
         .map_err(|e| {
@@ -151,7 +155,7 @@ async fn delete_test_s3_bucket_impl() -> IcebergResult<()> {
         if !delete_objects.is_empty() {
             s3_client
                 .delete_objects()
-                .bucket(MINIO_TEST_BUCKET.to_string())
+                .bucket(bucket.to_string())
                 .delete(
                     Delete::builder()
                         .set_objects(Some(delete_objects))
@@ -170,7 +174,7 @@ async fn delete_test_s3_bucket_impl() -> IcebergResult<()> {
 
         s3_client
             .delete_bucket()
-            .bucket(MINIO_TEST_BUCKET.to_string())
+            .bucket(bucket.to_string())
             .send()
             .await
             .map_err(|e| {
@@ -185,11 +189,18 @@ async fn delete_test_s3_bucket_impl() -> IcebergResult<()> {
 }
 
 #[allow(dead_code)]
-pub(crate) async fn delete_test_s3_bucket() -> IcebergResult<()> {
+pub(crate) async fn delete_test_s3_bucket(bucket: String) -> IcebergResult<()> {
     let retry_strategy = ExponentialBackoff::from_millis(TEST_RETRY_INIT_MILLISEC)
         .map(jitter)
         .take(TEST_RETRY_COUNT);
 
-    Retry::spawn(retry_strategy, delete_test_s3_bucket_impl).await?;
+    Retry::spawn(retry_strategy, {
+        let bucket_name = Arc::new(bucket);
+        move || {
+            let bucket_name = Arc::clone(&bucket_name);
+            async move { delete_test_s3_bucket_impl(bucket_name).await }
+        }
+    })
+    .await?;
     Ok(())
 }
