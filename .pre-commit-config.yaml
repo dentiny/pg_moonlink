@@ -11,3 +11,8 @@ repos:
       files: '\.rs$'
       entry: cargo clippy --all-targets --fix --allow-dirty --allow-staged -- -D warnings
       pass_filenames: false
+    - id: udeps
+      name: udeps
+      language: system
+      entry: cargo +nightly udeps
+      pass_filenames: false
