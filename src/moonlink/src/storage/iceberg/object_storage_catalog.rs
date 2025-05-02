@@ -460,12 +460,6 @@ impl Catalog for S3Catalog {
         // Create version hint file.
         let version_hint_filepath =
             format!("{}/{}/metadata/version-hint.text", directory, creation.name);
-
-        println!(
-            "when create table, version hint filepath = {}",
-            version_hint_filepath
-        );
-
         self.write_object(&version_hint_filepath, /*content=*/ "0")
             .await
             .map_err(|e| {
@@ -482,20 +476,8 @@ impl Catalog for S3Catalog {
             creation.name.clone()
         );
 
-        println!(
-            "when create table, metadata filepath = {}",
-            metadata_filepath
-        );
-
-        println!("\n\nwhen create table, table creation = {:?}\n\n", creation);
 
         let table_metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
-
-        println!(
-            "\n\nwhen create table, table metadata = {:?}\n\n",
-            table_metadata
-        );
-
         let metadata_json = serde_json::to_string(&table_metadata.metadata)?;
         self.write_object(&metadata_filepath, /*content=*/ &metadata_json)
             .await
@@ -617,13 +599,6 @@ impl Catalog for S3Catalog {
         );
         let new_metadata_filepath = format!("{}/v{}.metadata.json", metadata_directory, version,);
         let metadata_json = serde_json::to_string(&metadata)?;
-
-        println!(
-            "before write object for object stoeage catalog : {:?}:{:?}",
-            file!(),
-            line!()
-        );
-
         self.write_object(&new_metadata_filepath, &metadata_json)
             .await
             .map_err(|e| {
@@ -632,12 +607,6 @@ impl Catalog for S3Catalog {
                     format!("Failed to write metadata file at table update: {}", e),
                 )
             })?;
-
-        println!(
-            "after write object for object stoeage catalog : {:?}:{:?}",
-            file!(),
-            line!()
-        );
 
         // Manifest files and manifest list has persisted into storage, make modifications based on puffin blobs.
         //
@@ -675,6 +644,8 @@ impl Catalog for S3Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::iceberg::test_utils;
+
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -719,12 +690,7 @@ mod tests {
         let schema = get_test_schema().await?;
         let table_creation = TableCreation::builder()
             .name(table_name.clone())
-            .location(format!(
-                "{}/{}/{}",
-                test_utils::MINIO_TEST_WAREHOUSE_URI,
-                namespace.to_url_string(),
-                table_name
-            ))
+            .location(format!("{}/{}/{}", test_utils::MINIO_TEST_WAREHOUSE_URI, namespace.to_url_string(), table_name))
             .schema(schema.clone())
             .build();
 

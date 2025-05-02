@@ -36,7 +36,6 @@ use iceberg::Error as IcebergError;
 use iceberg::NamespaceIdent;
 use iceberg::TableCreation;
 use iceberg::{Catalog, Result as IcebergResult, TableIdent};
-use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::properties::WriterProperties;
 use url::Url;
@@ -199,12 +198,8 @@ impl IcebergSnapshot for Snapshot {
             let catalog_rc: Rc<RefCell<dyn Catalog>> = internal_fs_catalog.clone();
             opt_catalog = Some(catalog_rc);
         } else {
-            // Fallback all other warehouse uri to rest catalog.
-            opt_catalog = Some(Rc::new(RefCell::new(RestCatalog::new(
-                RestCatalogConfig::builder()
-                    .uri(self.warehouse_uri.clone())
-                    .build(),
-            ))));
+            // TODO(hjiang): Fallback to object storage for all warehouse uris.
+            todo!("Need to take secrets from client side and create object storage catalog.")
         }
         // `catalog` is guaranteed to be valid.
         let catalog: Rc<RefCell<dyn Catalog>> = opt_catalog.unwrap();
@@ -552,21 +547,6 @@ mod tests {
             "Name data should match"
         );
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_store_and_load_snapshot_with_rest_catalog() -> IcebergResult<()> {
-        let warehouse_uri = "http://iceberg:8181";
-        let catalog = create_catalog(warehouse_uri)?;
-        delete_all_tables(&*catalog).await?;
-        delete_all_namespaces(&*catalog).await?;
-        test_store_and_load_snapshot_impl(
-            catalog,
-            warehouse_uri,
-            /*deletion_vector_supported=*/ false,
-        )
-        .await?;
         Ok(())
     }
 
