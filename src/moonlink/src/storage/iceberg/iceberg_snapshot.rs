@@ -444,7 +444,6 @@ mod tests {
     async fn test_store_and_load_snapshot_impl(
         catalog: Box<dyn Catalog>,
         warehouse_uri: &str,
-        deletion_vector_supported: bool,
     ) -> IcebergResult<()> {
         // Create Arrow schema and record batch.
         let arrow_schema = create_test_arrow_schema();
@@ -524,16 +523,12 @@ mod tests {
         );
 
         // Check loaded deletion vector.
-        //
-        // TODO(hjiang): Add deletion vector support check for s3 catalog.
-        if deletion_vector_supported {
-            let collect_deleted_rows = loaded_deletion_vector.collect_deleted_rows();
-            assert_eq!(
-                collect_deleted_rows,
-                create_test_batch_deletion_vector().collect_deleted_rows(),
-                "Loaded deletion vector is not the same as the one gets stored."
-            );
-        }
+        let collect_deleted_rows = loaded_deletion_vector.collect_deleted_rows();
+        assert_eq!(
+            collect_deleted_rows,
+            create_test_batch_deletion_vector().collect_deleted_rows(),
+            "Loaded deletion vector is not the same as the one gets stored."
+        );
 
         // Verify second column (name).
         let actual_names = batch
@@ -560,7 +555,6 @@ mod tests {
         test_store_and_load_snapshot_impl(
             catalog,
             warehouse_path,
-            /*deletion_vector_supported=*/ true,
         )
         .await?;
         Ok(())
@@ -576,7 +570,6 @@ mod tests {
         test_store_and_load_snapshot_impl(
             catalog,
             test_utils::MINIO_TEST_WAREHOUSE_URI,
-            /*deletion_vector_supported=*/ false,
         )
         .await?;
         Ok(())
