@@ -7,6 +7,9 @@ use url::Url;
 
 /// Create a catelog based on the provided type.
 /// There're only two catalogs supported: filesystem catalog and object storage, all other catalogs either don't support transactional commit, or deletion vector.
+///
+/// It's worth noting catalog and warehouse uri are not 1-1 mapping; for example, rest catalog could handle warehouse.
+/// Here we simply deduce catalog type from warehouse because both filesystem and object storage catalog are only able to handle certain scheme.
 pub fn create_catalog(warehouse_uri: &str) -> IcebergResult<Box<dyn Catalog>> {
     // Special handle testing situation.
     if warehouse_uri == test_utils::MINIO_TEST_WAREHOUSE_URI {

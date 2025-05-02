@@ -659,8 +659,8 @@ mod tests {
     // Create S3 catalog with local minio deployment.
     async fn create_s3_catalog() -> S3Catalog {
         // Intentionally ignore error.
-        test_utils::delete_test_s3_bucket().await.ok();
-        test_utils::create_test_s3_bucket().await.ok();
+        test_utils::delete_test_s3_bucket().await.unwrap();
+        test_utils::create_test_s3_bucket().await.unwrap();
 
         test_utils::create_minio_s3_catalog()
     }

@@ -413,14 +413,12 @@ mod tests {
     /// Test util function to create arrow schema.
     fn create_test_arrow_schema() -> Arc<ArrowSchema> {
         Arc::new(ArrowSchema::new(vec![
-            ArrowField::new("id", ArrowDataType::Int32, false).with_metadata(HashMap::from([(
-                "PARQUET:field_id".to_string(),
-                "1".to_string(),
-            )])),
-            ArrowField::new("name", ArrowDataType::Utf8, false).with_metadata(HashMap::from([(
-                "PARQUET:field_id".to_string(),
-                "2".to_string(),
-            )])),
+            ArrowField::new("id", ArrowDataType::Int32, /*nullable=*/ false).with_metadata(
+                HashMap::from([("PARQUET:field_id".to_string(), "1".to_string())]),
+            ),
+            ArrowField::new("name", ArrowDataType::Utf8, /*nullable=*/ false).with_metadata(
+                HashMap::from([("PARQUET:field_id".to_string(), "2".to_string())]),
+            ),
         ]))
     }
 
@@ -559,8 +557,8 @@ mod tests {
     #[tokio::test]
     async fn test_store_and_load_snapshot_with_minio_catalog() -> IcebergResult<()> {
         // Intentionally ignore possible errors.
-        test_utils::delete_test_s3_bucket().await.ok();
-        test_utils::create_test_s3_bucket().await.ok();
+        test_utils::delete_test_s3_bucket().await?;
+        test_utils::create_test_s3_bucket().await?;
 
         let catalog = create_catalog(test_utils::MINIO_TEST_WAREHOUSE_URI)?;
         test_store_and_load_snapshot_impl(catalog, test_utils::MINIO_TEST_WAREHOUSE_URI).await?;

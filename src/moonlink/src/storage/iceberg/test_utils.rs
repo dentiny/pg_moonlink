@@ -2,6 +2,8 @@
 use crate::storage::iceberg::object_storage_catalog::{S3Catalog, S3CatalogConfig};
 
 use aws_sdk_s3::config::{Credentials, Region};
+use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::operation::head_bucket::HeadBucketError;
 use aws_sdk_s3::types::{Delete, ObjectIdentifier};
 use aws_sdk_s3::Client as S3Client;
 use iceberg::Error as IcebergError;
@@ -53,12 +55,35 @@ async fn create_s3_client() -> S3Client {
     S3Client::from_conf(config.clone())
 }
 
+/// Check if a bucket exists in minio server.
+async fn bucket_exists(s3_client: &S3Client, bucket: &str) -> IcebergResult<bool> {
+    match s3_client.head_bucket().bucket(bucket).send().await {
+        Ok(_) => Ok(true),
+        Err(err) => {
+            if let SdkError::ServiceError(service_err) = err {
+                match service_err.err() {
+                    HeadBucketError::NotFound(_) => Ok(false),
+                    _ => Ok(true),
+                }
+            } else {
+                Err(IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to check bucket existence: {}", err),
+                ))
+            }
+        }
+    }
+}
+
 /// Create test bucket in minio server.
 #[allow(dead_code)]
 pub(crate) async fn create_test_s3_bucket() -> IcebergResult<()> {
     let s3_client = create_s3_client().await;
-    // Tolerate bucket already exists case.
-    // TODO(hjiang): Check bucket existence before creation.
+    let exists = bucket_exists(&s3_client, MINIO_TEST_BUCKET).await?;
+    if exists {
+        return Ok(());
+    }
+
     s3_client
         .create_bucket()
         .bucket(MINIO_TEST_BUCKET.to_string())
@@ -78,6 +103,11 @@ pub(crate) async fn create_test_s3_bucket() -> IcebergResult<()> {
 #[allow(dead_code)]
 pub(crate) async fn delete_test_s3_bucket() -> IcebergResult<()> {
     let s3_client = create_s3_client().await;
+    let exist = bucket_exists(&s3_client, MINIO_TEST_BUCKET).await?;
+    if !exist {
+        return Ok(());
+    }
+
     let objects = s3_client
         .list_objects_v2()
         .bucket(MINIO_TEST_BUCKET.to_string())
@@ -121,18 +151,19 @@ pub(crate) async fn delete_test_s3_bucket() -> IcebergResult<()> {
                     )
                 })?;
         }
+
+        s3_client
+            .delete_bucket()
+            .bucket(MINIO_TEST_BUCKET.to_string())
+            .send()
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to delete the test bucket in minio {}", e),
+                )
+            })?;
     }
-    s3_client
-        .delete_bucket()
-        .bucket(MINIO_TEST_BUCKET.to_string())
-        .send()
-        .await
-        .map_err(|e| {
-            IcebergError::new(
-                iceberg::ErrorKind::Unexpected,
-                format!("Failed to delete the test bucket in minio {}", e),
-            )
-        })?;
 
     Ok(())
 }
