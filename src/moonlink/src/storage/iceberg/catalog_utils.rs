@@ -21,7 +21,7 @@ pub fn create_catalog(warehouse_uri: &str) -> IcebergResult<Box<dyn Catalog>> {
                 format!("Invalid warehouse URI {}: {:?}", warehouse_uri, e),
             )
         })?;
-    
+
     if url.scheme() == "file" {
         let absolute_path = url.path();
         return Ok(Box::new(FileSystemCatalog::new(absolute_path.to_string())));

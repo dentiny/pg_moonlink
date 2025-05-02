@@ -552,11 +552,7 @@ mod tests {
         let catalog = create_catalog(warehouse_path)?;
         delete_all_tables(&*catalog).await?;
         delete_all_namespaces(&*catalog).await?;
-        test_store_and_load_snapshot_impl(
-            catalog,
-            warehouse_path,
-        )
-        .await?;
+        test_store_and_load_snapshot_impl(catalog, warehouse_path).await?;
         Ok(())
     }
 
@@ -567,11 +563,7 @@ mod tests {
         test_utils::create_test_s3_bucket().await.ok();
 
         let catalog = create_catalog(test_utils::MINIO_TEST_WAREHOUSE_URI)?;
-        test_store_and_load_snapshot_impl(
-            catalog,
-            test_utils::MINIO_TEST_WAREHOUSE_URI,
-        )
-        .await?;
+        test_store_and_load_snapshot_impl(catalog, test_utils::MINIO_TEST_WAREHOUSE_URI).await?;
         Ok(())
     }
 }

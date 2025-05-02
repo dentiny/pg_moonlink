@@ -476,7 +476,6 @@ impl Catalog for S3Catalog {
             creation.name.clone()
         );
 
-
         let table_metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
         let metadata_json = serde_json::to_string(&table_metadata.metadata)?;
         self.write_object(&metadata_filepath, /*content=*/ &metadata_json)
@@ -690,7 +689,12 @@ mod tests {
         let schema = get_test_schema().await?;
         let table_creation = TableCreation::builder()
             .name(table_name.clone())
-            .location(format!("{}/{}/{}", test_utils::MINIO_TEST_WAREHOUSE_URI, namespace.to_url_string(), table_name))
+            .location(format!(
+                "{}/{}/{}",
+                test_utils::MINIO_TEST_WAREHOUSE_URI,
+                namespace.to_url_string(),
+                table_name
+            ))
             .schema(schema.clone())
             .build();
 
