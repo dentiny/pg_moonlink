@@ -1,3 +1,8 @@
+use super::puffin_writer_proxy::append_puffin_metadata_and_rewrite;
+use crate::storage::iceberg::puffin_writer_proxy::{
+    get_puffin_metadata_and_close, PuffinBlobMetadataProxy,
+};
+
 use futures::future::join_all;
 use futures::StreamExt;
 use std::collections::HashMap;
@@ -36,6 +41,7 @@ use std::vec;
 
 use async_trait::async_trait;
 use iceberg::io::{FileIO, FileIOBuilder};
+use iceberg::puffin::PuffinWriter;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::Error as IcebergError;
@@ -92,12 +98,22 @@ pub struct S3Catalog {
     op: Operator,
     warehouse_location: String,
     bucket: String,
+    // Used to record puffin blob metadata.
+    // Maps from "puffin filepath" to "puffin blob metadata".
+    puffin_blobs: HashMap<String, Vec<PuffinBlobMetadataProxy>>,
 }
 
+// TODO(hjiang):
+// 1. Before release we should support not only S3, but also R2, GCS, etc; necessary change should be minimal, only need to setup configuration like secret id and secret key.
+// 2. Add integration test to actual object storage before pg_mooncake release.
 impl S3Catalog {
     #[allow(dead_code)]
     pub fn new(config: S3CatalogConfig) -> Self {
         let bucket = config.bucket.clone();
+        let region = config.region.clone();
+        let endpoint = config.endpoint.clone();
+        let access_key_id = config.access_key_id.clone();
+        let secret_access_key = config.secret_access_key.clone();
         let warehouse_location = config.warehouse_location.clone();
 
         let builder = S3::default()
@@ -118,10 +134,17 @@ impl S3Catalog {
             .finish();
 
         Self {
-            file_io: FileIOBuilder::new("s3").build().unwrap(),
+            file_io: FileIOBuilder::new("s3")
+                .with_prop(iceberg::io::S3_REGION, region)
+                .with_prop(iceberg::io::S3_ENDPOINT, endpoint)
+                .with_prop(iceberg::io::S3_ACCESS_KEY_ID, access_key_id)
+                .with_prop(iceberg::io::S3_SECRET_ACCESS_KEY, secret_access_key)
+                .build()
+                .unwrap(),
             op,
             warehouse_location,
             bucket,
+            puffin_blobs: HashMap::new(),
         }
     }
 
@@ -141,19 +164,6 @@ impl S3Catalog {
             Err(e) if e.kind() == opendal::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(e.into()),
         }
-    }
-
-    /// Delete the bucket for the catalog.
-    /// Expose only for testing purpose.
-    #[allow(dead_code)]
-    async fn cleanup_bucket(&self) -> Result<(), Box<dyn Error>> {
-        let mut lister = self.op.lister_with("/").recursive(true).await?;
-        while let Some(entry) = lister.next().await {
-            let entry = entry?;
-            let path = entry.path();
-            self.op.delete(path).await?;
-        }
-        Ok(())
     }
 
     /// List all objects under the given directory.
@@ -241,6 +251,22 @@ impl S3Catalog {
             result?;
         }
 
+        Ok(())
+    }
+
+    // Get puffin metadata from the writer, and close it.
+    //
+    // TODO(hjiang): iceberg-rust currently doesn't support puffin write, to workaround and reduce code change,
+    // we record puffin metadata ourselves and rewrite manifest file before transaction commits.
+    pub(crate) async fn record_puffin_metadata_and_close(
+        &mut self,
+        puffin_filepath: String,
+        puffin_writer: PuffinWriter,
+    ) -> IcebergResult<()> {
+        self.puffin_blobs.insert(
+            puffin_filepath,
+            get_puffin_metadata_and_close(puffin_writer).await?,
+        );
         Ok(())
     }
 
@@ -421,8 +447,6 @@ impl Catalog for S3Catalog {
     }
 
     /// Create a new table inside the namespace.
-    ///
-    /// TODO(hjiang): Confirm the location field inside of `TableCreation`.
     async fn create_table(
         &self,
         namespace_ident: &NamespaceIdent,
@@ -449,6 +473,7 @@ impl Catalog for S3Catalog {
             directory,
             creation.name.clone()
         );
+
         let table_metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
         let metadata_json = serde_json::to_string(&table_metadata.metadata)?;
         self.write_object(&metadata_filepath, /*content=*/ &metadata_json)
@@ -456,7 +481,7 @@ impl Catalog for S3Catalog {
             .map_err(|e| {
                 IcebergError::new(
                     iceberg::ErrorKind::Unexpected,
-                    format!("Failed to write metadata file at namespace creation: {}", e),
+                    format!("Failed to write metadata file at table creation: {}", e),
                 )
             })?;
 
@@ -580,6 +605,19 @@ impl Catalog for S3Catalog {
                 )
             })?;
 
+        // Manifest files and manifest list has persisted into storage, make modifications based on puffin blobs.
+        //
+        // TODO(hjiang): Add unit test for update and check manifest population.
+        for (puffin_filepath, puffin_blob_metadata) in self.puffin_blobs.iter() {
+            append_puffin_metadata_and_rewrite(
+                &metadata,
+                &self.file_io,
+                puffin_filepath,
+                puffin_blob_metadata.clone(),
+            )
+            .await?;
+        }
+
         // Write version hint file.
         let version_hint_path = format!("{}/version-hint.text", metadata_directory);
         self.write_object(&version_hint_path, &format!("{version}"))
@@ -603,6 +641,8 @@ impl Catalog for S3Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::iceberg::test_utils;
+
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -614,21 +654,13 @@ mod tests {
     use iceberg::NamespaceIdent;
     use iceberg::Result as IcebergResult;
 
-    const TEST_BUCKET: &str = "test-bucket";
-
     // Create S3 catalog with local minio deployment.
     async fn create_s3_catalog() -> S3Catalog {
-        let config = S3CatalogConfig {
-            warehouse_location: "s3://test-bucket".to_string(),
-            access_key_id: "minioadmin".to_string(),
-            secret_access_key: "minioadmin".to_string(),
-            region: "auto".to_string(), // minio doesn't care about region.
-            bucket: TEST_BUCKET.to_string(),
-            endpoint: "http://minio:9000".to_string(),
-        };
-        let s3_catalog: S3Catalog = S3Catalog::new(config);
-        s3_catalog.cleanup_bucket().await.unwrap();
-        s3_catalog
+        // Intentionally ignore error.
+        test_utils::delete_test_s3_bucket().await.unwrap();
+        test_utils::create_test_s3_bucket().await.unwrap();
+
+        test_utils::create_minio_s3_catalog()
     }
 
     // Test util function to get iceberg schema,
@@ -655,7 +687,12 @@ mod tests {
         let schema = get_test_schema().await?;
         let table_creation = TableCreation::builder()
             .name(table_name.clone())
-            .location(format!("s3://{}/{}", namespace.to_url_string(), table_name))
+            .location(format!(
+                "{}/{}/{}",
+                test_utils::MINIO_TEST_WAREHOUSE_URI,
+                namespace.to_url_string(),
+                table_name
+            ))
             .schema(schema.clone())
             .build();
 
