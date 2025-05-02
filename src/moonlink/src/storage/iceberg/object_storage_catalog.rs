@@ -447,8 +447,6 @@ impl Catalog for S3Catalog {
     }
 
     /// Create a new table inside the namespace.
-    ///
-    /// TODO(hjiang): Confirm the location field inside of `TableCreation`.
     async fn create_table(
         &self,
         namespace_ident: &NamespaceIdent,

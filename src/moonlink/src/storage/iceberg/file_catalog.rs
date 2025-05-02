@@ -306,7 +306,6 @@ impl Catalog for FileSystemCatalog {
         creation: TableCreation,
     ) -> IcebergResult<Table> {
         let table_ident = TableIdent::new(namespace_ident.clone(), creation.name.clone());
-        // TODO(hjiang): Confirm the location field inside of `TableCreation`.
         let warehouse_location = self.warehouse_location.clone();
         let metadata_directory = format!(
             "{}/{}/{}/metadata",
