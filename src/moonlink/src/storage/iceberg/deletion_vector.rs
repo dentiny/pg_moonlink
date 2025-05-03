@@ -83,7 +83,9 @@ impl DeletionVector {
     ///
     /// Serialization storage format:
     /// | len for magic and vector | magic | vector | crc32c |
-    /// crc32c field is checksum of the magic bytes and serialized vector as 4 bytes in big-endian.
+    /// - len field records the combined length of the vector and magic bytes stored as 4 bytes in big-endian.
+    /// - vector is the serialized bitmap in u64 format: https://github.com/RoaringBitmap/RoaringFormatSpec?tab=readme-ov-file#extension-for-64-bit-implementations
+    /// - crc32c field is checksum of the magic bytes and serialized vector as 4 bytes in big-endian.
     pub fn serialize(&self, properties: HashMap<String, String>) -> Blob {
         DeletionVector::check_properties(&properties);
 
@@ -106,7 +108,6 @@ impl DeletionVector {
         let mut offset = 0;
 
         // Write combined length.
-        // 1. Write combined_length (4 bytes).
         let combined_length_bytes = combined_length.to_be_bytes();
         unsafe {
             std::ptr::copy_nonoverlapping(combined_length_bytes.as_ptr(), ptr.add(offset), 4);
@@ -139,7 +140,7 @@ impl DeletionVector {
         // Write CRC.
         let crc_bytes = crc.to_be_bytes();
         unsafe {
-            std::ptr::copy_nonoverlapping(crc_bytes.as_ptr(), ptr.add(offset), 4);
+            std::ptr::copy_nonoverlapping(crc_bytes.as_ptr(), ptr.add(offset), crc_bytes.len());
         }
 
         let blob_proxy = IcebergBlobProxy {
