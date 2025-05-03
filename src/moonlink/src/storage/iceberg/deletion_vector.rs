@@ -7,7 +7,7 @@ use iceberg::io::FileIO;
 use iceberg::puffin::Blob;
 use iceberg::spec::DataFile;
 use iceberg::{Error as IcebergError, Result as IcebergResult};
-use roaring::RoaringBitmap;
+use roaring::RoaringTreemap;
 
 // Magic bytes for deletion vector for puffin file.
 const DELETION_VECTOR_MAGIC_BYTES: [u8; 4] = [0xD1, 0xD3, 0x39, 0x64];
@@ -16,6 +16,7 @@ const DELETION_VECTOR_MAGIC_BYTES: [u8; 4] = [0xD1, 0xD3, 0x39, 0x64];
 const MIN_SERIALIZED_DELETION_VECTOR_BLOB: usize = 12;
 
 // Deletion vector puffin blob properties which must be contained.
+// Reference: https://iceberg.apache.org/puffin-spec/?h=puffin#deletion-vector-v1-blob-type
 pub(crate) static DELETION_VECTOR_CADINALITY: &str = "cardinality";
 pub(crate) static DELETION_VECTOR_REFERENCED_DATA_FILE: &str = "referenced-data-file";
 
@@ -24,8 +25,8 @@ pub(crate) static DELETION_VECTOR_REFERENCED_DATA_FILE: &str = "referenced-data-
 const HARD_CODE_DELETE_VECTOR_MAX_ROW: usize = 4096;
 
 pub(crate) struct DeletionVector {
-    /// Bitmap representing deleted rows.
-    pub(crate) bitmap: RoaringBitmap,
+    /// Roaring bitmap representing deleted rows.
+    pub(crate) bitmap: RoaringTreemap,
 }
 
 // TODO(hjiang): Ideally moonlink doesn't need to operate on `Blob` directly, iceberg-rust should provide high-level interface to operate on deleted rows, but before it's supported officially, we use this hacky way to construct a `iceberg::puffin::blob::Blob`.
@@ -39,31 +40,23 @@ struct IcebergBlobProxy {
     pub(crate) properties: HashMap<String, String>,
 }
 
-// TODO(hjiang): Current we can only take row index as u32, should implement a u64 version.
 impl DeletionVector {
     /// Creates a new empty deletion vector.
     pub fn new() -> Self {
         Self {
-            bitmap: RoaringBitmap::new(),
+            bitmap: RoaringTreemap::new(),
         }
     }
 
     /// Marks a row as deleted.
-    pub fn mark_rows_deleted(&mut self, rows: Vec<usize>) {
-        let rows_as_u32: Vec<u32> = rows
-            .into_iter()
-            .map(|x| {
-                assert!(
-                    x <= u32::MAX as usize,
-                    "Row index is larger than max value of u32"
-                );
-                x as u32
-            })
-            .collect();
-        self.bitmap.extend(rows_as_u32);
+    pub fn mark_rows_deleted(&mut self, rows: Vec<u64>) {
+        self.bitmap.extend(rows);
     }
 
-    /// Serializes the deletion vector into a byte vector.
+    /// Serializes the deletion vector into a byte vector, which is the standard roaring on-disk format.
+    /// Spec: https://github.com/RoaringBitmap/RoaringFormatSpec
+    ///
+    /// TODO(hjiang): `serialize_into` takes a writer, we should be able to pre-allocate a buffer and directly write into.
     fn serialize_roaring_bitmap(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         self.bitmap.serialize_into(&mut bytes).unwrap();
@@ -72,11 +65,11 @@ impl DeletionVector {
 
     /// Deserializes a byte vector into a DeletionVector.
     fn deserialize_roaring_map(data: &[u8]) -> IcebergResult<Self> {
-        RoaringBitmap::deserialize_from(data)
+        RoaringTreemap::deserialize_from(data)
             .map(|bitmap| Self { bitmap })
             .map_err(|e| {
                 IcebergError::new(
-                    iceberg::ErrorKind::Unexpected,
+                    iceberg::ErrorKind::DataInvalid,
                     format!("Failed to deserialize DeletionVector: {}", e),
                 )
             })
@@ -257,14 +250,14 @@ mod tests {
     #[test]
     fn test_mark_and_serialize_deserialize_deletion_vector() {
         let mut dv = DeletionVector::new();
-        let deleted_rows = vec![1, 3, 5, 7, 1000];
+        let deleted_rows: Vec<u64> = vec![1, 3, 5, 7, 1000];
         dv.mark_rows_deleted(deleted_rows.clone());
         let blob = dv.serialize(create_test_blob_properties(
             /*deleted_rows=*/ deleted_rows.len(),
         ));
         let deserialized_dv = DeletionVector::deserialize(blob).unwrap();
         for row in deleted_rows {
-            assert!(deserialized_dv.bitmap.contains(row as u32));
+            assert!(deserialized_dv.bitmap.contains(row));
         }
         assert_eq!(dv.bitmap.len(), deserialized_dv.bitmap.len());
     }
