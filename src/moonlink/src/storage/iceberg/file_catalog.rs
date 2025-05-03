@@ -20,6 +20,8 @@ use iceberg::{
 };
 use opendal::services::{Fs, FsConfig};
 use opendal::EntryMode;
+use opendal::ErrorKind as OpendalErrorKind;
+use opendal::Metadata as OpendalMetadata;
 use opendal::{Builder, Entry, Operator};
 
 /// This module contains the filesystem catalog implementation, which serves for local development and hermetic unit test purpose;
@@ -52,11 +54,12 @@ use opendal::{Builder, Entry, Operator};
 
 // Sanitize directory string to makes sure it ends with "/", which is the requirment for opendal.
 fn sanitize_directory(mut path: PathBuf) -> String {
-    if path.as_path().ends_with("/") {
-        return path.to_str().unwrap().to_string();
+    let mut os_string = path.as_mut_os_str().to_os_string();
+    if os_string.to_str().unwrap().ends_with("/") {
+        return os_string.to_str().unwrap().to_string();
     }
-    path.push("/");
-    path.to_str().unwrap().to_string()
+    os_string.push("/");
+    os_string.to_str().unwrap().to_string()
 }
 
 #[derive(Debug)]
@@ -74,7 +77,10 @@ impl FileSystemCatalog {
     pub fn new(warehouse_location: String) -> Self {
         let builder = Fs::default().root(&warehouse_location);
         let op = Operator::new(builder).unwrap().finish();
-        futures::executor::block_on(op.create_dir(&sanitize_directory(PathBuf::from(&warehouse_location)))).unwrap();
+        futures::executor::block_on(
+            op.create_dir(&sanitize_directory(PathBuf::from(&warehouse_location))),
+        )
+        .unwrap();
         Self {
             file_io: FileIO::from_path(warehouse_location.clone())
                 .unwrap()
@@ -188,21 +194,48 @@ impl Catalog for FileSystemCatalog {
 
     /// Get a namespace information from the catalog, return error if requested namespace doesn't exist.
     async fn get_namespace(&self, namespace_ident: &NamespaceIdent) -> IcebergResult<Namespace> {
-        let path = self.get_namespace_path(Some(namespace_ident));
-        if path.is_dir() {
-            Ok(Namespace::new(namespace_ident.clone()))
-        } else {
-            Err(IcebergError::new(
+        let exists = self.namespace_exists(namespace_ident).await?;
+        if !exists {
+            return Err(IcebergError::new(
                 iceberg::ErrorKind::NamespaceNotFound,
-                format!("Namespace {:?} does not exist", namespace_ident),
-            ))
+                format!("Namespace {:?} doesn't exist", namespace_ident),
+            ));
         }
+        Ok(Namespace::new(namespace_ident.clone()))
     }
 
     /// Check if namespace exists in catalog.
     async fn namespace_exists(&self, namespace_ident: &NamespaceIdent) -> IcebergResult<bool> {
-        let path = self.get_namespace_path(Some(namespace_ident));
-        Ok(path.is_dir())
+        let path_buf = self.get_namespace_path(Some(namespace_ident));
+        let entry_metadata = self.op.stat(&sanitize_directory(path_buf.clone())).await;
+
+        // Fails to stat entry metadata, check whether error type is NotFound or other IO errors.
+        if entry_metadata.is_err() {
+            let stats_error = entry_metadata.err().unwrap();
+            if stats_error.kind() == OpendalErrorKind::NotFound {
+                return Ok(false);
+            }
+            return Err(IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!(
+                    "Failed to stat directory {:?} indicated by namespace {:?}: {:?}",
+                    path_buf, namespace_ident, stats_error
+                ),
+            ));
+        }
+
+        // Check whether filesystem entry is of directory type.
+        let entry_metadata = entry_metadata.unwrap();
+        if entry_metadata.mode() == EntryMode::DIR {
+            return Ok(true);
+        }
+        return Err(IcebergError::new(
+            iceberg::ErrorKind::DataInvalid,
+            format!(
+                "Namespace directory {:?} indicated by {:?} is not directory at local filesystem",
+                path_buf, namespace_ident
+            ),
+        ));
     }
 
     /// Drop a namespace from the catalog.
@@ -627,14 +660,14 @@ mod tests {
         let exists = catalog.namespace_exists(&namespace).await?;
         assert!(exists, "Namespace should exist after creation");
 
-        // // Get the namespace and check.
-        // let ns = catalog.get_namespace(&namespace).await?;
-        // assert_eq!(ns.name(), &namespace, "Namespace should match created one");
+        // Get the namespace and check.
+        let ns = catalog.get_namespace(&namespace).await?;
+        assert_eq!(ns.name(), &namespace, "Namespace should match created one");
 
-        // // Drop the namespace and check.
-        // catalog.drop_namespace(&namespace).await?;
-        // let exists = catalog.namespace_exists(&namespace).await?;
-        // assert!(!exists, "Namespace should not exist after drop");
+        // Drop the namespace and check.
+        catalog.drop_namespace(&namespace).await?;
+        let exists = catalog.namespace_exists(&namespace).await?;
+        assert!(!exists, "Namespace should not exist after drop");
 
         Ok(())
     }
