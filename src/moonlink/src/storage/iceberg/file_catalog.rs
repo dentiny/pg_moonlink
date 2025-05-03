@@ -62,7 +62,7 @@ fn get_parent_directory(directory: &str) -> String {
     format!("{}/", parent)
 }
 
-// Normalize directory string to makes sure it ends with "/", which is the requirment for opendal.
+// Normalize directory string to makes sure it ends with "/", which is required for opendal.
 fn normalize_directory(mut path: PathBuf) -> String {
     let mut os_string = path.as_mut_os_str().to_os_string();
     if os_string.to_str().unwrap().ends_with("/") {
@@ -163,7 +163,7 @@ impl Catalog for FileSystemCatalog {
         &self,
         _parent: Option<&NamespaceIdent>,
     ) -> IcebergResult<Vec<NamespaceIdent>> {
-        todo!()
+        todo!("Not used for now, likely need for recovery, will implement later.")
     }
 
     /// Create a new namespace inside the catalog, return error if namespace already exists, or any parent namespace doesn't exist.
@@ -186,7 +186,7 @@ impl Catalog for FileSystemCatalog {
         }
 
         // Different with filesystem's behavior, opendal `create_dir` creates directories recursively.
-        // To create the given namespace, check its the parent directory first.
+        // To create the given namespace, check its direct parent directory first.
         let parent_directory = get_parent_directory(&normalized_directory);
         let exists = self.op.exists(&parent_directory).await?;
         if !exists {
@@ -199,7 +199,6 @@ impl Catalog for FileSystemCatalog {
             ));
         }
 
-        // If parent directory doesn't exist, new directory creation will fail.
         self.op
             .create_dir(&normalized_directory)
             .await
@@ -256,7 +255,7 @@ impl Catalog for FileSystemCatalog {
             return Ok(true);
         }
         return Err(IcebergError::new(
-            iceberg::ErrorKind::DataInvalid,
+            iceberg::ErrorKind::Unexpected,
             format!(
                 "Namespace directory {:?} indicated by {:?} is not directory at local filesystem",
                 path_buf, namespace_ident
@@ -511,7 +510,7 @@ impl Catalog for FileSystemCatalog {
             return Err(IcebergError::new(
                 iceberg::ErrorKind::DataInvalid,
                 format!(
-                    "Metadata file {:?} is supposed to be of file, but actually is of type {:?}",
+                    "Metadata file {:?} is supposed to file, but actually is of type {:?}",
                     version_hint_file,
                     version_hint_stats.mode()
                 ),

@@ -322,7 +322,7 @@ impl Catalog for S3Catalog {
         &self,
         _parent: Option<&NamespaceIdent>,
     ) -> IcebergResult<Vec<NamespaceIdent>> {
-        todo!()
+        todo!("Not used for now, likely need for recovery, will implement later.")
     }
 
     /// Create a new namespace inside the catalog, return error if namespace already exists, or any parent namespace doesn't exist.
