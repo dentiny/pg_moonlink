@@ -51,6 +51,7 @@ use opendal::{EntryMode, Operator};
 // Get parent directory name with "/" suffixed.
 // If the given string represents root directory ("/"), return "/" as well.
 fn get_parent_directory(directory: &str) -> String {
+    assert!(!directory.is_empty());
     let parent = Path::new(directory)
         .parent()
         .and_then(|p| p.to_str())
@@ -61,7 +62,7 @@ fn get_parent_directory(directory: &str) -> String {
     format!("{}/", parent)
 }
 
-// Sanitize directory string to makes sure it ends with "/", which is the requirment for opendal.
+// Normalize directory string to makes sure it ends with "/", which is the requirment for opendal.
 fn normalize_directory(mut path: PathBuf) -> String {
     let mut os_string = path.as_mut_os_str().to_os_string();
     if os_string.to_str().unwrap().ends_with("/") {
@@ -653,6 +654,26 @@ mod tests {
         catalog.create_table(&namespace, table_creation).await?;
 
         Ok(())
+    }
+
+    #[test]
+    fn test_get_parent_directory() {
+        // Root directory.
+        assert_eq!(get_parent_directory("/"), "/");
+        // Directory without slash suffix.
+        assert_eq!(get_parent_directory("/a/b/c"), "/a/b/");
+        // Directory with slash suffix.
+        assert_eq!(get_parent_directory("/a/b/c/"), "/a/b/");
+    }
+
+    #[test]
+    fn test_normalize_directory() {
+        // Root directory.
+        assert_eq!(normalize_directory(PathBuf::from("/")), "/");
+        // Directory without slash suffix.
+        assert_eq!(normalize_directory(PathBuf::from("/a/b/c")), "/a/b/c/");
+        // Directory with slash suffix.
+        assert_eq!(normalize_directory(PathBuf::from("/a/b/c/")), "/a/b/c/");
     }
 
     #[tokio::test]
