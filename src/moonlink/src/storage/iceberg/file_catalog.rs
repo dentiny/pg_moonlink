@@ -916,7 +916,15 @@ mod tests {
             Path::new(&version_hint_filepath).exists(),
             "{version_hint_filepath} doesn't exist"
         ); // created at table creation
-        assert_eq!(std::fs::read_to_string(version_hint_filepath).unwrap(), "1"); // updated at table update
+        assert_eq!(
+            catalog
+                .file_io
+                .new_input(version_hint_filepath)
+                .unwrap()
+                .read()
+                .await?,
+            "1"
+        ); // updated at table update
 
         Ok(())
     }
