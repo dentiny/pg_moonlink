@@ -11,3 +11,9 @@ repos:
       files: '\.rs$'
       entry: cargo clippy --all-targets --fix --allow-dirty --allow-staged -- -D warnings
       pass_filenames: false
+    - id: clipper
+      name: clipper
+      language: system
+      files: '\.toml$'
+      entry: cargo sort
+      pass_filenames: false
