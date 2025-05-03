@@ -6,7 +6,7 @@ use crate::storage::iceberg::puffin_writer_proxy::{
 use std::collections::HashMap;
 use std::fmt::format;
 use std::fs::exists;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use iceberg::io::FileIO;
@@ -51,6 +51,19 @@ use opendal::{Builder, Entry, Operator};
 ///     + which points to data files and stats
 ///
 /// For filesystem catalog, all files are stored under the warehouse location, in detail: <warehouse-location>/<namespace>/<table-name>/.
+
+// Get parent directory name with "/" suffixed.
+// If the given string represents root directory ("/"), return "/" as well.
+fn get_parent_directory(directory: &str) -> String {
+    let parent = Path::new(directory)
+        .parent()
+        .and_then(|p| p.to_str())
+        .unwrap_or("/");
+    if parent == "/" {
+        return parent.to_string();
+    }
+    format!("{}/", parent)
+}
 
 // Sanitize directory string to makes sure it ends with "/", which is the requirment for opendal.
 fn normalize_directory(mut path: PathBuf) -> String {
@@ -165,8 +178,9 @@ impl Catalog for FileSystemCatalog {
         _properties: HashMap<String, String>,
     ) -> IcebergResult<iceberg::Namespace> {
         // Check whether the namespace already exists.
-        let path = self.get_namespace_path(Some(namespace));
-        let exists = self.op.exists(path.to_str().unwrap()).await?;
+        let path_buf = self.get_namespace_path(Some(namespace));
+        let normalized_directory = normalize_directory(path_buf.clone());
+        let exists = self.op.exists(&normalized_directory).await?;
         if exists {
             return Err(IcebergError::new(
                 iceberg::ErrorKind::NamespaceAlreadyExists,
@@ -174,9 +188,23 @@ impl Catalog for FileSystemCatalog {
             ));
         }
 
+        // Different with filesystem's behavior, opendal `create_dir` creates directories recursively.
+        // To create the given namespace, check its the parent directory first.
+        let parent_directory = get_parent_directory(&normalized_directory);
+        let exists = self.op.exists(&parent_directory).await?;
+        if !exists {
+            return Err(IcebergError::new(
+                iceberg::ErrorKind::NamespaceNotFound,
+                format!(
+                    "Parent namespace for the given one {:?} already exists",
+                    namespace
+                ),
+            ));
+        }
+
         // If parent directory doesn't exist, new directory creation will fail.
         self.op
-            .create_dir(&normalize_directory(path))
+            .create_dir(&normalized_directory)
             .await
             .map_err(|e| {
                 IcebergError::new(
@@ -212,7 +240,7 @@ impl Catalog for FileSystemCatalog {
 
         // Fails to stat entry metadata, check whether error type is NotFound or other IO errors.
         if entry_metadata.is_err() {
-            let stats_error = entry_metadata.err().unwrap();
+            let stats_error = entry_metadata.unwrap_err();
             if stats_error.kind() == OpendalErrorKind::NotFound {
                 return Ok(false);
             }
@@ -271,14 +299,17 @@ impl Catalog for FileSystemCatalog {
         if !exists {
             return Err(IcebergError::new(
                 iceberg::ErrorKind::NamespaceNotFound,
-                format!("Namespace {:?} doesn't exist when list tables within.", namespace_ident),
+                format!(
+                    "Namespace {:?} doesn't exist when list tables within.",
+                    namespace_ident
+                ),
             ));
         }
 
         let path_buf = self.get_namespace_path(Some(namespace_ident));
         let entry_metadata = self.op.stat(&normalize_directory(path_buf.clone())).await;
         if entry_metadata.is_err() {
-            let stats_error = entry_metadata.err().unwrap();
+            let stats_error = entry_metadata.unwrap_err();
             if stats_error.kind() == OpendalErrorKind::NotFound {
                 return Err(IcebergError::new(
                     iceberg::ErrorKind::NamespaceNotFound,
@@ -472,7 +503,7 @@ impl Catalog for FileSystemCatalog {
             .stat(&normalize_directory(metadata_directory.clone()))
             .await;
         if metadata_directory_stats.is_err() {
-            let stats_error = metadata_directory_stats.err().unwrap();
+            let stats_error = metadata_directory_stats.unwrap_err();
             if stats_error.kind() == OpendalErrorKind::NotFound {
                 return Ok(false);
             }
@@ -490,7 +521,7 @@ impl Catalog for FileSystemCatalog {
         version_hint_file.push("version-hint.text");
         let version_hint_stats = self.op.stat(version_hint_file.to_str().unwrap()).await;
         if version_hint_stats.is_err() {
-            let stats_error = version_hint_stats.err().unwrap();
+            let stats_error = version_hint_stats.unwrap_err();
             if stats_error.kind() == OpendalErrorKind::NotFound {
                 // When create the table, it's possible to succeed on directory creation, but fail on version hint file persistence.
                 return Ok(false);
@@ -666,7 +697,7 @@ mod tests {
             .create_namespace(&namespace, /*properties=*/ HashMap::new())
             .await;
         let err = result.unwrap_err();
-        assert_eq!(err.kind(), iceberg::ErrorKind::Unexpected);
+        assert_eq!(err.kind(), iceberg::ErrorKind::NamespaceNotFound);
 
         Ok(())
     }
