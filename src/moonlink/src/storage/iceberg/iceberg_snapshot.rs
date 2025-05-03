@@ -81,6 +81,16 @@ async fn get_or_create_iceberg_table<C: Catalog + ?Sized>(
                 .properties(HashMap::new())
                 .build();
 
+            // TODO(hjiang): A few data file properties need to respect and consider.
+            // - write.parquet.row-group-size-bytes
+            // - write.parquet.page-size-bytes
+            // - write.parquet.page-row-limit
+            // - write.parquet.dict-size-bytes
+            // - write.parquet.compression-codec
+            // - write.parquet.compression-level
+            // - write.parquet.bloom-filter-max-bytes
+            // - write.metadata.compression-codec
+            // Reference: https://iceberg.apache.org/docs/latest/configuration/#table-properties
             let table = catalog
                 .create_table(&table_ident.namespace, tbl_creation)
                 .await?;
