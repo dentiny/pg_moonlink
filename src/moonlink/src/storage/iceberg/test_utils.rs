@@ -61,7 +61,7 @@ pub(crate) fn get_test_minio_bucket(warehouse_uri: &str) -> String {
 }
 
 #[cfg(test)]
-pub(crate) mod test_utils {
+pub(crate) mod object_store_test_utils {
     use super::*;
 
     use std::sync::Arc;

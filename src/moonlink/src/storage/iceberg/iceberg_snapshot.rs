@@ -392,31 +392,6 @@ mod tests {
         deletion_vector
     }
 
-    /// Delete all tables within all namespaces for the given catalog.
-    async fn delete_all_tables<C: Catalog + ?Sized>(catalog: &C) -> IcebergResult<()> {
-        let namespaces = catalog.list_namespaces(/*parent=*/ None).await?;
-        for namespace in namespaces {
-            let tables = catalog.list_tables(&namespace).await?;
-            for table in tables {
-                catalog.drop_table(&table).await.ok();
-                println!("Deleted table: {:?} in namespace {:?}", table, namespace);
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Delete all namespaces for the given catalog.
-    async fn delete_all_namespaces<C: Catalog + ?Sized>(catalog: &C) -> IcebergResult<()> {
-        let namespaces = catalog.list_namespaces(/*parent=*/ None).await?;
-        for namespace in namespaces {
-            catalog.drop_namespace(&namespace).await.ok();
-            println!("Deleted namespace: {:?}", namespace);
-        }
-
-        Ok(())
-    }
-
     /// Test util function to create arrow schema.
     fn create_test_arrow_schema() -> Arc<ArrowSchema> {
         Arc::new(ArrowSchema::new(vec![
@@ -555,8 +530,6 @@ mod tests {
         let tmp_dir = tempdir()?;
         let warehouse_path = tmp_dir.path().to_str().unwrap();
         let catalog = create_catalog(warehouse_path)?;
-        delete_all_tables(&*catalog).await?;
-        delete_all_namespaces(&*catalog).await?;
         test_store_and_load_snapshot_impl(catalog, warehouse_path).await?;
         Ok(())
     }
@@ -565,7 +538,7 @@ mod tests {
     async fn test_store_and_load_snapshot_with_minio_catalog() -> IcebergResult<()> {
         let (bucket_name, warehouse_uri) =
             crate::storage::iceberg::test_utils::get_test_minio_bucket_and_warehouse();
-        test_utils::test_utils::create_test_s3_bucket(bucket_name.clone()).await?;
+        test_utils::object_store_test_utils::create_test_s3_bucket(bucket_name.clone()).await?;
 
         let catalog = create_catalog(&warehouse_uri)?;
         test_store_and_load_snapshot_impl(catalog, &warehouse_uri).await?;

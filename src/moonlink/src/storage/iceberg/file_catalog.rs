@@ -4,8 +4,6 @@ use crate::storage::iceberg::puffin_writer_proxy::{
 };
 
 use std::collections::HashMap;
-use std::fmt::format;
-use std::fs::exists;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -18,11 +16,9 @@ use iceberg::Result as IcebergResult;
 use iceberg::{
     Catalog, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableUpdate,
 };
-use opendal::services::{Fs, FsConfig};
-use opendal::EntryMode;
+use opendal::services::Fs;
 use opendal::ErrorKind as OpendalErrorKind;
-use opendal::Metadata as OpendalMetadata;
-use opendal::{Builder, Entry, Operator};
+use opendal::{EntryMode, Operator};
 
 /// This module contains the filesystem catalog implementation, which serves for local development and hermetic unit test purpose;
 /// For initial versions, it's focusing more on simplicity and correctness rather than performance.
@@ -51,7 +47,7 @@ use opendal::{Builder, Entry, Operator};
 ///     + which points to data files and stats
 ///
 /// For filesystem catalog, all files are stored under the warehouse location, in detail: <warehouse-location>/<namespace>/<table-name>/.
-
+//
 // Get parent directory name with "/" suffixed.
 // If the given string represents root directory ("/"), return "/" as well.
 fn get_parent_directory(directory: &str) -> String {
@@ -306,35 +302,9 @@ impl Catalog for FileSystemCatalog {
             ));
         }
 
-        let path_buf = self.get_namespace_path(Some(namespace_ident));
-        let entry_metadata = self.op.stat(&normalize_directory(path_buf.clone())).await;
-        if entry_metadata.is_err() {
-            let stats_error = entry_metadata.unwrap_err();
-            if stats_error.kind() == OpendalErrorKind::NotFound {
-                return Err(IcebergError::new(
-                    iceberg::ErrorKind::NamespaceNotFound,
-                    format!("Namespace {:?} doesn't exist", namespace_ident),
-                ));
-            }
-            return Err(IcebergError::new(
-                iceberg::ErrorKind::Unexpected,
-                format!(
-                    "Failed to stat directory {:?} indicated by namespace {:?}: {:?}",
-                    path_buf, namespace_ident, stats_error
-                ),
-            ));
-        }
-
-        let entry_metadata = entry_metadata.unwrap();
-        if entry_metadata.mode() != EntryMode::DIR {
-            return Err(IcebergError::new(
-                iceberg::ErrorKind::DataInvalid,
-                format!("{:?} indicated by namespace {:?} is supposed to be of type directory, but actual type is {:?}", path_buf, namespace_ident, entry_metadata.mode()),
-            ));
-        }
-
         // Read the namespace directory.
         let mut tables = Vec::new();
+        let path_buf = self.get_namespace_path(Some(namespace_ident));
         let entries = self.op.list(&normalize_directory(path_buf.clone())).await?;
 
         // opendal list on prefix, and returns namespace as well, skip here.
