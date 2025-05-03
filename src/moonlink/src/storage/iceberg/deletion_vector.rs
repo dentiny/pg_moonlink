@@ -53,16 +53,6 @@ impl DeletionVector {
         self.bitmap.extend(rows);
     }
 
-    /// Serializes the deletion vector into a byte vector, which is the standard roaring on-disk format.
-    /// Spec: https://github.com/RoaringBitmap/RoaringFormatSpec
-    ///
-    /// TODO(hjiang): `serialize_into` takes a writer, we should be able to pre-allocate a buffer and directly write into.
-    fn serialize_roaring_bitmap(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        self.bitmap.serialize_into(&mut bytes).unwrap();
-        bytes
-    }
-
     /// Deserializes a byte vector into a DeletionVector.
     fn deserialize_roaring_map(data: &[u8]) -> IcebergResult<Self> {
         RoaringTreemap::deserialize_from(data)
@@ -97,36 +87,60 @@ impl DeletionVector {
     pub fn serialize(&self, properties: HashMap<String, String>) -> Blob {
         DeletionVector::check_properties(&properties);
 
-        let serialized_bitmap = self.serialize_roaring_bitmap();
-
         // Calculate combined length (magic bytes + bitmap).
-        let combined_length = (DELETION_VECTOR_MAGIC_BYTES.len() + serialized_bitmap.len()) as u32;
+        let serialized_bitmap_size = self.bitmap.serialized_size();
+        let combined_length = (DELETION_VECTOR_MAGIC_BYTES.len() + serialized_bitmap_size) as u32;
 
         // Create a buffer to hold all the data.
-        let mut data = Vec::with_capacity(
-            std::mem::size_of_val(&combined_length) + // length
-            DELETION_VECTOR_MAGIC_BYTES.len() + // magic sequence
-            serialized_bitmap.len() + // serialized roaring bitmap
-            4, // crc
-        );
+        let blob_total_size = std::mem::size_of_val(&combined_length) + // length
+        DELETION_VECTOR_MAGIC_BYTES.len() + // magic sequence
+        serialized_bitmap_size + // serialized roaring bitmap
+        4; // crc
+        let mut data = Vec::with_capacity(blob_total_size);
+
+        // Set blob length and get the mutable pointer to fill in data ourselves.
+        unsafe {
+            data.set_len(blob_total_size);
+        }
+        let ptr: *mut u8 = data.as_mut_ptr();
+        let mut offset = 0;
 
         // Write combined length.
-        data.extend_from_slice(&combined_length.to_be_bytes());
+        // 1. Write combined_length (4 bytes).
+        let combined_length_bytes = combined_length.to_be_bytes();
+        unsafe {
+            std::ptr::copy_nonoverlapping(combined_length_bytes.as_ptr(), ptr.add(offset), 4);
+        }
+        offset += 4;
 
         // Write magic bytes.
-        data.extend_from_slice(&DELETION_VECTOR_MAGIC_BYTES);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                DELETION_VECTOR_MAGIC_BYTES.as_ptr(),
+                ptr.add(offset),
+                DELETION_VECTOR_MAGIC_BYTES.len(),
+            );
+        }
+        offset += DELETION_VECTOR_MAGIC_BYTES.len();
 
-        // Write serialized bitmap.
-        data.extend_from_slice(&serialized_bitmap);
+        // Serialized and write bitmap, which is the standard roaring on-disk format.
+        // Spec: https://github.com/RoaringBitmap/RoaringFormatSpec
+        let bitmap_slice =
+            unsafe { std::slice::from_raw_parts_mut(ptr.add(offset), serialized_bitmap_size) };
+        let mut bitmap_writer = std::io::Cursor::new(bitmap_slice);
+        self.bitmap.serialize_into(&mut bitmap_writer).unwrap();
+        offset += serialized_bitmap_size;
 
         // Calculate CRC (magic bytes + serialized bitmap).
         let mut hasher = crc32fast::Hasher::new();
-        hasher.update(&DELETION_VECTOR_MAGIC_BYTES);
-        hasher.update(&serialized_bitmap);
+        hasher.update(&data[4..offset]);
         let crc = hasher.finalize();
 
         // Write CRC.
-        data.extend_from_slice(&crc.to_be_bytes());
+        let crc_bytes = crc.to_be_bytes();
+        unsafe {
+            std::ptr::copy_nonoverlapping(crc_bytes.as_ptr(), ptr.add(offset), 4);
+        }
 
         let blob_proxy = IcebergBlobProxy {
             r#type: "deletion-vector-v1".to_string(),
