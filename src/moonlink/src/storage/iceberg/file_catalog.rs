@@ -53,7 +53,7 @@ use opendal::{Builder, Entry, Operator};
 /// For filesystem catalog, all files are stored under the warehouse location, in detail: <warehouse-location>/<namespace>/<table-name>/.
 
 // Sanitize directory string to makes sure it ends with "/", which is the requirment for opendal.
-fn sanitize_directory(mut path: PathBuf) -> String {
+fn normalize_directory(mut path: PathBuf) -> String {
     let mut os_string = path.as_mut_os_str().to_os_string();
     if os_string.to_str().unwrap().ends_with("/") {
         return os_string.to_str().unwrap().to_string();
@@ -75,10 +75,11 @@ pub struct FileSystemCatalog {
 impl FileSystemCatalog {
     /// Creates a rest catalog from config, if the given warehouse location doesn't exist, it will be created.
     pub fn new(warehouse_location: String) -> Self {
-        let builder = Fs::default().root(&warehouse_location);
+        // opendal prepends root directory to all paths for all operations, here we do path manipulation ourselves and set root directory as filesystem root.
+        let builder = Fs::default().root("/");
         let op = Operator::new(builder).unwrap().finish();
         futures::executor::block_on(
-            op.create_dir(&sanitize_directory(PathBuf::from(&warehouse_location))),
+            op.create_dir(&normalize_directory(PathBuf::from(&warehouse_location))),
         )
         .unwrap();
         Self {
@@ -175,7 +176,7 @@ impl Catalog for FileSystemCatalog {
 
         // If parent directory doesn't exist, new directory creation will fail.
         self.op
-            .create_dir(&sanitize_directory(path))
+            .create_dir(&normalize_directory(path))
             .await
             .map_err(|e| {
                 IcebergError::new(
@@ -207,7 +208,7 @@ impl Catalog for FileSystemCatalog {
     /// Check if namespace exists in catalog.
     async fn namespace_exists(&self, namespace_ident: &NamespaceIdent) -> IcebergResult<bool> {
         let path_buf = self.get_namespace_path(Some(namespace_ident));
-        let entry_metadata = self.op.stat(&sanitize_directory(path_buf.clone())).await;
+        let entry_metadata = self.op.stat(&normalize_directory(path_buf.clone())).await;
 
         // Fails to stat entry metadata, check whether error type is NotFound or other IO errors.
         if entry_metadata.is_err() {
@@ -243,7 +244,7 @@ impl Catalog for FileSystemCatalog {
         // Construct a `PathBuf` doesn't lead to IO operation, while `PathBuf::exists` does.
         let path_buf = self.get_namespace_path(Some(namespace_ident));
         let path = path_buf.to_str().unwrap();
-        let entry_metadata = self.op.stat(&sanitize_directory(path_buf.clone())).await?;
+        let entry_metadata = self.op.stat(&normalize_directory(path_buf.clone())).await?;
         if entry_metadata.mode() != EntryMode::DIR {
             return Err(IcebergError::new(
                 iceberg::ErrorKind::NamespaceNotFound,
@@ -266,25 +267,63 @@ impl Catalog for FileSystemCatalog {
         namespace_ident: &NamespaceIdent,
     ) -> IcebergResult<Vec<TableIdent>> {
         // Check if the given namespace exists.
-        let path_buf = self.get_namespace_path(Some(namespace_ident));
-        let path = path_buf.to_str().unwrap();
-        let entry_metadata = self.op.stat(path).await?;
-        if entry_metadata.mode() != EntryMode::DIR {
+        let exists = self.namespace_exists(namespace_ident).await?;
+        if !exists {
             return Err(IcebergError::new(
                 iceberg::ErrorKind::NamespaceNotFound,
-                format!("Namespace {:?} doesn't exist", namespace_ident),
+                format!("Namespace {:?} doesn't exist when list tables within.", namespace_ident),
+            ));
+        }
+
+        let path_buf = self.get_namespace_path(Some(namespace_ident));
+        let entry_metadata = self.op.stat(&normalize_directory(path_buf.clone())).await;
+        if entry_metadata.is_err() {
+            let stats_error = entry_metadata.err().unwrap();
+            if stats_error.kind() == OpendalErrorKind::NotFound {
+                return Err(IcebergError::new(
+                    iceberg::ErrorKind::NamespaceNotFound,
+                    format!("Namespace {:?} doesn't exist", namespace_ident),
+                ));
+            }
+            return Err(IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!(
+                    "Failed to stat directory {:?} indicated by namespace {:?}: {:?}",
+                    path_buf, namespace_ident, stats_error
+                ),
+            ));
+        }
+
+        let entry_metadata = entry_metadata.unwrap();
+        if entry_metadata.mode() != EntryMode::DIR {
+            return Err(IcebergError::new(
+                iceberg::ErrorKind::DataInvalid,
+                format!("{:?} indicated by namespace {:?} is supposed to be of type directory, but actual type is {:?}", path_buf, namespace_ident, entry_metadata.mode()),
             ));
         }
 
         // Read the namespace directory.
         let mut tables = Vec::new();
-        let entries = self.op.list(path).await?;
+        let entries = self.op.list(&normalize_directory(path_buf.clone())).await?;
+
+        // opendal list on prefix, and returns namespace as well, skip here.
+        let subfolders = namespace_ident.to_vec();
+        // Subfolder indicated by namespace identity without slash suffix.
+        let subfolder_to_exclude = subfolders.last().unwrap();
+
         for cur_entry in entries.iter() {
             if cur_entry.metadata().mode() != EntryMode::DIR {
                 continue;
             }
+            // Two things to notice here:
+            // 1. Entries returned from opendal list operation are suffixed with "/".
+            // 2. opendal list operation returns parent directory as well.
+            let stripped_subfolder = cur_entry.name().strip_suffix("/").unwrap();
+            if stripped_subfolder == subfolder_to_exclude {
+                continue;
+            }
             let table_ident =
-                TableIdent::new(namespace_ident.clone(), cur_entry.name().to_string());
+                TableIdent::new(namespace_ident.clone(), stripped_subfolder.to_string());
             tables.push(table_ident);
         }
 
@@ -385,7 +424,7 @@ impl Catalog for FileSystemCatalog {
             table.namespace().to_url_string(),
             table.name()
         );
-        let table_metadata_filepath = format!("{}/version-hint.text", table_directory);
+        let table_metadata_filepath = format!("{}/metadata/version-hint.text", table_directory);
 
         // Check if path exists first.
         let file_metadata = self.op.stat(&table_metadata_filepath).await.map_err(|e| {
@@ -423,38 +462,61 @@ impl Catalog for FileSystemCatalog {
     }
 
     /// Check if a table exists in the catalog.
-    async fn table_exists(&self, table: &TableIdent) -> IcebergResult<bool> {
-        let mut metadata_path = PathBuf::from(&self.warehouse_location);
-        for part in table.namespace().as_ref() {
-            metadata_path.push(part);
+    async fn table_exists(&self, table_ident: &TableIdent) -> IcebergResult<bool> {
+        let mut metadata_directory = self.get_namespace_path(Some(table_ident.namespace()));
+        metadata_directory.push(table_ident.name());
+        metadata_directory.push("metadata");
+
+        let metadata_directory_stats = self
+            .op
+            .stat(&normalize_directory(metadata_directory.clone()))
+            .await;
+        if metadata_directory_stats.is_err() {
+            let stats_error = metadata_directory_stats.err().unwrap();
+            if stats_error.kind() == OpendalErrorKind::NotFound {
+                return Ok(false);
+            }
+            return Err(IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!(
+                    "Failed to stat metadata directory {:?} indicated by table {:?}: {:?}",
+                    metadata_directory, table_ident, stats_error
+                ),
+            ));
         }
-        metadata_path.push(table.name());
-        metadata_path.push("metadata");
 
-        // Check if directory exists
-        if !metadata_path.is_dir() {
-            return Ok(false);
+        // Check if version hint file exists.
+        let mut version_hint_file = metadata_directory;
+        version_hint_file.push("version-hint.text");
+        let version_hint_stats = self.op.stat(version_hint_file.to_str().unwrap()).await;
+        if version_hint_stats.is_err() {
+            let stats_error = version_hint_stats.err().unwrap();
+            if stats_error.kind() == OpendalErrorKind::NotFound {
+                // When create the table, it's possible to succeed on directory creation, but fail on version hint file persistence.
+                return Ok(false);
+            }
+            return Err(IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!(
+                    "Failed to stat metadata file {:?} indicated by table {:?}: {:?}",
+                    version_hint_file, table_ident, stats_error
+                ),
+            ));
         }
 
-        // Check if at least one .metadata.json file exists.
-        let exists = std::fs::read_dir(&metadata_path)
-            .map_err(|e| {
-                IcebergError::new(
-                    iceberg::ErrorKind::Unexpected,
-                    format!("Failed to read metadata dir: {}", e),
-                )
-            })?
-            .any(|entry| {
-                if let Ok(entry) = entry {
-                    let name = entry.file_name();
-                    let name = name.to_string_lossy();
-                    name.ends_with(".metadata.json")
-                } else {
-                    false
-                }
-            });
+        let version_hint_stats = version_hint_stats.unwrap();
+        if version_hint_stats.mode() != EntryMode::FILE {
+            return Err(IcebergError::new(
+                iceberg::ErrorKind::DataInvalid,
+                format!(
+                    "Metadata file {:?} is supposed to be of file, but actually is of type {:?}",
+                    version_hint_file,
+                    version_hint_stats.mode()
+                ),
+            ));
+        }
 
-        Ok(exists)
+        Ok(true)
     }
 
     /// Rename a table in the catalog.
@@ -698,7 +760,12 @@ mod tests {
         assert!(table_already_exists, "Table should exist after creation");
 
         let tables = catalog.list_tables(&namespace).await?;
-        assert_eq!(tables.len(), 1);
+        assert_eq!(
+            tables.len(),
+            1,
+            "Expects one table, but actually have {:?}",
+            tables
+        );
         assert!(tables.contains(&table_ident));
 
         // Load table and check.
