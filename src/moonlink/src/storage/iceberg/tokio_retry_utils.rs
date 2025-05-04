@@ -7,7 +7,7 @@ use tokio_retry2::RetryError as TokioRetryError;
 pub(crate) fn iceberg_to_tokio_retry_error(err: IcebergError) -> TokioRetryError<IcebergError> {
     match err.kind() {
         iceberg::ErrorKind::Unexpected => TokioRetryError::Transient {
-            err: err,
+            err,
             retry_after: None,
         },
         _ => TokioRetryError::Permanent(err),

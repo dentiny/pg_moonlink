@@ -560,9 +560,6 @@ mod tests {
     async fn test_store_and_load_snapshot_with_filesystem_catalog() -> IcebergResult<()> {
         let tmp_dir = tempdir()?;
         let warehouse_path = tmp_dir.path().to_str().unwrap();
-
-        // let warehouse_path = "/tmp/iceberg--2h2-3-sjsssj";
-
         let catalog = create_catalog(warehouse_path)?;
         test_store_and_load_snapshot_impl(catalog, warehouse_path).await?;
         Ok(())

@@ -108,6 +108,7 @@ impl DeletionVector {
         let mut data = Vec::with_capacity(blob_total_size);
 
         // Set blob length and get the mutable pointer to fill in data ourselves.
+        #[allow(clippy::uninit_vec)]
         unsafe {
             data.set_len(blob_total_size);
         }
@@ -153,7 +154,7 @@ impl DeletionVector {
         let blob_proxy = IcebergBlobProxy {
             r#type: DELETION_VECTOR_BLOB_TYPE.to_string(),
             fields: vec![],
-            snapshot_id: snapshot_id,
+            snapshot_id,
             sequence_number: seqno,
             data,
             properties,
