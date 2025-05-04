@@ -24,13 +24,13 @@ crc32fast.workspace = true
 opendal.workspace = true
 memmap2 = "0.9.5"
 randomizer = "0.1.2"
+tokio-retry2 = { version = "0.5.7", default-features = false, features = ["jitter"] }
 
 [dev-dependencies]
 tempfile.workspace = true
 pprof = { version = "0.14", features = ["flamegraph"] }
 rand = "0.9.1"
 aws-sdk-s3 = "1.14.0"
-tokio-retry = "0.3"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(profiling_enabled)'] }

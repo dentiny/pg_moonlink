@@ -64,6 +64,8 @@ pub(crate) fn get_test_minio_bucket(warehouse_uri: &str) -> String {
 pub(crate) mod object_store_test_utils {
     use super::*;
 
+    use crate::storage::iceberg::tokio_retry_utils;
+
     use std::sync::Arc;
 
     use aws_sdk_s3::config::{Credentials, Region};
@@ -72,8 +74,8 @@ pub(crate) mod object_store_test_utils {
     use iceberg::Error as IcebergError;
     use iceberg::Result as IcebergResult;
 
-    use tokio_retry::strategy::{jitter, ExponentialBackoff};
-    use tokio_retry::Retry;
+    use tokio_retry2::strategy::{jitter, ExponentialBackoff};
+    use tokio_retry2::Retry;
 
     /// Create s3 client to connect minio.
     #[allow(dead_code)]
@@ -124,7 +126,11 @@ pub(crate) mod object_store_test_utils {
             let bucket_name = Arc::new(bucket);
             move || {
                 let bucket_name = Arc::clone(&bucket_name);
-                async move { create_test_s3_bucket_impl(bucket_name).await }
+                async move {
+                    create_test_s3_bucket_impl(bucket_name)
+                        .await
+                        .map_err(tokio_retry_utils::iceberg_to_tokio_retry_error)
+                }
             }
         })
         .await?;
@@ -206,7 +212,11 @@ pub(crate) mod object_store_test_utils {
             let bucket_name = Arc::new(bucket);
             move || {
                 let bucket_name = Arc::clone(&bucket_name);
-                async move { delete_test_s3_bucket_impl(bucket_name).await }
+                async move {
+                    delete_test_s3_bucket_impl(bucket_name)
+                        .await
+                        .map_err(tokio_retry_utils::iceberg_to_tokio_retry_error)
+                }
             }
         })
         .await?;

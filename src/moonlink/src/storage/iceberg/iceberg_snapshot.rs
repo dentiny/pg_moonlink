@@ -90,6 +90,8 @@ async fn get_or_create_iceberg_table<C: Catalog + ?Sized>(
             // - write.parquet.compression-level
             // - write.parquet.bloom-filter-max-bytes
             // - write.metadata.compression-codec
+            //
+            // Table properties: https://iceberg.apache.org/docs/latest/configuration/#table-behavior-properties
             // Reference: https://iceberg.apache.org/docs/latest/configuration/#table-properties
             let table = catalog
                 .create_table(&table_ident.namespace, tbl_creation)
