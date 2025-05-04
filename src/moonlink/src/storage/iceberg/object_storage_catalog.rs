@@ -320,9 +320,53 @@ impl S3Catalog {
 impl Catalog for S3Catalog {
     async fn list_namespaces(
         &self,
-        _parent: Option<&NamespaceIdent>,
+        parent: Option<&NamespaceIdent>,
     ) -> IcebergResult<Vec<NamespaceIdent>> {
-        todo!("Not used for now, likely need for recovery, will implement later.")
+        // Check parent namespace existence.
+        if let Some(namespace_ident) = parent {
+            let exists = self.namespace_exists(namespace_ident).await?;
+            if !exists {
+                return Err(IcebergError::new(
+                    iceberg::ErrorKind::NamespaceNotFound,
+                    format!(
+                        "When list namespace, parent namespace {:?} doesn't exist.",
+                        namespace_ident
+                    ),
+                ));
+            }
+        }
+
+        let parent_directory = if let Some(namespace_ident) = parent {
+            namespace_ident.to_url_string()
+        } else {
+            "/".to_string()
+        };
+        let subdirectories = self
+            .list_direct_subdirectories(&parent_directory)
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to list tables: {}", e),
+                )
+            })?;
+
+        let mut res: Vec<NamespaceIdent> = Vec::with_capacity(subdirectories.len());
+        for cur_subdir in subdirectories.iter() {
+            let cur_namespace_ident = if let Some(parent_namespace_ident) = parent {
+                let mut parent_namespace_segments = parent_namespace_ident.clone().to_vec();
+                parent_namespace_segments.push(cur_subdir.to_string());
+                NamespaceIdent::from_vec(parent_namespace_segments).unwrap()
+            } else {
+                NamespaceIdent::new(cur_subdir.to_string())
+            };
+
+            let is_namespace = self.namespace_exists(&cur_namespace_ident).await?;
+            if is_namespace {
+                res.push(cur_namespace_ident);
+            }
+        }
+        Ok(res)
     }
 
     /// Create a new namespace inside the catalog, return error if namespace already exists, or any parent namespace doesn't exist.
@@ -638,6 +682,7 @@ impl Catalog for S3Catalog {
 mod tests {
     use super::*;
     use crate::storage::iceberg::test_utils;
+    use crate::storage::iceberg::test_utils::catalog_test_utils;
 
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -650,7 +695,7 @@ mod tests {
     use iceberg::NamespaceIdent;
     use iceberg::Result as IcebergResult;
 
-    // Create S3 catalog with local minio deployment.
+    // Create S3 catalog with local minio deployment and a random bucket.
     async fn create_s3_catalog() -> S3Catalog {
         let (bucket_name, warehouse_uri) =
             crate::storage::iceberg::test_utils::get_test_minio_bucket_and_warehouse();
@@ -782,6 +827,101 @@ mod tests {
         catalog.drop_table(&table_ident).await?;
         let table_already_exists = catalog.table_exists(&table_ident).await?;
         assert!(!table_already_exists, "Table should not exist after drop");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_operation() -> IcebergResult<()> {
+        let catalog = create_s3_catalog().await;
+
+        // Create default namespace.
+        let default_namespace = NamespaceIdent::from_strs(["default"])?;
+        catalog
+            .create_namespace(&default_namespace, /*properties=*/ HashMap::new())
+            .await?;
+
+        // Create two children namespaces under default namespace.
+        let child_namespace_1 = NamespaceIdent::from_strs(["default", "child1"])?;
+        catalog
+            .create_namespace(&child_namespace_1, /*properties=*/ HashMap::new())
+            .await?;
+        let child_namespace_2 = NamespaceIdent::from_strs(["default", "child2"])?;
+        catalog
+            .create_namespace(&child_namespace_2, /*properties=*/ HashMap::new())
+            .await?;
+
+        // Create two tables under default namespace.
+        let table_creation_1 =
+            catalog_test_utils::create_test_table_creation(&default_namespace, "child_table_1")?;
+        catalog
+            .create_table(&default_namespace, table_creation_1)
+            .await?;
+
+        let table_creation_2 =
+            catalog_test_utils::create_test_table_creation(&default_namespace, "child_table_2")?;
+        catalog
+            .create_table(&default_namespace, table_creation_2)
+            .await?;
+
+        // List default namespace and check.
+        let res = catalog.list_namespaces(/*parent=*/ None).await?;
+        assert_eq!(
+            res.len(),
+            1,
+            "Only default namespace expected under root, but actually there're {:?}",
+            res
+        );
+        assert_eq!(res[0].to_url_string(), "default");
+
+        // List namespaces under default namespace and check.
+        let res = catalog
+            .list_namespaces(Some(&NamespaceIdent::from_strs(["default"]).unwrap()))
+            .await?;
+        assert_eq!(
+            res.len(),
+            2,
+            "Expect two children namespaces, actually there're {:?}",
+            res
+        );
+        assert!(
+            res.contains(&child_namespace_1),
+            "Expects children namespace {:?}, but actually {:?}",
+            child_namespace_1,
+            res
+        );
+        assert!(
+            res.contains(&child_namespace_2),
+            "Expects children namespace {:?}, but actually {:?}",
+            child_namespace_2,
+            res
+        );
+
+        // List tables under default namespace and check.
+        let child_table_1 = TableIdent::new(default_namespace.clone(), "child_table_1".to_string());
+        let child_table_2 = TableIdent::new(default_namespace.clone(), "child_table_2".to_string());
+
+        let res = catalog
+            .list_tables(&NamespaceIdent::from_strs(["default"]).unwrap())
+            .await?;
+        assert_eq!(
+            res.len(),
+            2,
+            "Expect two children tables, actually there're {:?}",
+            res
+        );
+        assert!(
+            res.contains(&child_table_1),
+            "Expects children table {:?}, but actually {:?}",
+            child_table_1,
+            res
+        );
+        assert!(
+            res.contains(&child_table_2),
+            "Expects children table {:?}, but actually {:?}",
+            child_table_2,
+            res
+        );
 
         Ok(())
     }
