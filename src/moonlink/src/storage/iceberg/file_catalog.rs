@@ -3,6 +3,7 @@ use crate::storage::iceberg::puffin_writer_proxy::{
     get_puffin_metadata_and_close, PuffinBlobMetadataProxy,
 };
 
+use futures::future::join_all;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -176,8 +177,6 @@ impl Catalog for FileSystemCatalog {
     /// It's worth noting only one layer of namespace will be returned.
     /// For example, suppose we create three namespaces: (1) "a", (2) "a/b", (3) "b".
     /// List all namespaces under root namespace will return "a" and "b", but not "a/b".
-    ///
-    /// TODO(hjiang): List operation involves a few IO operations for entry access, could be parallelized.
     async fn list_namespaces(
         &self,
         parent: Option<&NamespaceIdent>,
@@ -213,6 +212,8 @@ impl Catalog for FileSystemCatalog {
             vec![]
         };
 
+        // Start multiple async functions in parallel to check whether table.
+        let mut futures = vec![];
         for cur_entry in entries.iter() {
             // Namespace is stored as directory.
             if cur_entry.metadata().mode() != EntryMode::DIR {
@@ -233,15 +234,26 @@ impl Catalog for FileSystemCatalog {
                     NamespaceIdent::from_vec(parent_directory_segments.clone())?,
                     stripped_subfolder.to_string(),
                 );
-                let is_table = self.table_exists(&table_ident).await?;
-                if is_table {
-                    continue;
-                }
+                futures.push(
+                    async move { (stripped_subfolder, self.table_exists(&table_ident).await) },
+                );
+                continue;
             };
 
             let mut cur_directory_segments = parent_directory_segments.clone();
             cur_directory_segments.push(stripped_subfolder.to_string());
             results.push(NamespaceIdent::from_vec(cur_directory_segments).unwrap());
+        }
+
+        // Block wait for all async operations to complete.
+        let exists_results: Vec<(&str, Result<bool, IcebergError>)> = join_all(futures).await;
+        for (stripped_subfolder, check_result) in exists_results {
+            let is_table = check_result?;
+            if !is_table {
+                let mut cur_directory_segments = parent_directory_segments.clone();
+                cur_directory_segments.push(stripped_subfolder.to_string());
+                results.push(NamespaceIdent::from_vec(cur_directory_segments).unwrap());
+            }
         }
 
         Ok(results)

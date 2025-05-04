@@ -347,11 +347,12 @@ impl Catalog for S3Catalog {
             .map_err(|e| {
                 IcebergError::new(
                     iceberg::ErrorKind::Unexpected,
-                    format!("Failed to list tables: {}", e),
+                    format!("Failed to list namespaces: {}", e),
                 )
             })?;
 
-        let mut res: Vec<NamespaceIdent> = Vec::with_capacity(subdirectories.len());
+        // Start multiple async functions in parallel to check whether namespace.
+        let mut futures = Vec::with_capacity(subdirectories.len());
         for cur_subdir in subdirectories.iter() {
             let cur_namespace_ident = if let Some(parent_namespace_ident) = parent {
                 let mut parent_namespace_segments = parent_namespace_ident.clone().to_vec();
@@ -360,12 +361,26 @@ impl Catalog for S3Catalog {
             } else {
                 NamespaceIdent::new(cur_subdir.to_string())
             };
+            futures.push(async move { self.namespace_exists(&cur_namespace_ident).await });
+        }
 
-            let is_namespace = self.namespace_exists(&cur_namespace_ident).await?;
+        // Wait for all operations to complete and collect results.
+        let exists_results = join_all(futures).await;
+        let mut res: Vec<NamespaceIdent> = Vec::new();
+        for (exists_result, cur_subdir) in exists_results.into_iter().zip(subdirectories.iter()) {
+            let is_namespace = exists_result?;
             if is_namespace {
+                let cur_namespace_ident = if let Some(parent_namespace_ident) = parent {
+                    let mut parent_namespace_segments = parent_namespace_ident.clone().to_vec();
+                    parent_namespace_segments.push(cur_subdir.to_string());
+                    NamespaceIdent::from_vec(parent_namespace_segments).unwrap()
+                } else {
+                    NamespaceIdent::new(cur_subdir.to_string())
+                };
                 res.push(cur_namespace_ident);
             }
         }
+
         Ok(res)
     }
 
