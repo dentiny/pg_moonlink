@@ -72,6 +72,19 @@ fn normalize_directory(mut path: PathBuf) -> String {
     os_string.to_str().unwrap().to_string()
 }
 
+// Get base directory name.
+// For example,
+// "/a/b/c" -> "c"
+// "/a/b/c/" -> "c"
+// "/" -> "/"
+fn get_base_directory(path_str: &str) -> String {
+    let path = Path::new(path_str);
+    match path.file_name() {
+        Some(name) => name.to_str().unwrap().to_string(),
+        None => path_str.to_string(),
+    }
+}
+
 #[derive(Debug)]
 pub struct FileSystemCatalog {
     file_io: FileIO,
@@ -159,16 +172,82 @@ impl FileSystemCatalog {
 
 #[async_trait]
 impl Catalog for FileSystemCatalog {
+    /// List namespaces under the parent namespace, return error if parent namespace doesn't exist.
+    /// It's worth noting only one layer of namespace will be returned.
+    /// For example, suppose we create three namespaces: (1) "a", (2) "a/b", (3) "b".
+    /// List all namespaces under root namespace will return "a" and "b", but not "a/b".
+    ///
+    /// TODO(hjiang): List operation involves a few IO operations for entry access, could be parallelized.
     async fn list_namespaces(
         &self,
-        _parent: Option<&NamespaceIdent>,
+        parent: Option<&NamespaceIdent>,
     ) -> IcebergResult<Vec<NamespaceIdent>> {
-        todo!("Not used for now, likely need for recovery, will implement later.")
+        // Check parent namespace existence.
+        if let Some(namespace_ident) = parent {
+            let exists = self.namespace_exists(namespace_ident).await?;
+            if !exists {
+                return Err(IcebergError::new(
+                    iceberg::ErrorKind::NamespaceNotFound,
+                    format!(
+                        "When list namespace, parent namespace {:?} doesn't exist.",
+                        namespace_ident
+                    ),
+                ));
+            }
+        }
+
+        // List all subdirectories under the given parent namespace directory.
+        let path_buf = self.get_namespace_path(parent);
+        let parent_namespace_directory = normalize_directory(path_buf.clone());
+        let entries = self.op.list(&parent_namespace_directory).await?;
+
+        // opendal list on prefix, and returns current directory as well.
+        // For example, list "/a/b/" will return "/a/b/" as well, which should be excluded in our case.
+        //
+        // `subfolder_to_exclude` doesn't have slash suffixed.
+        let subfolder_to_exclude = get_base_directory(&parent_namespace_directory);
+        let mut results = Vec::new();
+        let parent_directory_segments: Vec<String> = if let Some(namespace_ident) = parent {
+            namespace_ident.clone().inner()
+        } else {
+            vec![]
+        };
+
+        for cur_entry in entries.iter() {
+            // Namespace is stored as directory.
+            if cur_entry.metadata().mode() != EntryMode::DIR {
+                continue;
+            }
+            // Two things to notice here:
+            // 1. Entries returned from opendal list operation are suffixed with "/".
+            // 2. opendal list operation returns parent directory as well.
+            let stripped_subfolder = cur_entry.name().strip_suffix("/").unwrap();
+            if stripped_subfolder == subfolder_to_exclude {
+                continue;
+            }
+
+            // Check whether the subdirectory indicates a namespace or a table.
+            // For cases where parent namespace is not given, subdirectory is impossible to be a table.
+            if !parent_directory_segments.is_empty() {
+                let table_ident = TableIdent::new(
+                    NamespaceIdent::from_vec(parent_directory_segments.clone())?,
+                    stripped_subfolder.to_string(),
+                );
+                let is_table = self.table_exists(&table_ident).await?;
+                if is_table {
+                    continue;
+                }
+            };
+
+            let mut cur_directory_segments = parent_directory_segments.clone();
+            cur_directory_segments.push(stripped_subfolder.to_string());
+            results.push(NamespaceIdent::from_vec(cur_directory_segments).unwrap());
+        }
+
+        Ok(results)
     }
 
     /// Create a new namespace inside the catalog, return error if namespace already exists, or any parent namespace doesn't exist.
-    ///
-    /// TODO(hjiang): Implement properties handling.
     async fn create_namespace(
         &self,
         namespace: &iceberg::NamespaceIdent,
@@ -325,7 +404,12 @@ impl Catalog for FileSystemCatalog {
             }
             let table_ident =
                 TableIdent::new(namespace_ident.clone(), stripped_subfolder.to_string());
-            tables.push(table_ident);
+
+            // Subdirectories under the given parent directory could indicate namespace rather than table, need to double check metadata file existence.
+            let is_table = self.table_exists(&table_ident).await?;
+            if is_table {
+                tables.push(table_ident);
+            }
         }
 
         Ok(tables)
@@ -353,7 +437,7 @@ impl Catalog for FileSystemCatalog {
             namespace_ident.to_url_string(),
             creation.name,
         );
-        let version_hint_path = format!("{}/version-hint.text", metadata_directory,);
+        let version_hint_path = format!("{}/version-hint.text", metadata_directory);
 
         // Create the initial table metadata.
         let table_metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
@@ -602,50 +686,25 @@ impl Catalog for FileSystemCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::storage::iceberg::test_utils::catalog_test_utils;
+
     use std::collections::HashMap;
     use std::path::Path;
-    use std::sync::Arc;
+
     use std::time::{SystemTime, UNIX_EPOCH};
     use tempfile::TempDir;
 
-    use iceberg::spec::{
-        NestedField, PrimitiveType, Schema, SnapshotReference, SnapshotRetention,
-        Type as IcebergType, MAIN_BRANCH,
-    };
+    use iceberg::spec::{SnapshotReference, SnapshotRetention, MAIN_BRANCH};
     use iceberg::NamespaceIdent;
     use iceberg::Result as IcebergResult;
-
-    // Test util function to get iceberg schema,
-    async fn get_test_schema() -> IcebergResult<Schema> {
-        let field = NestedField::required(
-            /*id=*/ 1,
-            "field_name".to_string(),
-            IcebergType::Primitive(PrimitiveType::Int),
-        );
-        let schema = Schema::builder()
-            .with_schema_id(0)
-            .with_fields(vec![Arc::new(field)])
-            .build()?;
-
-        Ok(schema)
-    }
 
     // Test util function to create a new table.
     async fn create_test_table(catalog: &FileSystemCatalog) -> IcebergResult<()> {
         // Define namespace and table.
         let namespace = NamespaceIdent::from_strs(["default"])?;
-        let table_name = "test_table".to_string();
-
-        let schema = get_test_schema().await?;
-        let table_creation = TableCreation::builder()
-            .name(table_name.clone())
-            .location(format!(
-                "file:///tmp/iceberg-test/{}/{}",
-                namespace.to_url_string(),
-                table_name
-            ))
-            .schema(schema.clone())
-            .build();
+        let table_creation =
+            catalog_test_utils::create_test_table_creation(&namespace, "test_table")?;
 
         catalog
             .create_namespace(&namespace, /*properties=*/ HashMap::new())
@@ -653,6 +712,16 @@ mod tests {
         catalog.create_table(&namespace, table_creation).await?;
 
         Ok(())
+    }
+
+    #[test]
+    fn test_get_base_directory() {
+        // Root directory.
+        assert_eq!(get_base_directory("/"), "/");
+        // Directory without slash suffix.
+        assert_eq!(get_base_directory("/a/b/c"), "c");
+        // Directory with slash suffix.
+        assert_eq!(get_base_directory("/a/b/c/"), "c");
     }
 
     #[test]
@@ -791,7 +860,7 @@ mod tests {
 
         // Load table and check.
         let table = catalog.load_table(&table_ident).await?;
-        let expected_schema = get_test_schema().await?;
+        let expected_schema = catalog_test_utils::create_test_table_schema()?;
         assert_eq!(
             table.identifier(),
             &table_ident,
@@ -807,6 +876,103 @@ mod tests {
         catalog.drop_table(&table_ident).await?;
         let table_already_exists = catalog.table_exists(&table_ident).await?;
         assert!(!table_already_exists, "Table should not exist after drop");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_operation() -> IcebergResult<()> {
+        let temp_dir = TempDir::new().expect("tempdir failed");
+        let warehouse_path = temp_dir.path().to_str().unwrap();
+        let catalog = FileSystemCatalog::new(warehouse_path.to_string());
+
+        // Create default namespace.
+        let default_namespace = NamespaceIdent::from_strs(["default"])?;
+        catalog
+            .create_namespace(&default_namespace, /*properties=*/ HashMap::new())
+            .await?;
+
+        // Create two children namespaces under default namespace.
+        let child_namespace_1 = NamespaceIdent::from_strs(["default", "child1"])?;
+        catalog
+            .create_namespace(&child_namespace_1, /*properties=*/ HashMap::new())
+            .await?;
+        let child_namespace_2 = NamespaceIdent::from_strs(["default", "child2"])?;
+        catalog
+            .create_namespace(&child_namespace_2, /*properties=*/ HashMap::new())
+            .await?;
+
+        // Create two tables under default namespace.
+        let table_creation_1 =
+            catalog_test_utils::create_test_table_creation(&default_namespace, "child_table_1")?;
+        catalog
+            .create_table(&default_namespace, table_creation_1)
+            .await?;
+
+        let table_creation_2 =
+            catalog_test_utils::create_test_table_creation(&default_namespace, "child_table_2")?;
+        catalog
+            .create_table(&default_namespace, table_creation_2)
+            .await?;
+
+        // List default namespace and check.
+        let res = catalog.list_namespaces(/*parent=*/ None).await?;
+        assert_eq!(
+            res.len(),
+            1,
+            "Only default namespace expected under root, but actually there're {:?}",
+            res
+        );
+        assert_eq!(res[0].to_url_string(), "default");
+
+        // List namespaces under default namespace and check.
+        let res = catalog
+            .list_namespaces(Some(&NamespaceIdent::from_strs(["default"]).unwrap()))
+            .await?;
+        assert_eq!(
+            res.len(),
+            2,
+            "Expect two children namespaces, actually there're {:?}",
+            res
+        );
+        assert!(
+            res.contains(&child_namespace_1),
+            "Expects children namespace {:?}, but actually {:?}",
+            child_namespace_1,
+            res
+        );
+        assert!(
+            res.contains(&child_namespace_2),
+            "Expects children namespace {:?}, but actually {:?}",
+            child_namespace_2,
+            res
+        );
+
+        // List tables under default namespace and check.
+        let child_table_1 = TableIdent::new(default_namespace.clone(), "child_table_1".to_string());
+        let child_table_2 = TableIdent::new(default_namespace.clone(), "child_table_2".to_string());
+
+        let res = catalog
+            .list_tables(&NamespaceIdent::from_strs(["default"]).unwrap())
+            .await?;
+        assert_eq!(
+            res.len(),
+            2,
+            "Expect two children tables, actually there're {:?}",
+            res
+        );
+        assert!(
+            res.contains(&child_table_1),
+            "Expects children table {:?}, but actually {:?}",
+            child_table_1,
+            res
+        );
+        assert!(
+            res.contains(&child_table_2),
+            "Expects children table {:?}, but actually {:?}",
+            child_table_2,
+            res
+        );
 
         Ok(())
     }
@@ -881,7 +1047,7 @@ mod tests {
         let table_metadata = table.metadata();
         assert_eq!(
             **table_metadata.current_schema(),
-            get_test_schema().await.unwrap(),
+            catalog_test_utils::create_test_table_schema().unwrap(),
             "Schema should match"
         );
         assert_eq!(
