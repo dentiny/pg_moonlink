@@ -344,7 +344,21 @@ impl IcebergSnapshot for Snapshot {
             }
 
             let manifest = manifest_file.load_manifest(file_io).await?;
+
+            // All files (i.e. data files, deletion vector, manifest files) under the same snapshot are assigned with the same sequence number.
+            // Reference: https://iceberg.apache.org/spec/?h=content#sequence-numbers
+            let snapshot_seq_no = manifest.entries().first().unwrap().sequence_number();
+
             for entry in manifest.entries() {
+                // Sanity check all manifest entries are of the sequence number.
+                let cur_entry_seq_no = entry.sequence_number();
+                if snapshot_seq_no != cur_entry_seq_no {
+                    return Err(IcebergError::new(
+                        iceberg::ErrorKind::DataInvalid,
+                        format!("When reading from iceberg table, snapshot sequence id inconsistency found {:?} vs {:?}", snapshot_seq_no, cur_entry_seq_no),
+                    ));
+                }
+
                 let data_file = entry.data_file();
                 let file_path = PathBuf::from(data_file.file_path().to_string());
 
