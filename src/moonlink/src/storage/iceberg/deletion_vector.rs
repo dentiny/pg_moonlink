@@ -15,10 +15,12 @@ const DELETION_VECTOR_MAGIC_BYTES: [u8; 4] = [0xD1, 0xD3, 0x39, 0x64];
 // Min length for serialized blob for deletion vector.
 const MIN_SERIALIZED_DELETION_VECTOR_BLOB: usize = 12;
 
+// Blob type for deletion vector.
+const DELETION_VECTOR_BLOB_TYPE: &str = "deletion-vector-v1";
+
 // Deletion vector puffin blob properties which must be contained.
-// Reference: https://iceberg.apache.org/puffin-spec/?h=puffin#deletion-vector-v1-blob-type
-pub(crate) static DELETION_VECTOR_CADINALITY: &str = "cardinality";
-pub(crate) static DELETION_VECTOR_REFERENCED_DATA_FILE: &str = "referenced-data-file";
+pub(crate) const DELETION_VECTOR_CADINALITY: &str = "cardinality";
+pub(crate) const DELETION_VECTOR_REFERENCED_DATA_FILE: &str = "referenced-data-file";
 
 // Max number of rows in a batch. Use to convert puffin deletion vector to moonlink batch delete vector.
 // TODO(hjiang): Confirm max batch size when integrate iceberg system with moonlink.
@@ -86,7 +88,12 @@ impl DeletionVector {
     /// - len field records the combined length of the vector and magic bytes stored as 4 bytes in big-endian.
     /// - vector is the serialized bitmap in u64 format: https://github.com/RoaringBitmap/RoaringFormatSpec?tab=readme-ov-file#extension-for-64-bit-implementations
     /// - crc32c field is checksum of the magic bytes and serialized vector as 4 bytes in big-endian.
-    pub fn serialize(&self, properties: HashMap<String, String>) -> Blob {
+    pub fn serialize(
+        &self,
+        snapshot_id: i64,
+        seqno: i64,
+        properties: HashMap<String, String>,
+    ) -> Blob {
         DeletionVector::check_properties(&properties);
 
         // Calculate combined length (magic bytes + bitmap).
@@ -144,10 +151,10 @@ impl DeletionVector {
         }
 
         let blob_proxy = IcebergBlobProxy {
-            r#type: "deletion-vector-v1".to_string(),
+            r#type: DELETION_VECTOR_BLOB_TYPE.to_string(),
             fields: vec![],
-            snapshot_id: 0, // TODO: Set appropriate values, we should pass in TableMetadata here.
-            sequence_number: 0, // TODO: Set appropriate values, we should pass in TableMetadata here.
+            snapshot_id: snapshot_id,
+            sequence_number: seqno,
             data,
             properties,
         };
@@ -256,7 +263,11 @@ mod tests {
     #[test]
     fn test_empty_deletion_vector() {
         let dv = DeletionVector::new();
-        let blob = dv.serialize(create_test_blob_properties(/*deleted_rows=*/ 0));
+        let blob = dv.serialize(
+            /*snapshot_id=*/ 0,
+            /*seqno=*/ 0,
+            create_test_blob_properties(/*deleted_rows=*/ 0),
+        );
         let deserialized_dv = DeletionVector::deserialize(blob).unwrap();
         assert!(dv.bitmap.is_empty());
         assert!(deserialized_dv.bitmap.is_empty());
@@ -267,9 +278,11 @@ mod tests {
         let mut dv = DeletionVector::new();
         let deleted_rows: Vec<u64> = vec![1, 3, 5, 7, 1000];
         dv.mark_rows_deleted(deleted_rows.clone());
-        let blob = dv.serialize(create_test_blob_properties(
-            /*deleted_rows=*/ deleted_rows.len(),
-        ));
+        let blob = dv.serialize(
+            /*snapshot_id=*/ 0,
+            /*seqno=*/ 0,
+            create_test_blob_properties(/*deleted_rows=*/ deleted_rows.len()),
+        );
         let deserialized_dv = DeletionVector::deserialize(blob).unwrap();
         for row in deleted_rows {
             assert!(deserialized_dv.bitmap.contains(row));

@@ -204,12 +204,9 @@ pub(crate) async fn get_puffin_metadata_and_close(
     Ok(puffin_metadata)
 }
 
-// manifest file write logic: https://github.com/apache/iceberg-rust/blob/841ef0a3dc87a3ecffaeb1aa62ca9ca4ea4c1712/crates/iceberg/src/spec/manifest/writer.rs#L336-L417
-//
 /// Get manifest with the given sequence number, append with puffion deletion vector blob and rewrite it.
 /// Note: this function should be called before catalog transaction commit.
 //
-/// # Arguments
 /// path: filepath for the puffin file.
 pub(crate) async fn append_puffin_metadata_and_rewrite(
     table_metadata: &TableMetadata,
@@ -252,8 +249,6 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
     }
 
     // Append puffin blobs into existing manifest entries.
-    //
-    // TODO(hjiang): Add sanity check for sequence number between table metadata and deletion vector.
     for cur_blob_metadata in blob_metadata.iter() {
         let new_data_file = DataFileProxy {
             content: DataContentType::Data,
