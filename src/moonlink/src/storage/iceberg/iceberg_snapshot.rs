@@ -267,7 +267,7 @@ impl IcebergSnapshot for Snapshot {
                 let table_metadata = iceberg_table.metadata();
                 let blob = iceberg_deletion_vector.serialize(
                     table_metadata.current_snapshot_id().unwrap_or(-1),
-                    table_metadata.last_sequence_number(),
+                    table_metadata.next_sequence_number(),
                     blob_properties,
                 );
 
@@ -479,7 +479,7 @@ mod tests {
             loaded_snapshot.disk_files.keys()
         );
 
-        let namespace = vec!["default_namespace"];
+        let namespace = vec!["default"];
         let table_name = "test_table";
         let iceberg_table = get_or_create_iceberg_table(
             &*catalog,
@@ -546,6 +546,9 @@ mod tests {
     async fn test_store_and_load_snapshot_with_filesystem_catalog() -> IcebergResult<()> {
         let tmp_dir = tempdir()?;
         let warehouse_path = tmp_dir.path().to_str().unwrap();
+
+        // let warehouse_path = "/tmp/iceberg--2h2-3-sjsssj";
+
         let catalog = create_catalog(warehouse_path)?;
         test_store_and_load_snapshot_impl(catalog, warehouse_path).await?;
         Ok(())
