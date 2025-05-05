@@ -899,16 +899,38 @@ mod tests {
         let catalog = FileSystemCatalog::new(warehouse_path.to_string());
 
         // List namespaces with non-existent parent namespace.
-        let res = catalog.list_namespaces(Some(&NamespaceIdent::from_strs(["non-existent-ns"]).unwrap())).await;
-        assert!(res.is_err(), "List namespace under a non-existent namespace should fail");
+        let res = catalog
+            .list_namespaces(Some(
+                &NamespaceIdent::from_strs(["non-existent-ns"]).unwrap(),
+            ))
+            .await;
+        assert!(
+            res.is_err(),
+            "List namespace under a non-existent namespace should fail"
+        );
         let err = res.err().unwrap();
-        assert_eq!(err.kind(), iceberg::ErrorKind::NamespaceNotFound, "List namespace under a non-existent namespace gets error {:?}", err);
+        assert_eq!(
+            err.kind(),
+            iceberg::ErrorKind::NamespaceNotFound,
+            "List namespace under a non-existent namespace gets error {:?}",
+            err
+        );
 
         // List tables with non-existent parent namespace.
-        let res = catalog.list_tables(&NamespaceIdent::from_strs(["non-existent-ns"]).unwrap()).await;
-        assert!(res.is_err(), "List tables under a non-existent namespace should fail");
+        let res = catalog
+            .list_tables(&NamespaceIdent::from_strs(["non-existent-ns"]).unwrap())
+            .await;
+        assert!(
+            res.is_err(),
+            "List tables under a non-existent namespace should fail"
+        );
         let err = res.err().unwrap();
-        assert_eq!(err.kind(), iceberg::ErrorKind::NamespaceNotFound, "List namespace under a non-existent namespace gets error {:?}", err);
+        assert_eq!(
+            err.kind(),
+            iceberg::ErrorKind::NamespaceNotFound,
+            "List namespace under a non-existent namespace gets error {:?}",
+            err
+        );
 
         // Create default namespace.
         let default_namespace = NamespaceIdent::from_strs(["default"])?;

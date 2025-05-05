@@ -55,8 +55,7 @@ async fn get_or_create_iceberg_table<C: Catalog + ?Sized>(
     table_name: &str,
     arrow_schema: &ArrowSchema,
 ) -> IcebergResult<IcebergTable> {
-    let namespace_ident =
-        NamespaceIdent::from_strs(namespace).unwrap();
+    let namespace_ident = NamespaceIdent::from_strs(namespace).unwrap();
     let table_ident = TableIdent::new(namespace_ident.clone(), table_name.to_string());
     match catalog.load_table(&table_ident).await {
         Ok(table) => Ok(table),
@@ -435,8 +434,8 @@ mod tests {
         ]))
     }
 
-    // Test util function to create arrow record batch.
-    fn create_test_arrow_record_batch(arrow_schema: Arc<ArrowSchema>) -> RecordBatch {
+    /// Test util function to create arrow record batch.
+    fn test_batch_1(arrow_schema: Arc<ArrowSchema>) -> RecordBatch {
         RecordBatch::try_new(
             arrow_schema.clone(),
             vec![
@@ -446,6 +445,29 @@ mod tests {
         )
         .unwrap()
     }
+    fn test_batch_2(arrow_schema: Arc<ArrowSchema>) -> RecordBatch {
+        RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![4, 5, 6])), // id column
+                Arc::new(StringArray::from(vec!["d", "e", "f"])), // name column
+            ],
+        )
+        .unwrap()
+    }
+
+    /// Test util function to write arrow record batch into local file.
+    async fn write_arrow_record_batch_to_local<P: AsRef<std::path::Path>>(
+        path: P,
+        schema: Arc<ArrowSchema>,
+        batch: &RecordBatch,
+    ) -> IcebergResult<()> {
+        let file = File::create(&path)?;
+        let mut writer = ArrowWriter::try_new(file, schema, None)?;
+        writer.write(batch)?;
+        writer.close()?;
+        Ok(())
+    }
 
     /// Test snapshot store and load for different types of catalogs based on the given warehouse.
     ///
@@ -454,18 +476,9 @@ mod tests {
         catalog: Box<dyn Catalog>,
         warehouse_uri: &str,
     ) -> IcebergResult<()> {
-        // Create Arrow schema and record batch.
+        // Create arrow schema and table.
         let arrow_schema = create_test_arrow_schema();
-        let batch = create_test_arrow_record_batch(arrow_schema.clone());
-
-        // Write record batch to Parquet file.
         let tmp_dir = tempdir()?;
-        let parquet_path = tmp_dir.path().join("data.parquet");
-        let file = File::create(&parquet_path)?;
-        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), None)?;
-        writer.write(&batch)?;
-        writer.close()?;
-
         let metadata = Arc::new(TableMetadata {
             name: "test_table".to_string(),
             schema: arrow_schema.clone(),
@@ -475,19 +488,47 @@ mod tests {
             get_lookup_key: |_row| 1, // unused.
         });
 
-        let mut disk_files = HashMap::new();
-        disk_files.insert(parquet_path.clone(), create_test_batch_deletion_vector());
+        // Write first snapshot to iceberg table (with deletion vector).
+        {
+            let batch = test_batch_1(arrow_schema.clone());
+            let mut disk_files = HashMap::new();
+            let parquet_path = tmp_dir.path().join("data-1.parquet");
+            write_arrow_record_batch_to_local(parquet_path.as_path(), arrow_schema.clone(), &batch)
+                .await?;
+            disk_files.insert(parquet_path.clone(), create_test_batch_deletion_vector());
 
-        let mut snapshot = Snapshot::new(metadata);
+            let mut snapshot = Snapshot::new(metadata.clone());
+            snapshot._set_warehouse_info(warehouse_uri.to_string());
+            snapshot.disk_files = disk_files;
+            snapshot._export_to_iceberg().await?;
+        }
+
+        // Write second snapshot to iceberg table (without deletion vector)
+        {
+            let batch = test_batch_2(arrow_schema.clone());
+            let mut disk_files = HashMap::new();
+            let parquet_path = tmp_dir.path().join("data-2.parquet");
+            write_arrow_record_batch_to_local(parquet_path.as_path(), arrow_schema.clone(), &batch)
+                .await?;
+            disk_files.insert(
+                parquet_path.clone(),
+                BatchDeletionVector::new(/*max_rows=*/ 0),
+            );
+
+            let mut snapshot = Snapshot::new(metadata.clone());
+            snapshot._set_warehouse_info(warehouse_uri.to_string());
+            snapshot.disk_files = disk_files;
+            snapshot._export_to_iceberg().await?;
+        }
+
+        // Load snapshot from iceberg table and check loaded content.
+        let mut snapshot = Snapshot::new(metadata.clone());
         snapshot._set_warehouse_info(warehouse_uri.to_string());
-        snapshot.disk_files = disk_files;
-
-        snapshot._export_to_iceberg().await?;
         let loaded_snapshot = snapshot._async_load_from_iceberg().await?;
         assert_eq!(
             loaded_snapshot.disk_files.len(),
-            1,
-            "Should have exactly one file, but disk files have {:?}.",
+            2,
+            "Should have exactly two file, but disk files have {:?}.",
             loaded_snapshot.disk_files.keys()
         );
 
@@ -503,53 +544,78 @@ mod tests {
         .await?;
         let file_io = iceberg_table.file_io();
 
-        // Check the loaded data file exists.
-        let (loaded_path, loaded_deletion_vector) =
-            loaded_snapshot.disk_files.iter().next().unwrap();
-        assert!(
-            file_io.exists(loaded_path.to_str().unwrap()).await?,
-            "File should exist"
-        );
-
         // Check the loaded data file is of the expected format and content.
-        let input_file = file_io.new_input(loaded_path.to_str().unwrap())?;
-        let input_file_metadata = input_file.metadata().await?;
-        let reader = input_file.reader().await?;
-        let bytes = reader.read(0..input_file_metadata.size).await?;
-        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
-        let mut reader = builder.build()?;
-        let batch = reader.next().transpose()?.expect("Should have one batch");
+        for (loaded_path, loaded_deletion_vector) in loaded_snapshot.disk_files.iter() {
+            let input_file = file_io.new_input(loaded_path.to_str().unwrap())?;
+            let input_file_metadata = input_file.metadata().await?;
+            let reader = input_file.reader().await?;
+            let bytes = reader.read(0..input_file_metadata.size).await?;
+            let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
+            let mut reader = builder.build()?;
+            let batch = reader.next().transpose()?.expect("Should have one batch");
 
-        let actual_ids = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
-        assert_eq!(
-            *actual_ids,
-            Int32Array::from(vec![1, 2, 3]),
-            "ID data should match"
-        );
+            // Two data files are written here, one w/ deletion vector, another w/o.
+            let deleted_rows = loaded_deletion_vector.collect_deleted_rows();
 
-        // Check loaded deletion vector.
-        let collect_deleted_rows = loaded_deletion_vector.collect_deleted_rows();
-        assert_eq!(
-            collect_deleted_rows,
-            create_test_batch_deletion_vector().collect_deleted_rows(),
-            "Loaded deletion vector is not the same as the one gets stored."
-        );
+            // Check the one w/o deletion vector.
+            if deleted_rows.is_empty() {
+                let actual_ids = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap();
+                assert_eq!(
+                    *actual_ids,
+                    Int32Array::from(vec![4, 5, 6]),
+                    "ID data should match, actual batch is {:?}",
+                    *actual_ids,
+                );
 
-        // Verify second column (name).
-        let actual_names = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        assert_eq!(
-            *actual_names,
-            StringArray::from(vec!["a", "b", "c"]),
-            "Name data should match"
-        );
+                let actual_strings = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                assert_eq!(
+                    *actual_strings,
+                    StringArray::from(vec!["d", "e", "f"]),
+                    "String data should match, actual batch is {:?}",
+                    *actual_strings,
+                );
+                continue;
+            }
+
+            // Check the one w/ deletion vector.
+            let actual_ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            assert_eq!(
+                *actual_ids,
+                Int32Array::from(vec![1, 2, 3]),
+                "ID data should match"
+            );
+            let actual_strings = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            assert_eq!(
+                *actual_strings,
+                StringArray::from(vec!["a", "b", "c"]),
+                "String data should match, actual batch is {:?}",
+                *actual_strings,
+            );
+
+            // Check loaded deletion vector.
+            let collect_deleted_rows = loaded_deletion_vector.collect_deleted_rows();
+            assert_eq!(
+                collect_deleted_rows,
+                create_test_batch_deletion_vector().collect_deleted_rows(),
+                "Loaded deletion vector is not the same as the one gets stored."
+            );
+        }
 
         Ok(())
     }
