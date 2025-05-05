@@ -776,7 +776,7 @@ mod tests {
     #[tokio::test]
     async fn test_s3_catalog_namespace_operations() -> IcebergResult<()> {
         let catalog = create_s3_catalog().await;
-        let namespace = NamespaceIdent::from_vec(vec!["default".to_string(), "ns".to_string()])?;
+        let namespace = NamespaceIdent::from_strs(vec!["default", "ns"])?;
 
         // Ensure namespace does not exist.
         let exists = catalog.namespace_exists(&namespace).await?;
@@ -785,7 +785,7 @@ mod tests {
         // Create parent namespace.
         catalog
             .create_namespace(
-                &NamespaceIdent::from_vec(vec!["default".to_string()]).unwrap(),
+                &NamespaceIdent::from_strs(vec!["default"]).unwrap(),
                 /*properties=*/ HashMap::new(),
             )
             .await?;
@@ -815,7 +815,7 @@ mod tests {
         let catalog = create_s3_catalog().await;
 
         // Define namespace and table.
-        let namespace = NamespaceIdent::from_vec(vec!["default".to_string()])?;
+        let namespace = NamespaceIdent::from_strs(vec!["default"])?;
         let table_name = "test_table".to_string();
         let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
 

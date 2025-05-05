@@ -56,7 +56,7 @@ async fn get_or_create_iceberg_table<C: Catalog + ?Sized>(
     arrow_schema: &ArrowSchema,
 ) -> IcebergResult<IcebergTable> {
     let namespace_ident =
-        NamespaceIdent::from_vec(namespace.iter().map(|s| s.to_string()).collect()).unwrap();
+        NamespaceIdent::from_strs(namespace).unwrap();
     let table_ident = TableIdent::new(namespace_ident.clone(), table_name.to_string());
     match catalog.load_table(&table_ident).await {
         Ok(table) => Ok(table),
@@ -450,8 +450,6 @@ mod tests {
     /// Test snapshot store and load for different types of catalogs based on the given warehouse.
     ///
     /// * `deletion_vector_supported` - whether the given catalog supports deletion vector; if false, skip checking deletion vector load.
-    ///
-    /// TODO(hjiang): This test case only write once, thus one snapshot; should test situations where we write multiple times.
     async fn test_store_and_load_snapshot_impl(
         catalog: Box<dyn Catalog>,
         warehouse_uri: &str,
