@@ -621,6 +621,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_invalid_warehouse_uri() -> IcebergResult<()> {
+        // Create arrow schema and table.
+        let arrow_schema = create_test_arrow_schema();
+        let tmp_dir = tempdir()?;
+        let metadata = Arc::new(TableMetadata {
+            name: "test_table".to_string(),
+            schema: arrow_schema.clone(),
+            id: 0, // unused.
+            config: TableConfig::new(),
+            path: tmp_dir.path().to_path_buf(),
+            get_lookup_key: |_row| 1, // unused.
+        });
+        let mut snapshot = Snapshot::new(metadata.clone());
+        snapshot._set_warehouse_info("invalid_warehouse_uri".to_string());
+        let res = snapshot._export_to_iceberg().await;
+        assert!(
+            res.is_err(),
+            "Snapshot with invalid warehouse should fail when store."
+        );
+        let err = res.unwrap_err();
+        assert_eq!(err.kind(), iceberg::ErrorKind::Unexpected);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_store_and_load_snapshot_with_filesystem_catalog() -> IcebergResult<()> {
         let tmp_dir = tempdir()?;
         let warehouse_path = tmp_dir.path().to_str().unwrap();
