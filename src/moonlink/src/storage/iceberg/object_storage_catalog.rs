@@ -271,6 +271,11 @@ impl S3Catalog {
         Ok(())
     }
 
+    /// After transaction commits, puffin metadata should be cleared for next puffin write.
+    pub(crate) fn clear_puffin_metadata(&mut self) {
+        self.puffin_blobs.clear();
+    }
+
     /// Load metadata and its location foe the given table.
     async fn load_metadata(
         &self,
@@ -989,7 +994,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_table() -> IcebergResult<()> {
-        let catalog = create_s3_catalog().await;
+        let mut catalog = create_s3_catalog().await;
         create_test_table(&catalog).await?;
 
         let namespace = NamespaceIdent::from_strs(["default"])?;
@@ -1052,6 +1057,8 @@ mod tests {
 
         // Check table metadata.
         let table = catalog.update_table(table_commit).await?;
+        catalog.clear_puffin_metadata();
+
         let table_metadata = table.metadata();
         assert_eq!(
             **table_metadata.current_schema(),

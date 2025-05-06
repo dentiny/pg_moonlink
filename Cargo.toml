@@ -20,6 +20,7 @@ iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "b4bc6dd15
   "storage-s3",
   "storage-fs",
 ] }
+mockall = "0.13"
 multimap = { version = "0.10", default-features = false }
 num-traits = "0.2"
 opendal = { version = "0.53", default-features = false, features = [

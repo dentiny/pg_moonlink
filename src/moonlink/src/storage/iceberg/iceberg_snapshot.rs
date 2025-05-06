@@ -1,4 +1,6 @@
-use super::catalog_utils::create_catalog;
+use super::catalog_utils::{
+    create_catalog, get_or_create_iceberg_table, write_record_batch_to_iceberg,
+};
 use super::deletion_vector::DeletionVector;
 use crate::storage::iceberg::deletion_vector::{
     DELETION_VECTOR_CADINALITY, DELETION_VECTOR_REFERENCED_DATA_FILE,
@@ -17,27 +19,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use arrow_schema::Schema as ArrowSchema;
-use iceberg::arrow as IcebergArrow;
 use iceberg::puffin::CompressionCodec;
+use iceberg::spec::DataFileFormat;
 use iceberg::spec::ManifestContentType;
-use iceberg::spec::{DataFile, DataFileFormat};
-use iceberg::table::Table as IcebergTable;
 use iceberg::transaction::Transaction;
-use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+use iceberg::writer::file_writer::location_generator::DefaultLocationGenerator;
 use iceberg::writer::file_writer::location_generator::LocationGenerator;
-use iceberg::writer::file_writer::location_generator::{
-    DefaultFileNameGenerator, DefaultLocationGenerator,
-};
-use iceberg::writer::file_writer::ParquetWriterBuilder;
-use iceberg::writer::IcebergWriter;
-use iceberg::writer::IcebergWriterBuilder;
 use iceberg::Error as IcebergError;
-use iceberg::NamespaceIdent;
-use iceberg::TableCreation;
-use iceberg::{Catalog, Result as IcebergResult, TableIdent};
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use parquet::file::properties::WriterProperties;
+use iceberg::{Catalog, Result as IcebergResult};
 use url::Url;
 use uuid::Uuid;
 
@@ -46,91 +35,6 @@ use uuid::Uuid;
 // (unrelated to functionality) 2. Update rest catalog service ip/port, currently it's hard-coded to devcontainer's config, which should be parsed from env variable or config files.
 // (unrelated to functionality) 3. Add timeout to rest catalog access.
 // (unrelated to functionality) 4. Use real namespace and table name, which we should be able to get it from moonlink, it's hard-coded to "default" and "test_table" for now.
-
-// Get or create an iceberg table in the given catalog from the given namespace and table name.
-async fn get_or_create_iceberg_table<C: Catalog + ?Sized>(
-    catalog: &C,
-    warehouse_uri: &str,
-    namespace: &[&str],
-    table_name: &str,
-    arrow_schema: &ArrowSchema,
-) -> IcebergResult<IcebergTable> {
-    let namespace_ident = NamespaceIdent::from_strs(namespace).unwrap();
-    let table_ident = TableIdent::new(namespace_ident.clone(), table_name.to_string());
-    match catalog.load_table(&table_ident).await {
-        Ok(table) => Ok(table),
-        Err(_) => {
-            let namespace_already_exists = catalog.namespace_exists(&namespace_ident).await?;
-            if !namespace_already_exists {
-                catalog
-                    .create_namespace(&namespace_ident, /*properties=*/ HashMap::new())
-                    .await?;
-            }
-
-            let iceberg_schema = IcebergArrow::arrow_schema_to_schema(arrow_schema)?;
-            let tbl_creation = TableCreation::builder()
-                .name(table_name.to_string())
-                .location(format!(
-                    "{}/{}/{}",
-                    warehouse_uri,
-                    namespace_ident.to_url_string(),
-                    table_name
-                ))
-                .schema(iceberg_schema)
-                .properties(HashMap::new())
-                .build();
-            let table = catalog
-                .create_table(&table_ident.namespace, tbl_creation)
-                .await?;
-            Ok(table)
-        }
-    }
-}
-
-// Write the given record batch to the iceberg table.
-async fn write_record_batch_to_iceberg(
-    table: &IcebergTable,
-    parquet_filepath: &PathBuf,
-) -> IcebergResult<DataFile> {
-    let location_generator = DefaultLocationGenerator::new(table.metadata().clone())?;
-    let file_name_generator = DefaultFileNameGenerator::new(
-        /*prefix=*/ Uuid::new_v4().to_string(),
-        /*suffix=*/ None,
-        /*format=*/ DataFileFormat::Parquet,
-    );
-
-    let file = std::fs::File::open(parquet_filepath)?;
-    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-    let mut arrow_reader = builder.build()?;
-
-    let parquet_writer_builder = ParquetWriterBuilder::new(
-        /*props=*/ WriterProperties::default(),
-        /*schame=*/ table.metadata().current_schema().clone(),
-        /*file_io=*/ table.file_io().clone(),
-        /*location_generator=*/ location_generator,
-        /*file_name_generator=*/ file_name_generator,
-    );
-
-    // TOOD(hjiang): Add support for partition values.
-    let data_file_writer_builder = DataFileWriterBuilder::new(
-        parquet_writer_builder,
-        /*partition_value=*/ None,
-        /*partition_spec_id=*/ 0,
-    );
-    let mut data_file_writer = data_file_writer_builder.build().await?;
-    while let Some(record_batch) = arrow_reader.next().transpose()? {
-        data_file_writer.write(record_batch).await?;
-    }
-
-    let data_files = data_file_writer.close().await?;
-    assert_eq!(
-        data_files.len(),
-        1,
-        "Should only have one parquet file written"
-    );
-
-    Ok(data_files[0].clone())
-}
 
 // TODO(hjiang): A few data file properties need to respect and consider.
 // Reference:
@@ -223,7 +127,7 @@ impl IcebergSnapshot for Snapshot {
         let catalog: Rc<RefCell<dyn Catalog>> = opt_catalog.unwrap();
 
         let table_name = self.metadata.name.clone();
-        let namespace = vec!["default"];
+        let namespace = vec!["default".to_string()];
         let arrow_schema = self.metadata.schema.as_ref();
         let iceberg_table = get_or_create_iceberg_table(
             &*catalog.borrow(),
@@ -312,7 +216,7 @@ impl IcebergSnapshot for Snapshot {
     }
 
     async fn _async_load_from_iceberg(&self) -> IcebergResult<Self> {
-        let namespace = vec!["default"];
+        let namespace = vec!["default".to_string()];
         let table_name = self.metadata.name.clone();
         let arrow_schema = self.metadata.schema.as_ref();
         let catalog = create_catalog(&self.warehouse_uri)?;
@@ -413,6 +317,7 @@ mod tests {
     use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use iceberg::io::FileRead;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::arrow::ArrowWriter;
 
     /// Create test batch deletion vector.
@@ -532,7 +437,7 @@ mod tests {
             loaded_snapshot.disk_files.keys()
         );
 
-        let namespace = vec!["default"];
+        let namespace = vec!["default".to_string()];
         let table_name = "test_table";
         let iceberg_table = get_or_create_iceberg_table(
             &*catalog,

@@ -248,7 +248,12 @@ impl SnapshotTableState {
     }
 
     /// Get committed deletion record for current snapshot.
-    fn get_deletion_records(&self) -> Vec<(u32 /*index of disk file in snapshot*/, u32 /*row id*/)> {
+    fn get_deletion_records(
+        &self,
+    ) -> Vec<(
+        u32, /*index of disk file in snapshot*/
+        u32, /*row id*/
+    )> {
         let mut ret = Vec::new();
         for deletion in self.committed_deletion_log.iter() {
             if let RecordLocation::DiskFile(file_name, row_id) = &deletion.pos {

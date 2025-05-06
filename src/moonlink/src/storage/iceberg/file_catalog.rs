@@ -86,6 +86,7 @@ fn get_base_directory(path_str: &str) -> String {
     }
 }
 
+/// FileSystem catalog is the catalog implementation for local filesystem backend, and it's intended for single threaded use case.
 #[derive(Debug)]
 pub struct FileSystemCatalog {
     file_io: FileIO,
@@ -117,10 +118,10 @@ impl FileSystemCatalog {
         }
     }
 
-    // Get puffin metadata from the writer, and close it.
-    //
-    // TODO(hjiang): iceberg-rust currently doesn't support puffin write, to workaround and reduce code change,
-    // we record puffin metadata ourselves and rewrite manifest file before transaction commits.
+    /// Get puffin metadata from the writer, and close it.
+    ///
+    /// TODO(hjiang): iceberg-rust currently doesn't support puffin write, to workaround and reduce code change,
+    /// we record puffin metadata ourselves and rewrite manifest file before transaction commits.
     pub(crate) async fn record_puffin_metadata_and_close(
         &mut self,
         puffin_filepath: String,
@@ -131,6 +132,11 @@ impl FileSystemCatalog {
             get_puffin_metadata_and_close(puffin_writer).await?,
         );
         Ok(())
+    }
+
+    /// After transaction commits, puffin metadata should be cleared for next puffin write.
+    pub(crate) fn clear_puffin_metadata(&mut self) {
+        self.puffin_blobs.clear();
     }
 
     /// Load metadata for the given table.
@@ -1027,7 +1033,7 @@ mod tests {
     async fn test_update_table() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileSystemCatalog::new(warehouse_path.to_string());
+        let mut catalog = FileSystemCatalog::new(warehouse_path.to_string());
         create_test_table(&catalog).await?;
 
         let namespace = NamespaceIdent::from_strs(["default"])?;
@@ -1090,6 +1096,8 @@ mod tests {
 
         // Check table metadata.
         let table = catalog.update_table(table_commit).await?;
+        catalog.clear_puffin_metadata();
+
         let table_metadata = table.metadata();
         assert_eq!(
             **table_metadata.current_schema(),

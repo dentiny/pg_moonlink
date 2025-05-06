@@ -11,6 +11,8 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
+
+// TODO(hjiang): Split into two structs, DiskSliceWriter and DiskSlice.
 pub(crate) struct DiskSliceWriter {
     /// The schema of the DiskSlice.
     ///
@@ -32,6 +34,7 @@ pub(crate) struct DiskSliceWriter {
 
     new_index: Option<FileIndex>,
 
+    /// Records already flushed data files.
     files: Vec<(PathBuf /* file path */, usize /* row count */)>,
 }
 
@@ -62,7 +65,7 @@ impl DiskSliceWriter {
         }
     }
 
-    /// Apply deletion vector to in-memory batches, and write to parquet files.
+    /// Apply deletion vector to in-memory batches, write to parquet files and remap index.
     pub(super) fn write(&mut self) -> Result<()> {
         let mut filtered_batches = Vec::new();
         let mut id = 0;
@@ -102,7 +105,9 @@ impl DiskSliceWriter {
     pub(super) fn old_index(&self) -> &Arc<MemIndex> {
         &self.old_index
     }
+
     /// Write record batches to parquet files in synchronous mode.
+    /// TODO(hjiang): Parallelize the parquet file write operations.
     fn write_batch_to_parquet(
         &mut self,
         record_batches: &Vec<(usize, RecordBatch, Vec<usize>)>,

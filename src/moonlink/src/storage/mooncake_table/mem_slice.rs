@@ -35,7 +35,10 @@ impl MemSlice {
     }
 
     /// Delete the given record from mem slice, and return its location if exists.
-    pub(super) fn delete(&mut self, record: &RawDeletionRecord) -> Option<(u64/*batch_id*/, usize/*row_offset*/)> {
+    pub(super) fn delete(
+        &mut self,
+        record: &RawDeletionRecord,
+    ) -> Option<(u64 /*batch_id*/, usize /*row_offset*/)> {
         let locations = self.mem_index.find_record(record)?;
 
         for location in locations {

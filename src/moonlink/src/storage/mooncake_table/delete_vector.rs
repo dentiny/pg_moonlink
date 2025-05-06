@@ -4,7 +4,7 @@ use arrow::compute;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BatchDeletionVector {
     /// Boolean array tracking deletions (false = deleted, true = active)
     deletion_vector: Option<Vec<u8>>,

@@ -312,7 +312,8 @@ impl MooncakeTable {
         self.transaction_stream_states.remove(&xact_id);
     }
 
-    async fn inner_flush(
+    /// Flush the given MemSlice and in-memory record batches into data files.
+    async fn inner_flush_data_files(
         mem_slice: &mut MemSlice,
         snapshot_task: &mut SnapshotTask,
         metadata: &Arc<TableMetadata>,
@@ -363,7 +364,7 @@ impl MooncakeTable {
             snapshot_task.flushed_xacts.insert(xact_id, lsn);
 
             let disk_slice =
-                Self::inner_flush(mem_slice, snapshot_task, &self.metadata, lsn).await?;
+                Self::inner_flush_data_files(mem_slice, snapshot_task, &self.metadata, lsn).await?;
             self.next_snapshot_task.new_disk_slices.push(disk_slice);
             Ok(())
         } else {
@@ -374,8 +375,8 @@ impl MooncakeTable {
     // UNDONE(BATCH_INSERT):
     // flush uncommitted batches from big batch insert
     pub async fn flush(&mut self, lsn: u64) -> Result<()> {
-        // Call inner_flush directly and await
-        let disk_slice = Self::inner_flush(
+        // Flush data files into iceberb table.
+        let disk_slice = Self::inner_flush_data_files(
             &mut self.mem_slice,
             &mut self.next_snapshot_task,
             &self.metadata,
