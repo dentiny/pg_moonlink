@@ -14,14 +14,14 @@ pub(crate) struct SnapshotTableState {
     /// Current snapshot
     current_snapshot: Snapshot,
 
-    /// In memory RecordBatches
+    /// In memory RecordBatches, maps from batch to in-memory batch.
     batches: BTreeMap<u64, InMemoryBatch>,
 
     /// Latest rows
     rows: Option<SharedRowBufferSnapshot>,
 
     // UNDONE(BATCH_INSERT):
-    // Track uncommited disk files/ batches from big batch insert
+    // Track uncommitted disk files/ batches from big batch insert
 
     // Track a log of position deletions on disk_files,
     // since last iceberg snapshot
@@ -52,6 +52,7 @@ impl SnapshotTableState {
         }
     }
 
+    /// Return current snapshot's version.
     pub(super) fn update_snapshot(&mut self, mut next_snapshot_task: SnapshotTask) -> u64 {
         let batch_size = self.current_snapshot.metadata.config.batch_size;
         if !next_snapshot_task.new_mem_indices.is_empty() {
@@ -113,7 +114,7 @@ impl SnapshotTableState {
             }
         }
         self.rows = take(&mut next_snapshot_task.new_rows);
-        Self::process_deletion_log(self, &mut next_snapshot_task);
+        self.process_deletion_log(&mut next_snapshot_task);
         if next_snapshot_task.new_lsn != 0 {
             self.current_snapshot.snapshot_version = next_snapshot_task.new_lsn;
         }
@@ -173,6 +174,7 @@ impl SnapshotTableState {
         }
     }
 
+    /// Commit a row deletion record.
     fn commit_deletion(&mut self, deletion: ProcessedDeletionRecord) {
         match &deletion.pos {
             RecordLocation::MemoryBatch(batch_id, row_id) => {
@@ -201,8 +203,9 @@ impl SnapshotTableState {
         self.committed_deletion_log.push(deletion);
     }
 
+    /// Commit a few uncommitted valid deletion logs, with lsn <= new_lsn.
     fn process_deletion_log(&mut self, next_snapshot_task: &mut SnapshotTask) {
-        let mut new_commited_deletion = vec![];
+        let mut deletion_to_commit = vec![];
         self.uncommitted_deletion_log.retain_mut(|deletion| {
             let mut should_keep = true;
 
@@ -220,30 +223,32 @@ impl SnapshotTableState {
 
             // After potentially updating LSN, check if it's now committed
             if should_keep && deletion.as_ref().unwrap().lsn <= next_snapshot_task.new_lsn {
-                new_commited_deletion.push(deletion.take().unwrap());
+                deletion_to_commit.push(deletion.take().unwrap());
                 should_keep = false;
             }
 
             should_keep
         });
-        for deletion in new_commited_deletion {
-            Self::commit_deletion(self, deletion);
+        for deletion in deletion_to_commit.into_iter() {
+            self.commit_deletion(deletion);
         }
+
         // Move committed deletions (lsn <= new_lsn) to committed deletion log
         // add raw deletion records, use index to find position and add to deletion buffer
         let new_deletions = take(&mut next_snapshot_task.new_deletions);
         // apply deletion records to deletion vectors
         for deletion in new_deletions {
-            let processed_deletion = Self::process_delete_record(self, deletion);
+            let processed_deletion = self.process_delete_record(deletion);
             if processed_deletion.lsn <= next_snapshot_task.new_lsn {
-                Self::commit_deletion(self, processed_deletion);
+                self.commit_deletion(processed_deletion);
             } else {
                 self.uncommitted_deletion_log.push(Some(processed_deletion));
             }
         }
     }
 
-    fn get_deletion_records(&self) -> Vec<(u32, u32)> {
+    /// Get committed deletion record for current snapshot.
+    fn get_deletion_records(&self) -> Vec<(u32 /*index of disk file in snapshot*/, u32 /*row id*/)> {
         let mut ret = Vec::new();
         for deletion in self.committed_deletion_log.iter() {
             if let RecordLocation::DiskFile(file_name, row_id) = &deletion.pos {
@@ -258,7 +263,6 @@ impl SnapshotTableState {
         ret
     }
 
-    #[allow(clippy::type_complexity)]
     pub(crate) fn request_read(&self) -> Result<ReadOutput> {
         let mut file_paths: Vec<String> = Vec::new();
         let mut associated_files = Vec::new();

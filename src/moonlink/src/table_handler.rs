@@ -96,13 +96,11 @@ impl TableHandler {
                                 }
                             }
                         }
-
                         TableEvent::StreamCommit { lsn, xact_id } => {
                             if let Err(e) = table.flush_transaction_stream(xact_id, lsn).await {
                                 println!("Stream commit flush failed: {}", e);
                             }
                         }
-
                         TableEvent::StreamAbort { xact_id } => {
                             table.abort_in_stream_batch(xact_id);
                         }

@@ -117,11 +117,14 @@ pub struct SnapshotTask {
     ///
     new_disk_slices: Vec<DiskSliceWriter>,
     new_deletions: Vec<RawDeletionRecord>,
+    /// Pair of <batch id, record batch>.
     new_record_batches: Vec<(u64, Arc<RecordBatch>)>,
     new_rows: Option<SharedRowBufferSnapshot>,
     new_mem_indices: Vec<Arc<MemIndex>>,
+    /// Assigned (non-zero) after a commit event.
     new_lsn: u64,
     new_commit_point: Option<RecordLocation>,
+    /// Maps from xact_id to its LSN.
     flushed_xacts: HashMap<u32, u64>,
     aborted_xacts: Vec<u32>,
 }
@@ -177,14 +180,16 @@ pub struct MooncakeTable {
     ///
     mem_slice: MemSlice,
 
-    // Current snapshot of the table
+    /// Current snapshot of the table
     snapshot: Arc<RwLock<SnapshotTableState>>,
 
     table_snapshot_watch_sender: watch::Sender<u64>,
     table_snapshot_watch_receiver: watch::Receiver<u64>,
+
+    /// Records all the write operations since last snapshot.
     next_snapshot_task: SnapshotTask,
 
-    // Stream state per transaction
+    /// Stream state per transaction, keyed by xact-id.
     transaction_stream_states: HashMap<u32, TransactionStreamState>,
 }
 
@@ -381,7 +386,7 @@ impl MooncakeTable {
         Ok(())
     }
 
-    // Create a snapshot of the last committed version
+    // Create a snapshot of the last committed version, return current snapshot's version.
     //
     pub(crate) fn create_snapshot(&mut self) -> Option<JoinHandle<u64>> {
         if !self.next_snapshot_task.should_create_snapshot() {

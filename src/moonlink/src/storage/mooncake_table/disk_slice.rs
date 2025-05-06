@@ -62,6 +62,7 @@ impl DiskSliceWriter {
         }
     }
 
+    /// Apply deletion vector to in-memory batches, and write to parquet files.
     pub(super) fn write(&mut self) -> Result<()> {
         let mut filtered_batches = Vec::new();
         let mut id = 0;
@@ -101,7 +102,7 @@ impl DiskSliceWriter {
     pub(super) fn old_index(&self) -> &Arc<MemIndex> {
         &self.old_index
     }
-    /// Write record batches to parquet files
+    /// Write record batches to parquet files in synchronous mode.
     fn write_batch_to_parquet(
         &mut self,
         record_batches: &Vec<(usize, RecordBatch, Vec<usize>)>,

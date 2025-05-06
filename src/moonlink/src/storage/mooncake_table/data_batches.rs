@@ -232,6 +232,7 @@ mod tests {
     use crate::row::RowValue;
     use arrow::datatypes::{DataType, Field};
 
+    // TODO(hjiang): Add unit test for ColumnStoreBuffer with deletion, and check record batch content.
     #[test]
     fn test_column_store_buffer() -> Result<()> {
         let schema = Schema::new(vec![
@@ -276,6 +277,7 @@ mod tests {
         buffer.finalize_current_batch()?;
 
         let batches = buffer.drain();
+        assert_eq!(batches.len(), 2);
         println!("batches: {:?}", batches);
         Ok(())
     }
