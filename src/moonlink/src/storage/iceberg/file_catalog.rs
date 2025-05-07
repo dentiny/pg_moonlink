@@ -130,7 +130,7 @@ impl FileSystemCatalog {
                     &self.warehouse_location,
                 )))
                 .await?;
-                Ok(FileSystemOperator { op: op })
+                Ok(FileSystemOperator { op })
             })
             .await
     }

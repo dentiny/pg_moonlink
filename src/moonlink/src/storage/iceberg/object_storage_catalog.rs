@@ -162,7 +162,7 @@ impl S3Catalog {
                     .expect("failed to create operator")
                     .layer(retry_layer)
                     .finish();
-                Ok(ObjectStorageOperator { op: op })
+                Ok(ObjectStorageOperator { op })
             })
             .await
     }

@@ -17,7 +17,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::storage::iceberg::validation as IcebergValidation;
-use futures::executor::block_on;
 use iceberg::io::FileIO;
 use iceberg::puffin::CompressionCodec;
 use iceberg::spec::DataFileFormat;
@@ -33,6 +32,7 @@ use mockall::*;
 use uuid::Uuid;
 
 #[allow(dead_code)]
+#[derive(Clone, Debug)]
 pub struct IcebergTableManagerConfig {
     /// Table warehouse location.
     warehouse_uri: String,
@@ -80,12 +80,15 @@ struct DataFileEntry {
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct IcebergTableManager {
+    /// Iceberg table configuration.
+    config: IcebergTableManagerConfig,
+
     /// TODO(hjiang): A workaround iceberg-rust doesn't support deletion vector yet.
     /// Support only filesystem catalog for now, will add object storage catalog.
     filesystem_catalog: FileSystemCatalog,
 
     /// The iceberg table it's managing.
-    iceberg_table: IcebergTable,
+    iceberg_table: Option<IcebergTable>,
 
     /// Mooncake table metadata.
     mooncake_table_metadata: Arc<MooncakeTableMetadata>,
@@ -97,24 +100,32 @@ pub struct IcebergTableManager {
 impl IcebergTableManager {
     // TODO(hjiang): Revisit if we could have synchronous IO operations at table creation.
     #[allow(dead_code)]
-    pub fn new(config: IcebergTableManagerConfig) -> IcebergResult<IcebergTableManager> {
+    pub fn new(config: IcebergTableManagerConfig) -> IcebergTableManager {
         let filesystem_catalog = FileSystemCatalog::new(config.warehouse_uri.clone());
-        let iceberg_table = block_on(catalog_utils::get_or_create_iceberg_table(
-            &filesystem_catalog,
-            &config.warehouse_uri,
-            &config.namespace,
-            &config.table_name.clone(),
-            config.table_metadata.schema.as_ref(),
-        ))?;
-
-        let mut table_manager = Self {
+        let mooncake_table_metadata = config.table_metadata.clone();
+        Self {
+            config,
             filesystem_catalog,
-            iceberg_table,
-            mooncake_table_metadata: config.table_metadata,
+            iceberg_table: None,
+            mooncake_table_metadata,
             persisted_items: HashMap::new(),
-        };
-        block_on(table_manager.load_from_table())?;
-        Ok(table_manager)
+        }
+    }
+
+    /// Get or create an iceberg table, and load full table status into table manager.
+    async fn get_or_create_table(&mut self) -> IcebergResult<()> {
+        if self.iceberg_table.is_none() {
+            let table = catalog_utils::get_or_create_iceberg_table(
+                &self.filesystem_catalog,
+                &self.config.warehouse_uri,
+                &self.config.namespace,
+                &self.config.table_name.clone(),
+                self.config.table_metadata.schema.as_ref(),
+            )
+            .await?;
+            self.iceberg_table = Some(table);
+        }
+        Ok(())
     }
 
     /// Write deletion vector to puffin file.
@@ -140,7 +151,7 @@ impl IcebergTableManager {
                     deleted_row_count.to_string(),
                 ),
             ]);
-            let table_metadata = self.iceberg_table.metadata();
+            let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
             let blob = iceberg_deletion_vector.serialize(
                 table_metadata.current_snapshot_id().unwrap_or(-1),
                 table_metadata.next_sequence_number(),
@@ -148,12 +159,13 @@ impl IcebergTableManager {
             );
 
             // TODO(hjiang): Current iceberg-rust doesn't support deletion vector officially, so we do our own hack to rewrite manifest file by our own catalog implementation.
-            let location_generator =
-                DefaultLocationGenerator::new(self.iceberg_table.metadata().clone())?;
+            let location_generator = DefaultLocationGenerator::new(
+                self.iceberg_table.as_ref().unwrap().metadata().clone(),
+            )?;
             let puffin_filepath =
                 location_generator.generate_location(&format!("{}-puffin.bin", Uuid::new_v4()));
             let mut puffin_writer = puffin_utils::create_puffin_writer(
-                self.iceberg_table.file_io(),
+                self.iceberg_table.as_ref().unwrap().file_io(),
                 puffin_filepath.clone(),
             )
             .await?;
@@ -228,6 +240,9 @@ impl IcebergOperation for IcebergTableManager {
         &mut self,
         disk_files: HashMap<PathBuf, BatchDeletionVector>,
     ) -> IcebergResult<()> {
+        // Initialize iceberg table on acess.
+        self.get_or_create_table().await?;
+
         let mut new_data_files = vec![];
         let mut new_persisted_items: HashMap<PathBuf, DataFileEntry> = HashMap::new();
         let old_persisted_items = self.persisted_items.clone();
@@ -250,7 +265,7 @@ impl IcebergOperation for IcebergTableManager {
                 }
                 None => {
                     let data_file = catalog_utils::write_record_batch_to_iceberg(
-                        &self.iceberg_table,
+                        self.iceberg_table.as_ref().unwrap(),
                         &local_path,
                     )
                     .await?;
@@ -270,19 +285,19 @@ impl IcebergOperation for IcebergTableManager {
         }
         self.persisted_items = new_persisted_items;
 
-        let txn = Transaction::new(&self.iceberg_table);
+        let txn = Transaction::new(self.iceberg_table.as_ref().unwrap());
         let mut action =
             txn.fast_append(/*commit_uuid=*/ None, /*key_metadata=*/ vec![])?;
         action.add_data_files(new_data_files)?;
         let txn = action.apply().await?;
-        self.iceberg_table = txn.commit(&self.filesystem_catalog).await?;
+        self.iceberg_table = Some(txn.commit(&self.filesystem_catalog).await?);
         self.filesystem_catalog.clear_puffin_metadata();
 
         Ok(())
     }
 
     async fn load_from_table(&mut self) -> IcebergResult<()> {
-        let table_metadata = self.iceberg_table.metadata();
+        let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
 
         // There's nothing stored in iceberg table (aka, first time initialization).
         if table_metadata.current_snapshot().is_none() {
@@ -292,10 +307,13 @@ impl IcebergOperation for IcebergTableManager {
         // Load table state into iceberg table manager.
         let snapshot_meta = table_metadata.current_snapshot().unwrap();
         let manifest_list = snapshot_meta
-            .load_manifest_list(self.iceberg_table.file_io(), table_metadata)
+            .load_manifest_list(
+                self.iceberg_table.as_ref().unwrap().file_io(),
+                table_metadata,
+            )
             .await?;
 
-        let file_io = self.iceberg_table.file_io().clone();
+        let file_io = self.iceberg_table.as_ref().unwrap().file_io().clone();
         for manifest_file in manifest_list.entries().iter() {
             assert_eq!(
                 manifest_file.content,
@@ -480,7 +498,11 @@ mod tests {
         );
 
         // Check the loaded data file is of the expected format and content.
-        let file_io = iceberg_table_manager.iceberg_table.file_io();
+        let file_io = iceberg_table_manager
+            .iceberg_table
+            .as_ref()
+            .unwrap()
+            .file_io();
         for (loaded_path, loaded_deletion_vector) in iceberg_table_manager.persisted_items.iter() {
             let loaded_arrow_batch =
                 load_arrow_batch(file_io, loaded_path.to_str().unwrap()).await?;
@@ -543,7 +565,7 @@ mod tests {
             namespace: vec!["namespace".to_string()],
             table_name: "test_table".to_string(),
         };
-        let mut iceberg_table_manager = IcebergTableManager::new(config)?;
+        let mut iceberg_table_manager = IcebergTableManager::new(config);
         test_store_and_load_snapshot_impl(&mut iceberg_table_manager).await?;
         Ok(())
     }
