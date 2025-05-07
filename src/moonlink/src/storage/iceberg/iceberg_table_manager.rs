@@ -4,13 +4,13 @@ use crate::storage::iceberg::deletion_vector::{
     DELETION_VECTOR_CADINALITY, DELETION_VECTOR_REFERENCED_DATA_FILE,
 };
 /// IcebergTableManager is responsible to interact with an iceberg table, including
-/// - read and write operations for all types of storage
-/// - maintain metadata for table write status; for example, persisted data files and their corresponding deletion vector
+/// - read and write operations for all types of storage backends
+/// - maintain metadata for table status; for example, persisted data files and their corresponding deletion vector
 /// - local caching
 use crate::storage::iceberg::file_catalog::FileSystemCatalog;
 use crate::storage::iceberg::puffin_utils;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
-use crate::storage::mooncake_table::TableMetadata as MoonlinkTableMetadata;
+use crate::storage::mooncake_table::TableMetadata as MooncakeTableMetadata;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -36,12 +36,12 @@ use uuid::Uuid;
 pub struct IcebergTableManagerConfig {
     /// Table warehouse location.
     warehouse_uri: String,
-    /// Moonlink table metadata.
-    table_metadata: Arc<MoonlinkTableMetadata>,
+    /// Mooncake table metadata.
+    table_metadata: Arc<MooncakeTableMetadata>,
     /// Namespace for the iceberg table.
     namespace: Vec<String>,
     /// Iceberg table name.
-    table: String,
+    table_name: String,
 }
 
 #[allow(dead_code)]
@@ -75,9 +75,8 @@ struct DataFileEntry {
 }
 
 /// TODO(hjiang):
-/// 1. Craft a trait for table manager so we could mock later.
-/// 2. Support a data file handle, which is a remote file path, plus an optional local cache filepath.
-/// 3. Support a deletion vector handle, which is a remote file path, with an optional in-memory buffer and a local cache filepath.
+/// 1. Support a data file handle, which is a remote file path, plus an optional local cache filepath.
+/// 2. Support a deletion vector handle, which is a remote file path, with an optional in-memory buffer and a local cache filepath.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct IcebergTableManager {
@@ -88,8 +87,8 @@ pub struct IcebergTableManager {
     /// The iceberg table it's managing.
     iceberg_table: IcebergTable,
 
-    /// Moonlink table metadata.
-    mooncake_table_metadata: Arc<MoonlinkTableMetadata>,
+    /// Mooncake table metadata.
+    mooncake_table_metadata: Arc<MooncakeTableMetadata>,
 
     /// Maps from already persisted data file filepath to its deletion vector, and iceberg `DataFile`.
     persisted_items: HashMap<PathBuf, DataFileEntry>,
@@ -104,7 +103,7 @@ impl IcebergTableManager {
             &filesystem_catalog,
             &config.warehouse_uri,
             &config.namespace,
-            &config.table.clone(),
+            &config.table_name.clone(),
             config.table_metadata.schema.as_ref(),
         ))?;
 
@@ -335,12 +334,12 @@ mod tests {
     use super::*;
 
     use crate::storage::index;
-    use crate::storage::mooncake_table::{TableConfig, TableMetadata as MoonlinkTableMetadata};
+    use crate::storage::mooncake_table::{TableConfig, TableMetadata as MooncakeTableMetadata};
 
     use std::collections::HashMap;
     use std::fs::File;
     use std::sync::Arc;
-    use tempfile::tempdir;
+    use tempfile::{tempdir, TempDir};
 
     use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
     use arrow_array::{Int32Array, RecordBatch, StringArray};
@@ -372,6 +371,21 @@ mod tests {
                 HashMap::from([("PARQUET:field_id".to_string(), "2".to_string())]),
             ),
         ]))
+    }
+
+    /// Test util function to create mooncake table metadata.
+    fn create_mooncake_table_metadata(
+        arrow_schema: Arc<ArrowSchema>,
+        tmp_dir: &TempDir,
+    ) -> Arc<MooncakeTableMetadata> {
+        Arc::new(MooncakeTableMetadata {
+            name: "test_table".to_string(),
+            schema: arrow_schema.clone(),
+            id: 0, // unused.
+            config: TableConfig::new(),
+            path: tmp_dir.path().to_path_buf(),
+            get_lookup_key: index::get_lookup_key,
+        })
     }
 
     /// Test util function to create arrow record batch.
@@ -522,19 +536,12 @@ mod tests {
         // Create arrow schema and table.
         let arrow_schema = create_test_arrow_schema();
         let tmp_dir = tempdir()?;
-        let metadata = Arc::new(MoonlinkTableMetadata {
-            name: "test_table".to_string(),
-            schema: arrow_schema.clone(),
-            id: 0, // unused.
-            config: TableConfig::new(),
-            path: tmp_dir.path().to_path_buf(),
-            get_lookup_key: |_row| 1, // unused.
-        });
+        let mooncake_table_metadata = create_mooncake_table_metadata(arrow_schema, &tmp_dir);
         let config = IcebergTableManagerConfig {
             warehouse_uri: "invalid_warehouse_uri".to_string(),
-            table_metadata: metadata,
+            table_metadata: mooncake_table_metadata,
             namespace: vec!["namespace".to_string()],
-            table: "test_table".to_string(),
+            table_name: "test_table".to_string(),
         };
         let iceberg_table_manager = IcebergTableManager::new(config);
         assert!(
@@ -551,19 +558,12 @@ mod tests {
         // Create arrow schema and table.
         let arrow_schema = create_test_arrow_schema();
         let tmp_dir = tempdir()?;
-        let metadata = Arc::new(MoonlinkTableMetadata {
-            name: "test_table".to_string(),
-            schema: arrow_schema.clone(),
-            id: 0, // unused.
-            config: TableConfig::new(),
-            path: tmp_dir.path().to_path_buf(),
-            get_lookup_key: index::get_lookup_key,
-        });
+        let mooncake_table_metadata = create_mooncake_table_metadata(arrow_schema, &tmp_dir);
         let config = IcebergTableManagerConfig {
-            warehouse_uri: metadata.path.to_str().unwrap().to_string(),
-            table_metadata: metadata,
+            warehouse_uri: mooncake_table_metadata.path.to_str().unwrap().to_string(),
+            table_metadata: mooncake_table_metadata,
             namespace: vec!["namespace".to_string()],
-            table: "test_table".to_string(),
+            table_name: "test_table".to_string(),
         };
         let mut iceberg_table_manager = IcebergTableManager::new(config)?;
         test_store_and_load_snapshot_impl(&mut iceberg_table_manager).await?;

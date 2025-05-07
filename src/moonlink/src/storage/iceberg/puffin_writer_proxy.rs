@@ -205,7 +205,6 @@ pub(crate) async fn get_puffin_metadata_and_close(
 }
 
 /// Get manifest with the given sequence number, append with puffion deletion vector blob and rewrite it.
-/// It's worth noting, it's only allowed to have one deletion vector for a data file, so
 ///
 /// Note: this function should be called before catalog transaction commit.
 ///
