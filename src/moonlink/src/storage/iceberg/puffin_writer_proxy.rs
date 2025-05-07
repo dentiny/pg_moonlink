@@ -208,7 +208,7 @@ pub(crate) async fn get_puffin_metadata_and_close(
 /// It's worth noting, it's only allowed to have one deletion vector for a data file, so 
 /// 
 /// Note: this function should be called before catalog transaction commit.
-//
+///
 /// path: filepath for the puffin file.
 pub(crate) async fn append_puffin_metadata_and_rewrite(
     table_metadata: &TableMetadata,
@@ -242,16 +242,49 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
     )
     .build_v2_data();
 
-    // Add existing data files to manifest writer.
+    // Map from referenced data file to deletion vector manifest entry.
+    //
+    // TODO(hjiang): Avoid a few clones for manifest entries.
+    let mut existing_deletion_vector_entries = HashMap::new();
     for cur_manifest_entry in manifest_entries.iter() {
-        manifest_writer.add_file(
-            cur_manifest_entry.data_file.clone(),
-            cur_manifest_entry.sequence_number().unwrap(),
-        )?;
+        // Add existing data files manifest entries to manifest writer.
+        if cur_manifest_entry.file_format() == DataFileFormat::Parquet {
+            manifest_writer.add_file(
+                cur_manifest_entry.data_file.clone(),
+                cur_manifest_entry.sequence_number().unwrap(),
+            )?;
+            continue;
+        }
+
+        // Keep record deletion vector for potential later overwrite.
+        assert_eq!(
+            cur_manifest_entry.file_format(),
+            DataFileFormat::Puffin,
+            "Expect manifest entry to be either parquet or puffin."
+        );
+        let old_entry = existing_deletion_vector_entries.insert(
+            cur_manifest_entry
+                .data_file()
+                .referenced_data_file()
+                .unwrap(),
+            cur_manifest_entry,
+        );
+        assert_ne!(
+            old_entry,
+            None,
+            "Deletion vector for the same data file {:?} appeared for multiple times!",
+            old_entry.unwrap().data_file().file_path()
+        );
     }
 
     // Append puffin blobs into existing manifest entries.
     for cur_blob_metadata in blob_metadata.iter() {
+        let referenced_data_filepath = cur_blob_metadata
+            .properties
+            .get(DELETION_VECTOR_REFERENCED_DATA_FILE)
+            .unwrap()
+            .clone();
+
         let new_data_file = DataFileProxy {
             content: DataContentType::Data,
             file_path: puffin_filepath.to_string(),
@@ -276,18 +309,21 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
             sort_order_id: None,
             first_row_id: None,
             partition_spec_id: 0,
-            referenced_data_file: Some(
-                cur_blob_metadata
-                    .properties
-                    .get(DELETION_VECTOR_REFERENCED_DATA_FILE)
-                    .unwrap()
-                    .clone(),
-            ),
+            referenced_data_file: Some(referenced_data_filepath.clone()),
             content_offset: Some(cur_blob_metadata.offset as i64),
             content_size_in_bytes: Some(cur_blob_metadata.length as i64),
         };
+        existing_deletion_vector_entries.remove(&referenced_data_filepath);
         let data_file = unsafe { std::mem::transmute::<DataFileProxy, DataFile>(new_data_file) };
         manifest_writer.add_file(data_file, cur_blob_metadata.sequence_number)?;
+    }
+
+    // Add old deletion vector entries which doesn't get overwritten.
+    for (_, cur_manifest_entry) in existing_deletion_vector_entries.drain() {
+        manifest_writer.add_file(
+            cur_manifest_entry.data_file().clone(),
+            cur_manifest_entry.sequence_number().unwrap(),
+        )?;
     }
 
     // Flush manifest file.
