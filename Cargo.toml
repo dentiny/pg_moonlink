@@ -16,7 +16,7 @@ bitstream-io = "4"
 chrono = { version = "0.4", default-features = false }
 crc32fast = "1"
 futures = { version = "0.3", default-features = false }
-iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "b4bc6dd15ae4f7a4b1c9ce555e3458089a83e228", default-features = false, features = [
+iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "513376cb04b899edf457918c3852a786a292071c", default-features = false, features = [
   "storage-s3",
   "storage-fs",
 ] }
