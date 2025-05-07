@@ -5,15 +5,16 @@ repos:
     - id: fmt
   - repo: local
     hooks:
-    - id: clipper
-      name: clipper
+    # Split clippy command into two parts, because `--fix` suppress the "warning to error" conversion.
+    - id: clipper-fixlint
+      name: clipper-fixlint
       language: system
       files: '\.rs$'
-      entry: cargo clippy --all-targets --fix --allow-dirty --allow-staged -- -D warnings
+      entry: cargo clippy --all-targets --fix --allow-dirty --allow-staged
       pass_filenames: false
-    - id: clipper
-      name: clipper
+    - id: clipper-check
+      name: clipper-check
       language: system
-      files: '\.toml$'
-      entry: cargo sort
+      files: '\.rs$'
+      entry: cargo clippy --all-targets --allow-dirty --allow-staged -- -D warnings
       pass_filenames: false
