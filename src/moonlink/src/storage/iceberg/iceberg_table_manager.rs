@@ -56,13 +56,13 @@ pub(crate) trait IcebergOperation {
     ///
     /// TODO(hjiang): We're storing the iceberg table status in two places, one for iceberg table manager, another at snapshot.
     /// Provide delta change interface, so snapshot doesn't need to store everything.
-    async fn commit_snapshot(
+    async fn sync_snapshot(
         &mut self,
         snapshot_disk_files: HashMap<PathBuf, BatchDeletionVector>,
     ) -> IcebergResult<()>;
 
-    /// Load snapshot from iceberg table. Used for recovery.
-    async fn load_from_table(&mut self) -> IcebergResult<()>
+    /// Load latest snapshot from iceberg table. Used for recovery and initialization.
+    async fn load_snapshot_from_table(&mut self) -> IcebergResult<()>
     where
         Self: Sized;
 }
@@ -236,19 +236,19 @@ impl IcebergTableManager {
     }
 }
 
-/// TODO(hjiang): Parallelize all IO operations and reduce a few copies.
+/// TODO(hjiang): Parallelize all IO operations.
 impl IcebergOperation for IcebergTableManager {
-    async fn commit_snapshot(
+    async fn sync_snapshot(
         &mut self,
-        disk_files: HashMap<PathBuf, BatchDeletionVector>,
+        mut disk_files: HashMap<PathBuf, BatchDeletionVector>,
     ) -> IcebergResult<()> {
-        // Initialize iceberg table on acess.
+        // Initialize iceberg table on access.
         self.get_or_create_table().await?;
 
         let mut new_data_files = vec![];
         let mut new_persisted_items: HashMap<PathBuf, DataFileEntry> = HashMap::new();
         let old_persisted_items = self.persisted_items.clone();
-        for (local_path, deletion_vector) in disk_files.into_iter() {
+        for (local_path, deletion_vector) in disk_files.drain() {
             match old_persisted_items.get(&local_path) {
                 Some(entry) => {
                     if entry.deletion_vector == deletion_vector {
@@ -298,7 +298,7 @@ impl IcebergOperation for IcebergTableManager {
         Ok(())
     }
 
-    async fn load_from_table(&mut self) -> IcebergResult<()> {
+    async fn load_snapshot_from_table(&mut self) -> IcebergResult<()> {
         let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
 
         // There's nothing stored in iceberg table (aka, first time initialization).
@@ -326,9 +326,10 @@ impl IcebergOperation for IcebergTableManager {
             // All files (i.e. data files, deletion vector, manifest files) under the same snapshot are assigned with the same sequence number.
             // Reference: https://iceberg.apache.org/spec/?h=content#sequence-numbers
             let manifest = manifest_file.load_manifest(&file_io).await?;
-            let snapshot_seq_no = manifest.entries().first().unwrap().sequence_number();
+            let (manifest_entries, _) = manifest.into_parts();
+            let snapshot_seq_no = manifest_entries.first().unwrap().sequence_number();
 
-            for entry in manifest.entries() {
+            for entry in manifest_entries.into_iter() {
                 // Sanity check all manifest entries are of the sequence number.
                 let cur_entry_seq_no = entry.sequence_number();
                 if snapshot_seq_no != cur_entry_seq_no {
@@ -475,7 +476,7 @@ mod tests {
         let mut snapshot_disk_files: HashMap<PathBuf, BatchDeletionVector> = HashMap::new();
         snapshot_disk_files.insert(parquet_path.clone(), test_deletion_vector_1());
         iceberg_table_manager
-            .commit_snapshot(snapshot_disk_files.clone())
+            .sync_snapshot(snapshot_disk_files.clone())
             .await?;
 
         // Write second snapshot to iceberg table, with updated deletion vector and new data file.
@@ -488,7 +489,7 @@ mod tests {
             .await?;
         snapshot_disk_files.insert(parquet_path.clone(), test_deletion_vector_1());
         iceberg_table_manager
-            .commit_snapshot(snapshot_disk_files)
+            .sync_snapshot(snapshot_disk_files)
             .await?;
 
         // Check persisted items in the iceberg table.
@@ -556,7 +557,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_commit_snapshots() -> IcebergResult<()> {
+    async fn test_sync_snapshots() -> IcebergResult<()> {
         // Create arrow schema and table.
         let arrow_schema = create_test_arrow_schema();
         let tmp_dir = tempdir()?;
