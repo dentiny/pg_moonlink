@@ -115,7 +115,7 @@ impl IcebergSnapshot for Snapshot {
             let absolute_path = url.path();
             let internal_fs_catalog = Rc::new(RefCell::new(FileSystemCatalog::new(
                 absolute_path.to_string(),
-            )?));
+            )));
             filesystem_catalog = Some(internal_fs_catalog.clone());
             let catalog_rc: Rc<RefCell<dyn Catalog>> = internal_fs_catalog.clone();
             opt_catalog = Some(catalog_rc);

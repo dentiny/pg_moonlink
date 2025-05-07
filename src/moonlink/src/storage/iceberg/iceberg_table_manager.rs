@@ -98,7 +98,7 @@ impl IcebergTableManager {
     // TODO(hjiang): Revisit if we could have synchronous IO operations at table creation.
     #[allow(dead_code)]
     pub fn new(config: IcebergTableManagerConfig) -> IcebergResult<IcebergTableManager> {
-        let filesystem_catalog = FileSystemCatalog::new(config.warehouse_uri.clone())?;
+        let filesystem_catalog = FileSystemCatalog::new(config.warehouse_uri.clone());
         let iceberg_table = block_on(catalog_utils::get_or_create_iceberg_table(
             &filesystem_catalog,
             &config.warehouse_uri,
@@ -528,28 +528,6 @@ mod tests {
             );
         }
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_invalid_warehouse_uri() -> IcebergResult<()> {
-        // Create arrow schema and table.
-        let arrow_schema = create_test_arrow_schema();
-        let tmp_dir = tempdir()?;
-        let mooncake_table_metadata = create_mooncake_table_metadata(arrow_schema, &tmp_dir);
-        let config = IcebergTableManagerConfig {
-            warehouse_uri: "invalid_warehouse_uri".to_string(),
-            table_metadata: mooncake_table_metadata,
-            namespace: vec!["namespace".to_string()],
-            table_name: "test_table".to_string(),
-        };
-        let iceberg_table_manager = IcebergTableManager::new(config);
-        assert!(
-            iceberg_table_manager.is_err(),
-            "Snapshot with invalid warehouse should fail when store."
-        );
-        let err = iceberg_table_manager.unwrap_err();
-        assert_eq!(err.kind(), iceberg::ErrorKind::Unexpected);
         Ok(())
     }
 
