@@ -5,15 +5,22 @@ repos:
     - id: fmt
   - repo: local
     hooks:
-    - id: clipper-autofix
-      name: clipper-autofix
+    - id: cargo-sort
+      name: cargo-sort
+      language: system
+      files: '\.toml$'
+      entry: cargo sort --workspace
+      pass_filenames: false
+    # Split clippy command into two parts, because `--fix` suppress the "warning to error" conversion.
+    - id: clipper-fixlint
+      name: clipper-fixlint
       language: system
       files: '\.rs$'
       entry: cargo clippy --all-targets --fix --allow-dirty --allow-staged
       pass_filenames: false
-    - id: clipper-error
-      name: clipper-error
+    - id: clipper-check
+      name: clipper-check
       language: system
       files: '\.rs$'
-      entry: cargo clippy --all-targets --allow-dirty --allow-staged -- -D warnings
+      entry: cargo clippy --all-targets -- -D warnings
       pass_filenames: false
