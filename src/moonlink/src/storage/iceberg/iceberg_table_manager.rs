@@ -48,6 +48,12 @@ pub struct IcebergTableManagerConfig {
 #[automock]
 pub(crate) trait IcebergOperation {
     /// Write a new snapshot to iceberg table.
+    /// It could be called for multiple times to write and commit multiple snapshots.
+    ///
+    /// Please notice, it takes full content to commit snapshot.
+    ///
+    /// TODO(hjiang): We're storing the iceberg table status in two places, one for iceberg table manager, another at snapshot.
+    /// Provide delta change interface, so snapshot doesn't need to store everything.
     async fn commit_snapshot(
         &mut self,
         snapshot_disk_files: HashMap<PathBuf, BatchDeletionVector>,
@@ -90,6 +96,8 @@ pub struct IcebergTableManager {
 }
 
 impl IcebergTableManager {
+    // TODO(hjiang): Revisit if we could have synchronous IO operations at table creation.
+    #[allow(dead_code)]
     pub fn new(config: IcebergTableManagerConfig) -> IcebergResult<IcebergTableManager> {
         let filesystem_catalog = FileSystemCatalog::new(config.warehouse_uri.clone())?;
         let iceberg_table = block_on(catalog_utils::get_or_create_iceberg_table(
@@ -100,12 +108,14 @@ impl IcebergTableManager {
             config.table_metadata.schema.as_ref(),
         ))?;
 
-        Ok(Self {
+        let mut table_manager = Self {
             filesystem_catalog,
             iceberg_table,
             mooncake_table_metadata: config.table_metadata,
             persisted_items: HashMap::new(),
-        })
+        };
+        block_on(table_manager.load_from_table())?;
+        Ok(table_manager)
     }
 
     /// Write deletion vector to puffin file.
@@ -197,7 +207,6 @@ impl IcebergTableManager {
         }
 
         let referenced_path_buf: PathBuf = data_file.referenced_data_file().unwrap().into();
-
         let data_file_entry = self.persisted_items.get_mut(&referenced_path_buf);
         assert!(
             data_file_entry.is_some(),
@@ -205,7 +214,7 @@ impl IcebergTableManager {
             referenced_path_buf
         );
 
-        IcebergValidation::validate_puffin_manifest_entry(&entry)?;
+        IcebergValidation::validate_puffin_manifest_entry(entry)?;
         let deletion_vector = DeletionVector::load_from_dv_blob(file_io.clone(), data_file).await?;
         let batch_deletion_vector = deletion_vector.take_as_batch_delete_vector();
         data_file_entry.unwrap().deletion_vector = batch_deletion_vector;
@@ -275,6 +284,13 @@ impl IcebergOperation for IcebergTableManager {
 
     async fn load_from_table(&mut self) -> IcebergResult<()> {
         let table_metadata = self.iceberg_table.metadata();
+
+        // There's nothing stored in iceberg table (aka, first time initialization).
+        if table_metadata.current_snapshot().is_none() {
+            return Ok(());
+        }
+
+        // Load table state into iceberg table manager.
         let snapshot_meta = table_metadata.current_snapshot().unwrap();
         let manifest_list = snapshot_meta
             .load_manifest_list(self.iceberg_table.file_io(), table_metadata)
@@ -318,11 +334,8 @@ impl IcebergOperation for IcebergTableManager {
 mod tests {
     use super::*;
 
-    use crate::storage::iceberg::test_utils;
-    use crate::storage::{
-        iceberg::catalog_utils::create_catalog,
-        mooncake_table::{Snapshot, TableConfig, TableMetadata},
-    };
+    use crate::storage::index;
+    use crate::storage::mooncake_table::{TableConfig, TableMetadata as MoonlinkTableMetadata};
 
     use std::collections::HashMap;
     use std::fs::File;
@@ -396,12 +409,120 @@ mod tests {
         Ok(())
     }
 
+    /// Test util function to load all arrow batch from the given parquert file.
+    async fn load_arrow_batch(file_io: &FileIO, filepath: &str) -> IcebergResult<RecordBatch> {
+        let input_file = file_io.new_input(filepath)?;
+        let input_file_metadata = input_file.metadata().await?;
+        let reader = input_file.reader().await?;
+        let bytes = reader.read(0..input_file_metadata.size).await?;
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
+        let mut reader = builder.build()?;
+        let batch = reader.next().transpose()?.expect("Should have one batch");
+        Ok(batch)
+    }
+
+    /// Test snapshot store and load for different types of catalogs based on the given warehouse.
+    async fn test_store_and_load_snapshot_impl(
+        iceberg_table_manager: &mut IcebergTableManager,
+    ) -> IcebergResult<()> {
+        // At the beginning of the test, there's nothing in table.
+        assert!(iceberg_table_manager.persisted_items.is_empty());
+
+        // Create arrow schema and table.
+        let arrow_schema = create_test_arrow_schema();
+        let tmp_dir = tempdir()?;
+
+        // Write first snapshot to iceberg table (with deletion vector).
+        let data_filename_1 = "data-1.parquet";
+        let batch = test_batch_1(arrow_schema.clone());
+        let parquet_path = tmp_dir.path().join(data_filename_1);
+        write_arrow_record_batch_to_local(parquet_path.as_path(), arrow_schema.clone(), &batch)
+            .await?;
+        let mut snapshot_disk_files: HashMap<PathBuf, BatchDeletionVector> = HashMap::new();
+        snapshot_disk_files.insert(parquet_path.clone(), test_deletion_vector_1());
+        iceberg_table_manager
+            .commit_snapshot(snapshot_disk_files.clone())
+            .await?;
+
+        // Write second snapshot to iceberg table, with updated deletion vector and new data file.
+        snapshot_disk_files.insert(parquet_path.clone(), test_deletion_vector_2());
+
+        let data_filename_2 = "data-2.parquet";
+        let batch = test_batch_2(arrow_schema.clone());
+        let parquet_path = tmp_dir.path().join(data_filename_2);
+        write_arrow_record_batch_to_local(parquet_path.as_path(), arrow_schema.clone(), &batch)
+            .await?;
+        snapshot_disk_files.insert(parquet_path.clone(), test_deletion_vector_1());
+        iceberg_table_manager
+            .commit_snapshot(snapshot_disk_files)
+            .await?;
+
+        // Check persisted items in the iceberg table.
+        assert_eq!(
+            iceberg_table_manager.persisted_items.len(),
+            2,
+            "Persisted items for table manager is {:?}",
+            iceberg_table_manager.persisted_items
+        );
+
+        // Check the loaded data file is of the expected format and content.
+        let file_io = iceberg_table_manager.iceberg_table.file_io();
+        for (loaded_path, loaded_deletion_vector) in iceberg_table_manager.persisted_items.iter() {
+            let loaded_arrow_batch =
+                load_arrow_batch(file_io, loaded_path.to_str().unwrap()).await?;
+            let deleted_rows = loaded_deletion_vector
+                .deletion_vector
+                .collect_deleted_rows();
+            assert_eq!(
+                *loaded_arrow_batch.schema_ref(),
+                arrow_schema,
+                "Expect arrow schema {:?}, actual arrow schema {:?}",
+                arrow_schema,
+                loaded_arrow_batch.schema_ref()
+            );
+
+            // Check second data file and its deletion vector.
+            if loaded_path.to_str().unwrap().ends_with(data_filename_2) {
+                assert_eq!(
+                    loaded_arrow_batch,
+                    test_batch_2(arrow_schema.clone()),
+                    "Expect arrow record batch {:?}, actual arrow record batch {:?}",
+                    loaded_arrow_batch,
+                    test_batch_2(arrow_schema.clone())
+                );
+                assert_eq!(
+                    deleted_rows,
+                    test_deletion_vector_1().collect_deleted_rows(),
+                    "Loaded deletion vector is not the same as the one gets stored."
+                );
+                continue;
+            }
+
+            // Check first data file and its deletion vector.
+            assert!(loaded_path.to_str().unwrap().ends_with(data_filename_1));
+            assert_eq!(
+                loaded_arrow_batch,
+                test_batch_1(arrow_schema.clone()),
+                "Expect arrow record batch {:?}, actual arrow record batch {:?}",
+                loaded_arrow_batch,
+                test_batch_1(arrow_schema.clone())
+            );
+            assert_eq!(
+                deleted_rows,
+                test_deletion_vector_2().collect_deleted_rows(),
+                "Loaded deletion vector is not the same as the one gets stored."
+            );
+        }
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_invalid_warehouse_uri() -> IcebergResult<()> {
         // Create arrow schema and table.
         let arrow_schema = create_test_arrow_schema();
         let tmp_dir = tempdir()?;
-        let metadata = Arc::new(TableMetadata {
+        let metadata = Arc::new(MoonlinkTableMetadata {
             name: "test_table".to_string(),
             schema: arrow_schema.clone(),
             id: 0, // unused.
@@ -422,6 +543,30 @@ mod tests {
         );
         let err = iceberg_table_manager.unwrap_err();
         assert_eq!(err.kind(), iceberg::ErrorKind::Unexpected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_commit_snapshots() -> IcebergResult<()> {
+        // Create arrow schema and table.
+        let arrow_schema = create_test_arrow_schema();
+        let tmp_dir = tempdir()?;
+        let metadata = Arc::new(MoonlinkTableMetadata {
+            name: "test_table".to_string(),
+            schema: arrow_schema.clone(),
+            id: 0, // unused.
+            config: TableConfig::new(),
+            path: tmp_dir.path().to_path_buf(),
+            get_lookup_key: index::get_lookup_key,
+        });
+        let config = IcebergTableManagerConfig {
+            warehouse_uri: metadata.path.to_str().unwrap().to_string(),
+            table_metadata: metadata,
+            namespace: vec!["namespace".to_string()],
+            table: "test_table".to_string(),
+        };
+        let mut iceberg_table_manager = IcebergTableManager::new(config)?;
+        test_store_and_load_snapshot_impl(&mut iceberg_table_manager).await?;
         Ok(())
     }
 }

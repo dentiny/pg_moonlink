@@ -269,9 +269,8 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
                 .unwrap(),
             cur_manifest_entry,
         );
-        assert_ne!(
-            old_entry,
-            None,
+        assert!(
+            old_entry.is_none(),
             "Deletion vector for the same data file {:?} appeared for multiple times!",
             old_entry.unwrap().data_file().file_path()
         );

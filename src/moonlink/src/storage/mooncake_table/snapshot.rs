@@ -121,6 +121,7 @@ impl SnapshotTableState {
         if next_snapshot_task.new_commit_point.is_some() {
             self.last_commit = next_snapshot_task.new_commit_point.unwrap();
         }
+        // TODO(hjiang): now all committed changes are sync-ed to current snapshot, sync the snapshot to iceberg table as well.
         self.current_snapshot.snapshot_version
     }
 
