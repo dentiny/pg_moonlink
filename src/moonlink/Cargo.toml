@@ -13,22 +13,22 @@ bitstream-io = { workspace = true }
 crc32fast = { workspace = true }
 futures = { workspace = true }
 iceberg = { workspace = true }
-memmap2 = "0.9.5"
-mockall = { workspace = true }
+memmap2 = "0.9"
 multimap = { workspace = true }
 opendal = { workspace = true }
 parquet = { workspace = true }
-randomizer = "0.1.2"
+randomizer = "0.1"
 roaring = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-tokio-retry2 = { version = "0.5.7", default-features = false, features = ["jitter"] }
+tokio-retry2 = { version = "0.5", default-features = false, features = ["jitter"] }
 url = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-aws-sdk-s3 = "1.14.0"
+aws-sdk-s3 = "1.14"
+mockall = "0.13"
 pprof = { version = "0.14", features = ["flamegraph"] }
 rand = "0.9.1"
 tempfile = { workspace = true }

@@ -28,8 +28,10 @@ use iceberg::writer::file_writer::location_generator::DefaultLocationGenerator;
 use iceberg::writer::file_writer::location_generator::LocationGenerator;
 use iceberg::Error as IcebergError;
 use iceberg::Result as IcebergResult;
-use mockall::*;
 use uuid::Uuid;
+
+#[cfg(test)]
+use mockall::*;
 
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
@@ -45,7 +47,7 @@ pub struct IcebergTableManagerConfig {
 }
 
 #[allow(dead_code)]
-#[automock]
+#[cfg_attr(test, automock)]
 pub(crate) trait IcebergOperation {
     /// Write a new snapshot to iceberg table.
     /// It could be called for multiple times to write and commit multiple snapshots.
