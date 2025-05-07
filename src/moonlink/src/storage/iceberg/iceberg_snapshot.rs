@@ -212,6 +212,15 @@ impl IcebergSnapshot for Snapshot {
         let txn = action.apply().await?;
         txn.commit(&*catalog.borrow()).await?;
 
+        // Clear catalog puffin metadata.
+        if let Some(filesystem_catalog_val) = &mut filesystem_catalog {
+            filesystem_catalog_val.borrow_mut().clear_puffin_metadata();
+        } else if let Some(object_storage_catalog_val) = &mut object_storage_catalog {
+            object_storage_catalog_val
+                .borrow_mut()
+                .clear_puffin_metadata();
+        }
+
         Ok(())
     }
 

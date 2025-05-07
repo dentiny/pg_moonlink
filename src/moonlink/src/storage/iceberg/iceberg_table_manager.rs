@@ -16,13 +16,18 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::storage::iceberg::validation as IcebergValidation;
 use futures::executor::block_on;
+use iceberg::io::FileIO;
 use iceberg::puffin::CompressionCodec;
-use iceberg::spec::DataFile;
+use iceberg::spec::DataFileFormat;
+use iceberg::spec::ManifestContentType;
+use iceberg::spec::{DataFile, ManifestEntry};
 use iceberg::table::Table as IcebergTable;
 use iceberg::transaction::Transaction;
 use iceberg::writer::file_writer::location_generator::DefaultLocationGenerator;
 use iceberg::writer::file_writer::location_generator::LocationGenerator;
+use iceberg::Error as IcebergError;
 use iceberg::Result as IcebergResult;
 use mockall::*;
 use uuid::Uuid;
@@ -47,12 +52,17 @@ pub(crate) trait IcebergOperation {
         &mut self,
         snapshot_disk_files: HashMap<PathBuf, BatchDeletionVector>,
     ) -> IcebergResult<()>;
+
+    /// Load snapshot from iceberg table. Used for recovery.
+    async fn load_from_table(&mut self) -> IcebergResult<()>
+    where
+        Self: Sized;
 }
 
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct DataFileEntry {
-    /// Iceberg data file.
+    /// Iceberg data file, used to decide what to persist at new commit requests.
     data_file: DataFile,
     /// In-memory deletion vector.
     deletion_vector: BatchDeletionVector,
@@ -148,10 +158,64 @@ impl IcebergTableManager {
 
         Ok(())
     }
+
+    /// Load data file into table manager from the current manifest entry.
+    async fn load_data_file_from_manifest_entry(
+        &mut self,
+        entry: &ManifestEntry,
+    ) -> IcebergResult<()> {
+        let data_file = entry.data_file();
+        if data_file.file_format() == DataFileFormat::Puffin {
+            return Ok(());
+        }
+
+        let file_path = PathBuf::from(data_file.file_path().to_string());
+        assert_eq!(
+            data_file.file_format(),
+            DataFileFormat::Parquet,
+            "Data file is of file format parquet for entry {:?}.",
+            entry,
+        );
+        let new_data_file_entry = DataFileEntry {
+            data_file: data_file.clone(),
+            deletion_vector: BatchDeletionVector::new(/*max_rows=*/ 0),
+        };
+        let old_entry = self.persisted_items.insert(file_path, new_data_file_entry);
+        assert!(old_entry.is_none());
+        Ok(())
+    }
+
+    /// Load deletion vector into table manager from the current manifest entry.
+    async fn load_deletion_vector_from_manifest_entry(
+        &mut self,
+        entry: &ManifestEntry,
+        file_io: &FileIO,
+    ) -> IcebergResult<()> {
+        let data_file = entry.data_file();
+        if data_file.file_format() == DataFileFormat::Parquet {
+            return Ok(());
+        }
+
+        let referenced_path_buf: PathBuf = data_file.referenced_data_file().unwrap().into();
+
+        let data_file_entry = self.persisted_items.get_mut(&referenced_path_buf);
+        assert!(
+            data_file_entry.is_some(),
+            "At recovery, the data file path for {:?} doesn't exist",
+            referenced_path_buf
+        );
+
+        IcebergValidation::validate_puffin_manifest_entry(&entry)?;
+        let deletion_vector = DeletionVector::load_from_dv_blob(file_io.clone(), data_file).await?;
+        let batch_deletion_vector = deletion_vector.take_as_batch_delete_vector();
+        data_file_entry.unwrap().deletion_vector = batch_deletion_vector;
+
+        Ok(())
+    }
 }
 
+/// TODO(hjiang): Parallelize all IO operations and reduce a few copies.
 impl IcebergOperation for IcebergTableManager {
-    /// TODO(hjiang): Parallelize all IO operations.
     async fn commit_snapshot(
         &mut self,
         disk_files: HashMap<PathBuf, BatchDeletionVector>,
@@ -203,8 +267,48 @@ impl IcebergOperation for IcebergTableManager {
             txn.fast_append(/*commit_uuid=*/ None, /*key_metadata=*/ vec![])?;
         action.add_data_files(new_data_files)?;
         let txn = action.apply().await?;
-        txn.commit(&self.filesystem_catalog).await?;
+        self.iceberg_table = txn.commit(&self.filesystem_catalog).await?;
         self.filesystem_catalog.clear_puffin_metadata();
+
+        Ok(())
+    }
+
+    async fn load_from_table(&mut self) -> IcebergResult<()> {
+        let table_metadata = self.iceberg_table.metadata();
+        let snapshot_meta = table_metadata.current_snapshot().unwrap();
+        let manifest_list = snapshot_meta
+            .load_manifest_list(self.iceberg_table.file_io(), table_metadata)
+            .await?;
+
+        let file_io = self.iceberg_table.file_io().clone();
+        for manifest_file in manifest_list.entries().iter() {
+            assert_eq!(
+                manifest_file.content,
+                ManifestContentType::Data,
+                "Iceberg table should only contain data type."
+            );
+
+            // All files (i.e. data files, deletion vector, manifest files) under the same snapshot are assigned with the same sequence number.
+            // Reference: https://iceberg.apache.org/spec/?h=content#sequence-numbers
+            let manifest = manifest_file.load_manifest(&file_io).await?;
+            let snapshot_seq_no = manifest.entries().first().unwrap().sequence_number();
+
+            for entry in manifest.entries() {
+                // Sanity check all manifest entries are of the sequence number.
+                let cur_entry_seq_no = entry.sequence_number();
+                if snapshot_seq_no != cur_entry_seq_no {
+                    return Err(IcebergError::new(
+                        iceberg::ErrorKind::DataInvalid,
+                        format!("When reading from iceberg table, snapshot sequence id inconsistency found {:?} vs {:?}", snapshot_seq_no, cur_entry_seq_no),
+                    ));
+                }
+                // On load, we do two pass on all entries, to check whether all deletion vector has a corresponding data file.
+                self.load_data_file_from_manifest_entry(entry.as_ref())
+                    .await?;
+                self.load_deletion_vector_from_manifest_entry(entry.as_ref(), &file_io)
+                    .await?;
+            }
+        }
 
         Ok(())
     }
