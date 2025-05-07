@@ -16,5 +16,5 @@ repos:
       name: clipper-check
       language: system
       files: '\.rs$'
-      entry: cargo clippy --all-targets --allow-dirty --allow-staged -- -D warnings
+      entry: cargo clippy --all-targets -- -D warnings
       pass_filenames: false
