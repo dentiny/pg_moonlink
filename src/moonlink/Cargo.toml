@@ -4,7 +4,6 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-<<<<<<< HEAD
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
@@ -14,28 +13,8 @@ bitstream-io = { workspace = true }
 crc32fast = { workspace = true }
 futures = { workspace = true }
 iceberg = { workspace = true }
-=======
-async-trait.workspace = true
-bincode.workspace = true
-tokio.workspace = true
-arrow.workspace = true
-thiserror.workspace = true
-parquet.workspace = true
-uuid.workspace = true
-futures.workspace = true
-multimap.workspace = true
-bitstream-io.workspace = true
-arrow-array.workspace = true
-arrow-schema.workspace = true
-iceberg.workspace = true
-serde_json.workspace = true
-url.workspace = true
-roaring.workspace = true
-crc32fast.workspace = true
-opendal.workspace = true
-mockall.workspace = true
->>>>>>> 757e48d (extract iceberg table manager and implement write batch records)
 memmap2 = "0.9.5"
+mockall = { workspace = true }
 multimap = { workspace = true }
 opendal = { workspace = true }
 parquet = { workspace = true }

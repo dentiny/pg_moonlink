@@ -25,6 +25,8 @@ pub(crate) use snapshot::SnapshotTableState;
 use tokio::spawn;
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
+
+#[derive(Debug)]
 pub(crate) struct TableConfig {
     /// mem slice size
     ///
@@ -51,6 +53,7 @@ impl TableConfig {
     }
 }
 
+#[derive(Debug)]
 pub struct TableMetadata {
     /// table name
     pub(crate) name: String,

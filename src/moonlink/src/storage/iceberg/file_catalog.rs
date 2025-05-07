@@ -99,15 +99,14 @@ pub struct FileSystemCatalog {
 
 impl FileSystemCatalog {
     /// Creates a rest catalog from config, if the given warehouse location doesn't exist, it will be created.
-    pub fn new(warehouse_location: String) -> Self {
+    pub fn new(warehouse_location: String) -> IcebergResult<Self> {
         // opendal prepends root directory to all paths for all operations, here we do path manipulation ourselves and set root directory as filesystem root.
         let builder = Fs::default().root("/");
         let op = Operator::new(builder).unwrap().finish();
         futures::executor::block_on(
             op.create_dir(&normalize_directory(PathBuf::from(&warehouse_location))),
-        )
-        .unwrap();
-        Self {
+        )?;
+        Ok(Self {
             file_io: FileIO::from_path(warehouse_location.clone())
                 .unwrap()
                 .build()
@@ -115,7 +114,7 @@ impl FileSystemCatalog {
             warehouse_location,
             op,
             puffin_blobs: HashMap::new(),
-        }
+        })
     }
 
     /// Get puffin metadata from the writer, and close it.
@@ -766,7 +765,7 @@ mod tests {
     async fn test_filesystem_catalog_create_namespace() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileSystemCatalog::new(warehouse_path.to_string());
+        let catalog = FileSystemCatalog::new(warehouse_path.to_string())?;
         let namespace = NamespaceIdent::from_strs(["default", "ns"])?;
 
         // Namespace creation fails because parent namespace doesn't exist.
@@ -783,7 +782,7 @@ mod tests {
     async fn test_filesystem_catalog_drop_namespace() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileSystemCatalog::new(warehouse_path.to_string());
+        let catalog = FileSystemCatalog::new(warehouse_path.to_string())?;
         let parent_namespace = NamespaceIdent::from_strs(["default"])?;
         let child_namespace = NamespaceIdent::from_strs(["default", "ns"])?;
 
@@ -809,7 +808,7 @@ mod tests {
     async fn test_filesystem_catalog_namespace_operations() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileSystemCatalog::new(warehouse_path.to_string());
+        let catalog = FileSystemCatalog::new(warehouse_path.to_string())?;
         let namespace = NamespaceIdent::from_strs(["default", "ns"])?;
 
         // Ensure namespace does not exist.
@@ -846,7 +845,7 @@ mod tests {
     async fn test_filesystem_catalog_table_operations() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileSystemCatalog::new(warehouse_path.to_string());
+        let catalog = FileSystemCatalog::new(warehouse_path.to_string())?;
 
         // Define namespace and table.
         let namespace = NamespaceIdent::from_strs(["default"])?;
@@ -902,7 +901,7 @@ mod tests {
     async fn test_list_operation() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileSystemCatalog::new(warehouse_path.to_string());
+        let catalog = FileSystemCatalog::new(warehouse_path.to_string())?;
 
         // List namespaces with non-existent parent namespace.
         let res = catalog
@@ -1033,7 +1032,7 @@ mod tests {
     async fn test_update_table() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let mut catalog = FileSystemCatalog::new(warehouse_path.to_string());
+        let mut catalog = FileSystemCatalog::new(warehouse_path.to_string())?;
         create_test_table(&catalog).await?;
 
         let namespace = NamespaceIdent::from_strs(["default"])?;

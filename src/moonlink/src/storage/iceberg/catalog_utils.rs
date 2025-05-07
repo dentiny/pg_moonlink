@@ -50,7 +50,7 @@ pub fn create_catalog(warehouse_uri: &str) -> IcebergResult<Box<dyn Catalog>> {
 
     if url.scheme() == "file" {
         let absolute_path = url.path();
-        return Ok(Box::new(FileSystemCatalog::new(absolute_path.to_string())));
+        return Ok(Box::new(FileSystemCatalog::new(absolute_path.to_string())?));
     }
 
     // TODO(hjiang): Fallback to object storage for all warehouse uris.

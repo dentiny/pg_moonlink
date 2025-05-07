@@ -63,6 +63,7 @@ struct DataFileEntry {
 /// 2. Support a data file handle, which is a remote file path, plus an optional local cache filepath.
 /// 3. Support a deletion vector handle, which is a remote file path, with an optional in-memory buffer and a local cache filepath.
 #[allow(dead_code)]
+#[derive(Debug)]
 pub struct IcebergTableManager {
     /// TODO(hjiang): A workaround iceberg-rust doesn't support deletion vector yet.
     /// Support only filesystem catalog for now, will add object storage catalog.
@@ -80,7 +81,7 @@ pub struct IcebergTableManager {
 
 impl IcebergTableManager {
     pub fn new(config: IcebergTableManagerConfig) -> IcebergResult<IcebergTableManager> {
-        let filesystem_catalog = FileSystemCatalog::new(config.warehouse_uri.clone());
+        let filesystem_catalog = FileSystemCatalog::new(config.warehouse_uri.clone())?;
         let iceberg_table = block_on(catalog_utils::get_or_create_iceberg_table(
             &filesystem_catalog,
             &config.warehouse_uri,
@@ -205,6 +206,118 @@ impl IcebergOperation for IcebergTableManager {
         txn.commit(&self.filesystem_catalog).await?;
         self.filesystem_catalog.clear_puffin_metadata();
 
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::storage::iceberg::test_utils;
+    use crate::storage::{
+        iceberg::catalog_utils::create_catalog,
+        mooncake_table::{Snapshot, TableConfig, TableMetadata},
+    };
+
+    use std::collections::HashMap;
+    use std::fs::File;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
+    use arrow_array::{Int32Array, RecordBatch, StringArray};
+    use iceberg::io::FileRead;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::ArrowWriter;
+
+    /// Create test batch deletion vector.
+    fn test_deletion_vector_1() -> BatchDeletionVector {
+        let mut deletion_vector = BatchDeletionVector::new(/*max_rows=*/ 3);
+        deletion_vector.delete_row(2);
+        deletion_vector
+    }
+    /// Test deletion vector 2 includes deletion vector 1, used to mimic new data file rows deletion situation.
+    fn test_deletion_vector_2() -> BatchDeletionVector {
+        let mut deletion_vector = BatchDeletionVector::new(/*max_rows=*/ 3);
+        deletion_vector.delete_row(1);
+        deletion_vector.delete_row(2);
+        deletion_vector
+    }
+
+    /// Test util function to create arrow schema.
+    fn create_test_arrow_schema() -> Arc<ArrowSchema> {
+        Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int32, /*nullable=*/ false).with_metadata(
+                HashMap::from([("PARQUET:field_id".to_string(), "1".to_string())]),
+            ),
+            ArrowField::new("name", ArrowDataType::Utf8, /*nullable=*/ false).with_metadata(
+                HashMap::from([("PARQUET:field_id".to_string(), "2".to_string())]),
+            ),
+        ]))
+    }
+
+    /// Test util function to create arrow record batch.
+    fn test_batch_1(arrow_schema: Arc<ArrowSchema>) -> RecordBatch {
+        RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])), // id column
+                Arc::new(StringArray::from(vec!["a", "b", "c"])), // name column
+            ],
+        )
+        .unwrap()
+    }
+    fn test_batch_2(arrow_schema: Arc<ArrowSchema>) -> RecordBatch {
+        RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![4, 5, 6])), // id column
+                Arc::new(StringArray::from(vec!["d", "e", "f"])), // name column
+            ],
+        )
+        .unwrap()
+    }
+
+    /// Test util function to write arrow record batch into local file.
+    async fn write_arrow_record_batch_to_local<P: AsRef<std::path::Path>>(
+        path: P,
+        schema: Arc<ArrowSchema>,
+        batch: &RecordBatch,
+    ) -> IcebergResult<()> {
+        let file = File::create(&path)?;
+        let mut writer = ArrowWriter::try_new(file, schema, None)?;
+        writer.write(batch)?;
+        writer.close()?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_invalid_warehouse_uri() -> IcebergResult<()> {
+        // Create arrow schema and table.
+        let arrow_schema = create_test_arrow_schema();
+        let tmp_dir = tempdir()?;
+        let metadata = Arc::new(TableMetadata {
+            name: "test_table".to_string(),
+            schema: arrow_schema.clone(),
+            id: 0, // unused.
+            config: TableConfig::new(),
+            path: tmp_dir.path().to_path_buf(),
+            get_lookup_key: |_row| 1, // unused.
+        });
+        let config = IcebergTableManagerConfig {
+            warehouse_uri: "invalid_warehouse_uri".to_string(),
+            table_metadata: metadata,
+            namespace: vec!["namespace".to_string()],
+            table: "test_table".to_string(),
+        };
+        let iceberg_table_manager = IcebergTableManager::new(config);
+        assert!(
+            iceberg_table_manager.is_err(),
+            "Snapshot with invalid warehouse should fail when store."
+        );
+        let err = iceberg_table_manager.unwrap_err();
+        assert_eq!(err.kind(), iceberg::ErrorKind::Unexpected);
         Ok(())
     }
 }
