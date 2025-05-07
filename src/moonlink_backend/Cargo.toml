@@ -1,13 +1,13 @@
 [package]
 name = "moonlink_backend"
-version.workspace = true
-edition.workspace = true
+version = { workspace = true }
+edition = { workspace = true }
 
 [dependencies]
 moonlink = { path = "../moonlink" }
 moonlink_connectors = { path = "../moonlink_connectors" }
-tokio.workspace = true
-thiserror.workspace = true
+thiserror = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
-tokio-postgres.workspace = true
+tokio-postgres = { workspace = true }

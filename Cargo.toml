@@ -7,26 +7,26 @@ version = "0.0.1"
 edition = "2021"
 
 [workspace.dependencies]
-arrow = {version = "54", default-features = false }
+arrow = { version = "54", default-features = false }
 arrow-array = "54"
 arrow-schema = "54"
 async-trait = "0.1"
 bincode = "2"
 bitstream-io = "4"
-chrono = {version = "0.4", default-features = false }
+chrono = { version = "0.4", default-features = false }
 crc32fast = "1"
-futures = {version = "0.3", default-features = false }
+futures = { version = "0.3", default-features = false }
 iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "b4bc6dd15ae4f7a4b1c9ce555e3458089a83e228", default-features = false, features = [
   "storage-s3",
   "storage-fs",
 ] }
-multimap = {version = "0.10", default-features = false }
+multimap = { version = "0.10", default-features = false }
 num-traits = "0.2"
 opendal = { version = "0.53", default-features = false, features = [
   "services-s3",
 ] }
-parquet = {version = "54", default-features = false, features = ["arrow"]}
-postgres-replication.git = "https://github.com/Mooncake-labs/rust-postgres.git"
+parquet = { version = "54", default-features = false, features = ["arrow"] }
+postgres-replication = { git = "https://github.com/Mooncake-labs/rust-postgres.git" }
 roaring = "0.10"
 serde_json = "1"
 tempfile = "3"
@@ -37,7 +37,7 @@ tokio = { version = "1.38", default-features = false, features = [
   "sync",
   "time",
 ] }
-tokio-postgres.git = "https://github.com/Mooncake-labs/rust-postgres.git"
+tokio-postgres = { git = "https://github.com/Mooncake-labs/rust-postgres.git" }
 url = "2.5"
 uuid = { version = "1.16", default-features = false, features = ["v4"] }
 

@@ -1,36 +1,36 @@
 [package]
 name = "moonlink"
-version.workspace = true
-edition.workspace = true
+version = { workspace = true }
+edition = { workspace = true }
 
 [dependencies]
-async-trait.workspace = true
-bincode.workspace = true
-tokio.workspace = true
-arrow.workspace = true
-thiserror.workspace = true
-parquet.workspace = true
-uuid.workspace = true
-futures.workspace = true
-multimap.workspace = true
-bitstream-io.workspace = true
-arrow-array.workspace = true
-arrow-schema.workspace = true
-iceberg.workspace = true
-serde_json.workspace = true
-url.workspace = true
-roaring.workspace = true
-crc32fast.workspace = true
-opendal.workspace = true
+arrow = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+async-trait = { workspace = true }
+bincode = { workspace = true }
+bitstream-io = { workspace = true }
+crc32fast = { workspace = true }
+futures = { workspace = true }
+iceberg = { workspace = true }
 memmap2 = "0.9.5"
+multimap = { workspace = true }
+opendal = { workspace = true }
+parquet = { workspace = true }
 randomizer = "0.1.2"
+roaring = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
 tokio-retry2 = { version = "0.5.7", default-features = false, features = ["jitter"] }
+url = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
-tempfile.workspace = true
+aws-sdk-s3 = "1.14.0"
 pprof = { version = "0.14", features = ["flamegraph"] }
 rand = "0.9.1"
-aws-sdk-s3 = "1.14.0"
+tempfile = { workspace = true }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(profiling_enabled)'] }

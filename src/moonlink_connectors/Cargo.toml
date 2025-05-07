@@ -1,25 +1,25 @@
 [package]
 name = "moonlink_connectors"
-version.workspace = true
-edition.workspace = true
+version = { workspace = true }
+edition = { workspace = true }
 
 [dependencies]
+arrow = { workspace = true }
+async-trait = { workspace = true }
+bigdecimal = { version = "0.4.6", default-features = false, features = ["std"] }
+byteorder = "1.5.0"
+bytes = "1.0"
+chrono = { workspace = true }
+futures = { workspace = true }
 moonlink = { path = "../moonlink" }
-tokio-postgres.workspace = true
-async-trait.workspace = true
-arrow.workspace = true
-chrono.workspace = true
-num-traits.workspace = true
-futures.workspace = true
-thiserror.workspace = true
-serde_json.workspace = true
-
-postgres-replication.workspace = true
-tokio.workspace = true
-uuid.workspace = true
+num-traits = { workspace = true }
 pg_escape = "0.1.1"
 pin-project-lite = "0.2"
+
+postgres-replication = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-postgres = { workspace = true }
 tracing = { version = "0.1", default-features = true }
-bigdecimal = { version = "0.4.6", features = ["std"] }
-bytes = "1.0"
-byteorder = "1.5.0"
+uuid = { workspace = true }
