@@ -4,6 +4,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+ahash = "0.8.11"
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
@@ -31,6 +32,8 @@ aws-sdk-s3 = "1.14"
 mockall = "0.13"
 pprof = { version = "0.14", features = ["flamegraph"] }
 rand = "0.9.1"
+rstest = "0.25.0"
+rstest_reuse = "0.7.0"
 tempfile = { workspace = true }
 
 [lints.rust]

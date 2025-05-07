@@ -1,5 +1,5 @@
 use super::*;
-use crate::row::RowValue;
+use crate::row::{Identity, RowValue};
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -45,8 +45,14 @@ pub fn test_row(id: i32, name: &str, age: i32) -> MoonlinkRow {
     ])
 }
 
-pub fn test_table(context: &TestContext, table_name: &str) -> MooncakeTable {
-    MooncakeTable::new(test_schema(), table_name.to_string(), 1, context.path())
+pub fn test_table(context: &TestContext, table_name: &str, identity: Identity) -> MooncakeTable {
+    MooncakeTable::new(
+        test_schema(),
+        table_name.to_string(),
+        1,
+        context.path(),
+        identity,
+    )
 }
 
 pub fn read_ids_from_parquet(file_path: &String) -> Vec<Option<i32>> {

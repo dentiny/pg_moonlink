@@ -1,8 +1,12 @@
 use super::moonlink_type::RowValue;
+use ahash::AHasher;
 use arrow::array::Array;
+use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::ArrowReaderBuilder;
 use std::fs::File;
+use std::hash::{Hash, Hasher};
+use std::mem::take;
 
 #[derive(Debug)]
 pub struct MoonlinkRow {
@@ -14,57 +18,51 @@ impl MoonlinkRow {
         Self { values }
     }
 
-    pub fn equals_record_batch_at_offset(&self, batch: &RecordBatch, offset: usize) -> bool {
+    pub fn equals_record_batch_at_offset(
+        &self,
+        batch: &RecordBatch,
+        offset: usize,
+        identity: &Identity,
+    ) -> bool {
         if offset >= batch.num_rows() {
             panic!("Offset is out of bounds");
         }
 
-        if self.values.len() != batch.num_columns() {
-            panic!("MoonlinkRow has a different number of values than the RecordBatch");
-        }
-
-        for (value, column) in self.values.iter().zip(batch.columns()) {
+        // Helper closure to compare a value with a column at offset
+        let value_matches_column = |value: &RowValue, column: &arrow::array::ArrayRef| -> bool {
             match value {
                 RowValue::Int32(v) => {
                     if let Some(array) = column.as_any().downcast_ref::<arrow::array::Int32Array>()
                     {
-                        if array.value(offset) != *v {
-                            return false;
-                        }
+                        array.value(offset) == *v
                     } else {
-                        return false;
+                        false
                     }
                 }
                 RowValue::Int64(v) => {
                     if let Some(array) = column.as_any().downcast_ref::<arrow::array::Int64Array>()
                     {
-                        if array.value(offset) != *v {
-                            return false;
-                        }
+                        array.value(offset) == *v
                     } else {
-                        return false;
+                        false
                     }
                 }
                 RowValue::Float32(v) => {
                     if let Some(array) =
                         column.as_any().downcast_ref::<arrow::array::Float32Array>()
                     {
-                        if array.value(offset) != *v {
-                            return false;
-                        }
+                        array.value(offset) == *v
                     } else {
-                        return false;
+                        false
                     }
                 }
                 RowValue::Float64(v) => {
                     if let Some(array) =
                         column.as_any().downcast_ref::<arrow::array::Float64Array>()
                     {
-                        if array.value(offset) != *v {
-                            return false;
-                        }
+                        array.value(offset) == *v
                     } else {
-                        return false;
+                        false
                     }
                 }
                 RowValue::Decimal(v) => {
@@ -72,38 +70,30 @@ impl MoonlinkRow {
                         .as_any()
                         .downcast_ref::<arrow::array::Decimal128Array>()
                     {
-                        if array.value(offset) != *v {
-                            return false;
-                        }
+                        array.value(offset) == *v
                     } else {
-                        return false;
+                        false
                     }
                 }
                 RowValue::Bool(v) => {
                     if let Some(array) =
                         column.as_any().downcast_ref::<arrow::array::BooleanArray>()
                     {
-                        if array.value(offset) != *v {
-                            return false;
-                        }
+                        array.value(offset) == *v
                     } else {
-                        return false;
+                        false
                     }
                 }
                 RowValue::ByteArray(v) => {
                     if let Some(array) = column.as_any().downcast_ref::<arrow::array::BinaryArray>()
                     {
-                        if array.value(offset) != v.as_slice() {
-                            return false;
-                        }
+                        array.value(offset) == v.as_slice()
                     } else if let Some(array) =
                         column.as_any().downcast_ref::<arrow::array::StringArray>()
                     {
-                        if array.value(offset).as_bytes() != v.as_slice() {
-                            return false;
-                        }
+                        array.value(offset).as_bytes() == v.as_slice()
                     } else {
-                        return false;
+                        false
                     }
                 }
                 RowValue::FixedLenByteArray(v) => {
@@ -111,24 +101,39 @@ impl MoonlinkRow {
                         .as_any()
                         .downcast_ref::<arrow::array::FixedSizeBinaryArray>()
                     {
-                        if array.value(offset) != v.as_slice() {
-                            return false;
-                        }
+                        array.value(offset) == v.as_slice()
                     } else {
-                        return false;
+                        false
                     }
                 }
-                RowValue::Null => {
-                    if !column.is_null(offset) {
-                        return false;
-                    }
-                }
+                RowValue::Null => column.is_null(offset),
+            }
+        };
+
+        if let Identity::Keys(keys) = identity {
+            if keys.len() != batch.columns().len() {
+                return self
+                    .values
+                    .iter()
+                    .zip(keys.iter())
+                    .all(|(value, &col_idx)| {
+                        let column = batch.column(col_idx);
+                        value_matches_column(value, column)
+                    });
             }
         }
-        true
+        self.values
+            .iter()
+            .zip(batch.columns())
+            .all(|(value, column)| value_matches_column(value, column))
     }
 
-    pub fn equals_parquet_at_offset(&self, file_name: &str, offset: usize) -> bool {
+    pub fn equals_parquet_at_offset(
+        &self,
+        file_name: &str,
+        offset: usize,
+        identity: &Identity,
+    ) -> bool {
         let file = File::open(file_name).unwrap();
         let reader_builder = ArrowReaderBuilder::try_new(file).unwrap();
         let row_groups = reader_builder.metadata().row_groups();
@@ -149,12 +154,130 @@ impl MoonlinkRow {
             .build()
             .unwrap();
         let batch = reader.next().unwrap().unwrap();
-        self.equals_record_batch_at_offset(&batch, 0)
+        self.equals_record_batch_at_offset(&batch, 0, identity)
     }
 }
 
-impl PartialEq for MoonlinkRow {
-    fn eq(&self, other: &Self) -> bool {
-        self.values == other.values
+impl MoonlinkRow {
+    pub fn equals_full_row(&self, other: &Self, identity: &Identity) -> bool {
+        match identity {
+            Identity::Keys(keys) => {
+                assert_eq!(self.values.len(), keys.len());
+                self.values
+                    .iter()
+                    .eq(keys.iter().map(|k| &other.values[*k]))
+            }
+            Identity::FullRow => self.values.iter().eq(other.values.iter()),
+            Identity::SinglePrimitiveKey(_) => {
+                panic!("Never required for equality checkx")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Identity {
+    SinglePrimitiveKey(usize),
+    Keys(Vec<usize>),
+    FullRow,
+}
+
+impl Identity {
+    pub fn new_key(columns: Vec<usize>, fields: &[Field]) -> Self {
+        if columns.len() == 1 {
+            let width = fields[columns[0]].data_type().primitive_width();
+            if width == Some(1) || width == Some(2) || width == Some(4) || width == Some(8) {
+                Identity::SinglePrimitiveKey(columns[0])
+            } else {
+                Identity::Keys(columns)
+            }
+        } else {
+            Identity::Keys(columns)
+        }
+    }
+
+    pub fn extract_identity_columns(&self, mut row: MoonlinkRow) -> Option<MoonlinkRow> {
+        match self {
+            Identity::SinglePrimitiveKey(_) => None,
+            Identity::Keys(keys) => {
+                let mut identity_columns = Vec::new();
+                for key in keys {
+                    identity_columns.push(take(&mut row.values[*key]));
+                }
+                Some(MoonlinkRow::new(identity_columns))
+            }
+            Identity::FullRow => Some(row),
+        }
+    }
+
+    pub fn get_lookup_key(&self, row: &MoonlinkRow) -> u64 {
+        match self {
+            Identity::SinglePrimitiveKey(key) => row.values[*key].to_u64_key(),
+            Identity::Keys(keys) => {
+                let mut hasher = AHasher::default();
+                for key in keys {
+                    row.values[*key].hash(&mut hasher);
+                }
+                hasher.finish()
+            }
+            Identity::FullRow => {
+                let mut hasher = AHasher::default();
+                for value in row.values.iter() {
+                    value.hash(&mut hasher);
+                }
+                hasher.finish()
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::row::RowValue;
+
+    impl Clone for MoonlinkRow {
+        fn clone(&self) -> Self {
+            MoonlinkRow::new(self.values.clone())
+        }
+    }
+
+    #[test]
+    fn test_equals_full_row_with_identity() {
+        use RowValue::*;
+
+        let row1 = MoonlinkRow::new(vec![Int32(1), Float32(2.0), ByteArray(b"abc".to_vec())]);
+        let row2 = MoonlinkRow::new(vec![Int32(1), Float32(2.0), ByteArray(b"abc".to_vec())]);
+        let row3 = MoonlinkRow::new(vec![Int32(1), Float32(2.0), ByteArray(b"def".to_vec())]);
+        let row4 = MoonlinkRow::new(vec![
+            Int32(1),
+            Float32(2.0),
+            Int32(3), // different type
+        ]);
+
+        // Identity using all columns
+        let identity_all = Identity::FullRow;
+        // Identity using only the first column
+        let identity_first = Identity::Keys(vec![0]);
+
+        // All columns: identity_row and full_row
+        let id_row1_all = identity_all.extract_identity_columns(row1.clone()).unwrap();
+
+        assert!(id_row1_all.equals_full_row(&row2, &identity_all));
+        assert!(!id_row1_all.equals_full_row(&row3, &identity_all));
+        assert!(!id_row1_all.equals_full_row(&row4, &identity_all));
+
+        // Only first column matters: all rows should be equal
+        let id_row1_first = identity_first
+            .extract_identity_columns(row1.clone())
+            .unwrap();
+
+        assert!(id_row1_first.equals_full_row(&row2, &identity_first));
+        assert!(id_row1_first.equals_full_row(&row3, &identity_first));
+        assert!(id_row1_first.equals_full_row(&row4, &identity_first));
+
+        // You can also check that the identity_row equals its own full row
+        assert!(id_row1_all.equals_full_row(&row1, &identity_all));
+        assert!(id_row1_first.equals_full_row(&row1, &identity_first));
     }
 }

@@ -1,7 +1,6 @@
 pub mod hash_index;
 pub mod persisted_bucket_hash_map;
 
-use crate::row::{MoonlinkRow, RowValue};
 use crate::storage::storage_utils::{RawDeletionRecord, RecordLocation};
 use multimap::MultiMap;
 use persisted_bucket_hash_map::GlobalIndex;
@@ -18,20 +17,6 @@ pub struct MooncakeIndex {
     in_memory_index: HashSet<IndexPtr>,
     file_indices: Vec<FileIndex>,
 }
-
-pub fn get_lookup_key(row: &MoonlinkRow) -> u64 {
-    // UNDONE(REPLICATION IDENTITY):
-    // For now in testing, we assume the primary key is the first column!
-
-    match row.values[0] {
-        RowValue::Int32(value) => value as u64,
-
-        RowValue::Int64(value) => value as u64,
-
-        _ => todo!("Handle other types of primary keys"),
-    }
-}
-
 /// Type for primary keys
 pub type PrimaryKey = u64;
 

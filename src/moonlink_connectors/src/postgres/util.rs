@@ -1,17 +1,17 @@
 use crate::pg_replicate::{
     conversions::{numeric::PgNumeric, table_row::TableRow, Cell},
-    table::TableSchema,
+    table::{LookupKey, TableSchema},
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use chrono::Timelike;
-use moonlink::row::MoonlinkRow;
 use moonlink::row::RowValue;
+use moonlink::row::{Identity, MoonlinkRow};
 use num_traits::cast::ToPrimitive;
 use std::collections::HashMap;
 use tokio_postgres::types::Type;
 
 /// Convert a PostgreSQL TableSchema to an Arrow Schema
-pub fn table_schema_to_arrow_schema(table_schema: &TableSchema) -> Schema {
+pub fn postgres_schema_to_moonlink_schema(table_schema: &TableSchema) -> (Schema, Identity) {
     let fields: Vec<Field> = table_schema
         .column_schemas
         .iter()
@@ -66,7 +66,23 @@ pub fn table_schema_to_arrow_schema(table_schema: &TableSchema) -> Schema {
         })
         .collect();
 
-    Schema::new(fields)
+    let identity = match &table_schema.lookup_key {
+        LookupKey::Key { name: _, columns } => {
+            let columns = columns
+                .iter()
+                .map(|c| {
+                    table_schema
+                        .column_schemas
+                        .iter()
+                        .position(|cs| cs.name == *c)
+                        .unwrap()
+                })
+                .collect();
+            Identity::new_key(columns, &fields)
+        }
+        LookupKey::FullRow => Identity::FullRow,
+    };
+    (Schema::new(fields), identity)
 }
 
 pub fn _table_schema_to_iceberg_schema(_table_schema: &TableSchema) -> Schema {
@@ -196,7 +212,7 @@ mod tests {
             },
         };
 
-        let arrow_schema = table_schema_to_arrow_schema(&table_schema);
+        let (arrow_schema, identity) = postgres_schema_to_moonlink_schema(&table_schema);
 
         assert_eq!(arrow_schema.fields().len(), 3);
         assert_eq!(arrow_schema.field(0).name(), "id");
@@ -213,6 +229,8 @@ mod tests {
             DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
         ));
         assert!(arrow_schema.field(2).is_nullable());
+
+        assert_eq!(identity, Identity::SinglePrimitiveKey(0));
     }
 
     #[test]
