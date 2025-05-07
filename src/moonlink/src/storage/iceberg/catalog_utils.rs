@@ -17,10 +17,10 @@ use iceberg::writer::file_writer::location_generator::{
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::IcebergWriter;
 use iceberg::writer::IcebergWriterBuilder;
-use iceberg::Error as IcebergError;
-use iceberg::NamespaceIdent;
-use iceberg::TableCreation;
-use iceberg::{Catalog, Result as IcebergResult, TableIdent};
+use iceberg::{
+    Catalog, Error as IcebergError, NamespaceIdent, Result as IcebergResult, TableCreation,
+    TableIdent,
+};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::properties::WriterProperties;
 
@@ -69,6 +69,7 @@ pub(crate) async fn get_or_create_iceberg_table<C: Catalog + ?Sized>(
     let table_ident = TableIdent::new(namespace_ident.clone(), table_name.to_string());
     match catalog.load_table(&table_ident).await {
         Ok(table) => Ok(table),
+        // TODO(hjiang): Better error handling.
         Err(_) => {
             let namespace_already_exists = catalog.namespace_exists(&namespace_ident).await?;
             if !namespace_already_exists {
@@ -97,14 +98,21 @@ pub(crate) async fn get_or_create_iceberg_table<C: Catalog + ?Sized>(
     }
 }
 
-// Write the given record batch to the iceberg table.
+/// Write the given record batch in the given local file to the iceberg table (parquet file keeps unchanged).
+///
+/// TODO(hjiang): Uploading local file to remote is inefficient, it reads local arrow batches and write them one by one.
+/// The reason we keep the dummy style, instead of copying the file directly to target is we need the `DataFile` struct,
+/// which is used when upload to iceberg table.
+/// One way to resolve is to use DataFileWrite on local write, and remember the `DataFile` returned.
 pub(crate) async fn write_record_batch_to_iceberg(
     table: &IcebergTable,
     parquet_filepath: &PathBuf,
 ) -> IcebergResult<DataFile> {
     let location_generator = DefaultLocationGenerator::new(table.metadata().clone())?;
     let file_name_generator = DefaultFileNameGenerator::new(
-        /*prefix=*/ Uuid::new_v4().to_string(),
+        // Use UUID as prefix to avoid hotspotting on storage access.
+        /*prefix=*/
+        Uuid::new_v4().to_string(),
         /*suffix=*/ None,
         /*format=*/ DataFileFormat::Parquet,
     );

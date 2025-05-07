@@ -26,11 +26,6 @@ use tokio::sync::OnceCell;
 /// For initial versions, it's focusing more on simplicity and correctness rather than performance.
 /// Different with `MemoryCatalog`, `FileSystemCatalog` could be used in production environment.
 ///
-/// TODO(hjiang):
-/// 1. Implement property related functionalities.
-/// 2. The initial version access everything via filesystem, for performance consideration we should cache metadata in memory.
-/// 3. (not related to functionality) Set snapshot retention policy at metadata.
-///
 /// Iceberg table format from filesystem's perspective:
 /// - data
 ///   - parquet files
@@ -100,7 +95,7 @@ pub struct FileSystemCatalog {
     warehouse_location: String,
     /// Operator to manager all IO operations.
     operator: OnceCell<FileSystemOperator>,
-    /// Used to record puffin blob metadata.
+    /// Used to record puffin blob metadata in one transaction, and cleaned up after transaction commits.
     /// Maps from "puffin filepath" to "puffin blob metadata".
     puffin_blobs: HashMap<String, Vec<PuffinBlobMetadataProxy>>,
 }

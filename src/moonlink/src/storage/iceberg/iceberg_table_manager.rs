@@ -353,7 +353,7 @@ impl IcebergOperation for IcebergTableManager {
 mod tests {
     use super::*;
 
-    use crate::storage::index;
+    use crate::row;
     use crate::storage::mooncake_table::{TableConfig, TableMetadata as MooncakeTableMetadata};
 
     use std::collections::HashMap;
@@ -404,7 +404,7 @@ mod tests {
             id: 0, // unused.
             config: TableConfig::new(),
             path: tmp_dir.path().to_path_buf(),
-            get_lookup_key: index::get_lookup_key,
+            identity: row::Identity::FullRow,
         })
     }
 
