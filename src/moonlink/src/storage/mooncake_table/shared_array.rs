@@ -24,6 +24,7 @@ unsafe impl Send for SharedRowBufferSnapshot {}
 unsafe impl Sync for SharedRowBufferSnapshot {}
 
 impl SharedRowBuffer {
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn new(capacity: usize) -> Self {
         let vec = Vec::with_capacity(capacity);
 
