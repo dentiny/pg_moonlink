@@ -52,6 +52,7 @@ pub fn test_table(context: &TestContext, table_name: &str, identity: Identity) -
         1,
         context.path(),
         identity,
+        /*iceberg_table_config=*/ None,
     )
 }
 

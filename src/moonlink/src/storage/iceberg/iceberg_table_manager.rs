@@ -9,6 +9,7 @@ use crate::storage::iceberg::deletion_vector::{
 /// - local caching
 use crate::storage::iceberg::file_catalog::FileSystemCatalog;
 use crate::storage::iceberg::puffin_utils;
+use crate::storage::iceberg::validation as IcebergValidation;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 use crate::storage::mooncake_table::TableMetadata as MooncakeTableMetadata;
 
@@ -16,7 +17,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::storage::iceberg::validation as IcebergValidation;
 use iceberg::io::FileIO;
 use iceberg::puffin::CompressionCodec;
 use iceberg::spec::DataFileFormat;
@@ -28,22 +28,26 @@ use iceberg::writer::file_writer::location_generator::DefaultLocationGenerator;
 use iceberg::writer::file_writer::location_generator::LocationGenerator;
 use iceberg::Error as IcebergError;
 use iceberg::Result as IcebergResult;
+use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 #[cfg(test)]
 use mockall::*;
 
 #[allow(dead_code)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, TypedBuilder)]
 pub struct IcebergTableManagerConfig {
     /// Table warehouse location.
-    warehouse_uri: String,
+    #[builder(default = "/tmp/moonlink_iceberg".to_string())]
+    pub warehouse_uri: String,
     /// Mooncake table metadata.
-    table_metadata: Arc<MooncakeTableMetadata>,
+    pub table_metadata: Arc<MooncakeTableMetadata>,
     /// Namespace for the iceberg table.
-    namespace: Vec<String>,
+    #[builder(default = vec!["default".to_string()])]
+    pub namespace: Vec<String>,
     /// Iceberg table name.
-    table_name: String,
+    #[builder(default = "table".to_string())]
+    pub table_name: String,
 }
 
 #[allow(dead_code)]

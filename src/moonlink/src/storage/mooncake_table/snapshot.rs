@@ -2,6 +2,9 @@ use super::data_batches::{create_batch_from_rows, InMemoryBatch};
 use super::delete_vector::BatchDeletionVector;
 use super::{Snapshot, SnapshotTask, TableMetadata};
 use crate::error::Result;
+use crate::storage::iceberg::iceberg_table_manager::{
+    IcebergOperation, IcebergTableManager, IcebergTableManagerConfig,
+};
 use crate::storage::index::Index;
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 use crate::storage::storage_utils::RawDeletionRecord;
@@ -30,6 +33,11 @@ pub(crate) struct SnapshotTableState {
 
     /// Last commit point
     last_commit: RecordLocation,
+
+    /// Iceberg table manager, used to sync snapshot to the corresponding iceberg table.
+    ///
+    /// TODO(hjiang): Figure out a way to store dynamic trait for mock-based unit test.
+    iceberg_table_manager: Option<IcebergTableManager>,
 }
 
 pub struct ReadOutput {
@@ -39,9 +47,18 @@ pub struct ReadOutput {
 }
 
 impl SnapshotTableState {
-    pub(super) fn new(metadata: Arc<TableMetadata>) -> Self {
+    pub(super) fn new(
+        metadata: Arc<TableMetadata>,
+        iceberg_table_config: Option<IcebergTableManagerConfig>,
+    ) -> Self {
         let mut batches = BTreeMap::new();
         batches.insert(0, InMemoryBatch::new(metadata.config.batch_size));
+
+        let mut iceberg_table_manager = None;
+        if iceberg_table_config.is_some() {
+            iceberg_table_manager = Some(IcebergTableManager::new(iceberg_table_config.unwrap()));
+        }
+
         Self {
             current_snapshot: Snapshot::new(metadata),
             batches,
@@ -49,11 +66,12 @@ impl SnapshotTableState {
             last_commit: RecordLocation::MemoryBatch(0, 0),
             committed_deletion_log: Vec::new(),
             uncommitted_deletion_log: Vec::new(),
+            iceberg_table_manager: iceberg_table_manager,
         }
     }
 
     /// Return current snapshot's version.
-    pub(super) fn update_snapshot(&mut self, mut next_snapshot_task: SnapshotTask) -> u64 {
+    pub(super) async fn update_snapshot(&mut self, mut next_snapshot_task: SnapshotTask) -> u64 {
         let batch_size = self.current_snapshot.metadata.config.batch_size;
         if !next_snapshot_task.new_mem_indices.is_empty() {
             let new_mem_indices = take(&mut next_snapshot_task.new_mem_indices);
@@ -121,7 +139,18 @@ impl SnapshotTableState {
         if next_snapshot_task.new_commit_point.is_some() {
             self.last_commit = next_snapshot_task.new_commit_point.unwrap();
         }
-        // TODO(hjiang): now all committed changes are sync-ed to current snapshot, sync the snapshot to iceberg table as well.
+
+        // Sync the latest change to iceberg.
+        // TODO(hjiang): Error handling for snapshot sync-up.
+        if self.iceberg_table_manager.is_some() {
+            self.iceberg_table_manager
+                .as_mut()
+                .unwrap()
+                .sync_snapshot(self.current_snapshot.disk_files.clone())
+                .await
+                .unwrap();
+        }
+
         self.current_snapshot.snapshot_version
     }
 
