@@ -15,7 +15,6 @@ moonlink = { path = "../moonlink" }
 num-traits = { workspace = true }
 pg_escape = "0.1.1"
 pin-project-lite = "0.2"
-
 postgres-replication = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
