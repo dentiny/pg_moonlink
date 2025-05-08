@@ -98,6 +98,7 @@ mod tests {
     use super::*;
     use arrow::array::{ArrayRef, Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     #[test]
@@ -120,8 +121,14 @@ mod tests {
         let age_array = Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50])) as ArrayRef;
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
-                Field::new("name", DataType::Utf8, false),
-                Field::new("age", DataType::Int32, false),
+                Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from([(
+                    "PARQUET:field_id".to_string(),
+                    "1".to_string(),
+                )])),
+                Field::new("age", DataType::Int32, false).with_metadata(HashMap::from([(
+                    "PARQUET:field_id".to_string(),
+                    "2".to_string(),
+                )])),
             ])),
             vec![name_array, age_array],
         )?;

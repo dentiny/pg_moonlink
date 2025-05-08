@@ -362,7 +362,6 @@ mod tests {
     use crate::row::MoonlinkRow;
     use crate::row::{Identity, RowValue};
     use crate::storage::iceberg::iceberg_table_manager::IcebergTableManager;
-
     use crate::storage::MooncakeTable;
 
     use std::collections::HashMap;

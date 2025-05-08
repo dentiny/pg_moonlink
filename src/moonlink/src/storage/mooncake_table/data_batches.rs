@@ -297,19 +297,33 @@ mod tests {
     use super::*;
     use crate::row::RowValue;
     use arrow::datatypes::{DataType, Field};
+    use std::collections::HashMap;
 
     // TODO(hjiang): Add unit test for ColumnStoreBuffer with deletion, and check record batch content.
     #[test]
     fn test_column_store_buffer() -> Result<()> {
         let schema = Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, true),
-            Field::new("age", DataType::Int32, false),
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                "PARQUET:field_id".to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
+                "PARQUET:field_id".to_string(),
+                "2".to_string(),
+            )])),
+            Field::new("age", DataType::Int32, false).with_metadata(HashMap::from([(
+                "PARQUET:field_id".to_string(),
+                "3".to_string(),
+            )])),
             Field::new(
                 "event_date",
                 DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
                 false,
-            ),
+            )
+            .with_metadata(HashMap::from([(
+                "PARQUET:field_id".to_string(),
+                "4".to_string(),
+            )])),
         ]);
 
         let mut buffer = ColumnStoreBuffer::new(Arc::new(schema), 2);

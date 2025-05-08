@@ -152,6 +152,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use parquet::arrow::ArrowWriter;
     use rand::Rng;
+    use std::collections::HashMap;
     use std::fs::File;
     use std::sync::Arc;
     #[test]
@@ -274,12 +275,29 @@ mod tests {
 
     fn generate_data(num_rows: usize) -> (Vec<MoonlinkRow>, RecordBatch) {
         let schema = Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, true),
-            Field::new("age", DataType::Int32, false),
-            Field::new("is_active", DataType::Boolean, false),
-            Field::new("salary", DataType::Float64, false),
-            Field::new("uuid", DataType::FixedSizeBinary(16), false),
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                "PARQUET:field_id".to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
+                "PARQUET:field_id".to_string(),
+                "2".to_string(),
+            )])),
+            Field::new("age", DataType::Int32, false).with_metadata(HashMap::from([(
+                "PARQUET:field_id".to_string(),
+                "3".to_string(),
+            )])),
+            Field::new("is_active", DataType::Boolean, false).with_metadata(HashMap::from([(
+                "PARQUET:field_id".to_string(),
+                "4".to_string(),
+            )])),
+            Field::new("salary", DataType::Float64, false).with_metadata(HashMap::from([(
+                "PARQUET:field_id".to_string(),
+                "5".to_string(),
+            )])),
+            Field::new("uuid", DataType::FixedSizeBinary(16), false).with_metadata(HashMap::from(
+                [("PARQUET:field_id".to_string(), "6".to_string())],
+            )),
         ]);
 
         let mut rng = rand::rng();
