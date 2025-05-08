@@ -2,6 +2,9 @@ use super::data_batches::{create_batch_from_rows, InMemoryBatch};
 use super::delete_vector::BatchDeletionVector;
 use super::{Snapshot, SnapshotTask, TableMetadata};
 use crate::error::Result;
+use crate::storage::iceberg::iceberg_table_manager::{
+    IcebergOperation, IcebergTableManager, IcebergTableManagerConfig,
+};
 use crate::storage::index::Index;
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 use crate::storage::mooncake_table::MoonlinkRow;
@@ -31,6 +34,11 @@ pub(crate) struct SnapshotTableState {
 
     /// Last commit point
     last_commit: RecordLocation,
+
+    /// Iceberg table manager, used to sync snapshot to the corresponding iceberg table.
+    ///
+    /// TODO(hjiang): Figure out a way to store dynamic trait for mock-based unit test.
+    iceberg_table_manager: Option<IcebergTableManager>,
 }
 
 pub struct ReadOutput {
@@ -40,9 +48,18 @@ pub struct ReadOutput {
 }
 
 impl SnapshotTableState {
-    pub(super) fn new(metadata: Arc<TableMetadata>) -> Self {
+    pub(super) fn new(
+        metadata: Arc<TableMetadata>,
+        iceberg_table_config: Option<IcebergTableManagerConfig>,
+    ) -> Self {
         let mut batches = BTreeMap::new();
         batches.insert(0, InMemoryBatch::new(metadata.config.batch_size));
+
+        let mut iceberg_table_manager = None;
+        if iceberg_table_config.is_some() {
+            iceberg_table_manager = Some(IcebergTableManager::new(iceberg_table_config.unwrap()));
+        }
+
         Self {
             current_snapshot: Snapshot::new(metadata),
             batches,
@@ -50,10 +67,11 @@ impl SnapshotTableState {
             last_commit: RecordLocation::MemoryBatch(0, 0),
             committed_deletion_log: Vec::new(),
             uncommitted_deletion_log: Vec::new(),
+            iceberg_table_manager: iceberg_table_manager,
         }
     }
 
-    pub(super) fn update_snapshot(&mut self, mut task: SnapshotTask) -> u64 {
+    pub(super) async fn update_snapshot(&mut self, mut task: SnapshotTask) -> u64 {
         self.merge_mem_indices(&mut task);
         self.finalize_batches(&mut task);
         self.integrate_disk_slices(&mut task);
@@ -66,6 +84,20 @@ impl SnapshotTableState {
         }
         if let Some(cp) = task.new_commit_point {
             self.last_commit = cp;
+        }
+
+        // Sync the latest change to iceberg.
+        // TODO(hjiang): Error handling for snapshot sync-up.
+
+        println!("attempt to update snapshot\n\n");
+
+        if self.iceberg_table_manager.is_some() {
+            self.iceberg_table_manager
+                .as_mut()
+                .unwrap()
+                .sync_snapshot(self.current_snapshot.disk_files.clone())
+                .await
+                .unwrap();
         }
 
         self.current_snapshot.snapshot_version
@@ -264,6 +296,8 @@ impl SnapshotTableState {
     }
 
     fn process_deletion_log(&mut self, task: &mut SnapshotTask) {
+        println!("when deletion log, task is {:?}", task.new_deletions);
+
         self.advance_pending_deletions(task);
         self.apply_new_deletions(task);
     }
@@ -301,9 +335,16 @@ impl SnapshotTableState {
     fn apply_new_deletions(&mut self, task: &mut SnapshotTask) {
         for raw in take(&mut task.new_deletions) {
             let processed = Self::process_delete_record(self, raw);
+
+            println!("checking deletion record {:?}", processed);
+
             if processed.lsn <= task.new_lsn {
+                println!("push to committed deletion log: {:?}", processed);
+
                 Self::commit_deletion(self, processed);
             } else {
+                println!("push to committed deletion log: {:?}", processed);
+
                 self.uncommitted_deletion_log.push(Some(processed));
             }
         }

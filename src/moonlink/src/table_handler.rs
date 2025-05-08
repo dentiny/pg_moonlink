@@ -192,6 +192,7 @@ mod tests {
             1,
             path,
             Identity::Keys(vec![0]),
+            /*iceberg_table_config=*/ None,
         );
         let (replication_tx, replication_rx) = watch::channel(0u64);
         let (table_commit_tx, table_commit_rx) = watch::channel(0u64);
@@ -257,6 +258,7 @@ mod tests {
             1,
             path,
             Identity::Keys(vec![0]),
+            /*iceberg_table_config=*/ None,
         );
         let (replication_tx, replication_rx) = watch::channel(0u64);
         let (table_commit_tx, table_commit_rx) = watch::channel(0u64);
@@ -338,6 +340,7 @@ mod tests {
             1,
             path,
             Identity::Keys(vec![0]),
+            /*iceberg_table_config=*/ None,
         );
         let (replication_tx, replication_rx) = watch::channel(0u64);
         let (table_commit_tx, table_commit_rx) = watch::channel(0u64);
@@ -402,6 +405,7 @@ mod tests {
             1,
             path,
             Identity::Keys(vec![0]),
+            /*iceberg_table_config=*/ None,
         );
         let (replication_tx, replication_rx) = watch::channel(0u64);
         let (table_commit_tx, table_commit_rx) = watch::channel(0u64);
@@ -488,6 +492,7 @@ mod tests {
             1,
             path,
             Identity::Keys(vec![0]),
+            /*iceberg_table_config=*/ None,
         );
         let (replication_tx, replication_rx) = watch::channel(0u64);
         let (table_commit_tx, table_commit_rx) = watch::channel(0u64);
@@ -579,6 +584,7 @@ mod tests {
             1,
             path,
             Identity::Keys(vec![0]),
+            /*iceberg_table_config=*/ None,
         );
         let (replication_tx, replication_rx) = watch::channel(0u64);
         let (table_commit_tx, table_commit_rx) = watch::channel(0u64);

@@ -5,6 +5,7 @@ mod mem_slice;
 mod shared_array;
 mod snapshot;
 
+use super::iceberg::iceberg_table_manager::IcebergTableManagerConfig;
 use super::index::{MemIndex, MooncakeIndex};
 use super::storage_utils::{RawDeletionRecord, RecordLocation};
 use crate::error::{Error, Result};
@@ -205,6 +206,7 @@ impl MooncakeTable {
         version: u64,
         base_path: PathBuf,
         identity: Identity,
+        iceberg_table_config: Option<IcebergTableManagerConfig>,
     ) -> Self {
         let table_config = TableConfig::new();
         let schema = Arc::new(schema);
@@ -217,11 +219,13 @@ impl MooncakeTable {
             identity,
         });
         let (table_snapshot_watch_sender, table_snapshot_watch_receiver) = watch::channel(0);
-
         Self {
             mem_slice: MemSlice::new(metadata.schema.clone(), metadata.config.batch_size),
             metadata: metadata.clone(),
-            snapshot: Arc::new(RwLock::new(SnapshotTableState::new(metadata))),
+            snapshot: Arc::new(RwLock::new(SnapshotTableState::new(
+                metadata,
+                iceberg_table_config,
+            ))),
             next_snapshot_task: SnapshotTask::new(),
             transaction_stream_states: HashMap::new(),
             table_snapshot_watch_sender,
@@ -429,7 +433,11 @@ impl MooncakeTable {
         snapshot: Arc<RwLock<SnapshotTableState>>,
         next_snapshot_task: SnapshotTask,
     ) -> u64 {
-        snapshot.write().await.update_snapshot(next_snapshot_task)
+        snapshot
+            .write()
+            .await
+            .update_snapshot(next_snapshot_task)
+            .await
     }
 }
 
