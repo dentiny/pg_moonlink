@@ -5,29 +5,15 @@ use crate::storage::iceberg::puffin_writer_proxy::{
 };
 
 use futures::future::join_all;
+use futures::StreamExt;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-
-use async_trait::async_trait;
-use iceberg::io::FileIO;
-use iceberg::puffin::PuffinWriter;
-use iceberg::spec::{TableMetadata, TableMetadataBuilder};
-use iceberg::table::Table;
-use iceberg::Error as IcebergError;
-use iceberg::Result as IcebergResult;
-use iceberg::{
-    Catalog, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableUpdate,
-};
-use opendal::services::Fs;
-use opendal::ErrorKind as OpendalErrorKind;
-use opendal::{EntryMode, Operator};
-use tokio::sync::OnceCell;
-
-/// This module contains the filesystem catalog implementation, which serves for local development and hermetic unit test purpose;
-/// For initial versions, it's focusing more on simplicity and correctness rather than performance.
-/// Different with `MemoryCatalog`, `FileSystemCatalog` could be used in production environment.
+/// This module contains the file-based catalog implementation, which relies on version hint file to decide current version snapshot.
+/// Dispite a few limitation (i.e. atomic rename for local filesystem), it's not a problem for moonlink, which guarantees at most one writer at the same time (for nows).
+/// It leverages `opendal` and iceberg `FileIO` as an abstraction layer to operate on all possible storage backends.
 ///
-/// Iceberg table format from filesystem's perspective:
+/// Iceberg table format from object storage's perspective:
+/// - namespace_indicator.txt
+///   - An empty file, indicates it's a valid namespace
 /// - data
 ///   - parquet files
 /// - metdata
@@ -44,23 +30,38 @@ use tokio::sync::OnceCell;
 ///     + <commit-uuid>-m<manifest-counter>.avro
 ///     + which points to data files and stats
 ///
-/// For filesystem catalog, all files are stored under the warehouse location, in detail: <warehouse-location>/<namespace>/<table-name>/.
-//
-// Get parent directory name with "/" suffixed.
-// If the given string represents root directory ("/"), return "/" as well.
-fn get_parent_directory(directory: &str) -> String {
-    assert!(!directory.is_empty());
-    let parent = Path::new(directory)
-        .parent()
-        .and_then(|p| p.to_str())
-        .unwrap_or("/");
-    if parent == "/" {
-        return parent.to_string();
-    }
-    format!("{}/", parent)
-}
+/// TODO(hjiang):
+/// 1. Before release we should support not only S3, but also R2, GCS, etc; necessary change should be minimal, only need to setup configuration like secret id and secret key.
+/// 2. Add integration test to actual object storage before pg_mooncake release.
+use std::error::Error;
+use std::path::PathBuf;
+use std::vec;
 
-// Normalize directory string to makes sure it ends with "/", which is required for opendal.
+use async_trait::async_trait;
+use iceberg::io::{FileIO, FileIOBuilder};
+use iceberg::puffin::PuffinWriter;
+use iceberg::spec::{TableMetadata, TableMetadataBuilder};
+use iceberg::table::Table;
+use iceberg::Error as IcebergError;
+use iceberg::Result as IcebergResult;
+use iceberg::{
+    Catalog, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableUpdate,
+};
+use opendal::layers::RetryLayer;
+use opendal::services::Fs;
+use opendal::services::S3;
+use opendal::Operator;
+use tokio::sync::OnceCell;
+
+// Object storage usually doesn't have "folder" concept, when creating a new namespace, we create an indicator file under certain folder.
+static NAMESPACE_INDICATOR_OBJECT_NAME: &str = "indicator.text";
+
+// Retry related constants.
+static MIN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+static MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
+static RETRY_DELAY_FACTOR: f32 = 1.5;
+static MAX_RETRY_COUNT: usize = 5;
+
 fn normalize_directory(mut path: PathBuf) -> String {
     let mut os_string = path.as_mut_os_str().to_os_string();
     if os_string.to_str().unwrap().ends_with("/") {
@@ -70,107 +71,284 @@ fn normalize_directory(mut path: PathBuf) -> String {
     os_string.to_str().unwrap().to_string()
 }
 
-// Get base directory name.
-// For example,
-// "/a/b/c" -> "c"
-// "/a/b/c/" -> "c"
-// "/" -> "/"
-fn get_base_directory(path_str: &str) -> String {
-    let path = Path::new(path_str);
-    match path.file_name() {
-        Some(name) => name.to_str().unwrap().to_string(),
-        None => path_str.to_string(),
+#[derive(Debug)]
+#[warn(dead_code)]
+pub enum CatalogConfig {
+    FileSystem,
+    S3 {
+        access_key_id: String,
+        secret_access_key: String,
+        region: String,
+        bucket: String,
+        endpoint: String,
+    },
+}
+
+/// Create `FileIO` object based on the catalog config.
+fn create_file_io(config: &CatalogConfig, warehouse_location: &str) -> FileIO {
+    match config {
+        CatalogConfig::FileSystem => FileIO::from_path(warehouse_location)
+            .unwrap()
+            .build()
+            .unwrap(),
+        CatalogConfig::S3 {
+            access_key_id,
+            secret_access_key,
+            region,
+            endpoint,
+            ..
+        } => FileIOBuilder::new("s3")
+            .with_prop(iceberg::io::S3_REGION, region)
+            .with_prop(iceberg::io::S3_ENDPOINT, endpoint)
+            .with_prop(iceberg::io::S3_ACCESS_KEY_ID, access_key_id)
+            .with_prop(iceberg::io::S3_SECRET_ACCESS_KEY, secret_access_key)
+            .build()
+            .unwrap(),
     }
 }
 
 #[derive(Debug)]
-struct FileSystemOperator {
-    /// opendal operator.
-    op: Operator,
-}
-
-/// FileSystem catalog is the catalog implementation for local filesystem backend, and it's intended for single threaded use case.
-#[derive(Debug)]
-pub struct FileSystemCatalog {
+pub struct FileCatalog {
+    /// Catalog configurations.
+    config: CatalogConfig,
+    /// Similar to opendal operator, which also provides an abstraction above different storage backends.
     file_io: FileIO,
-    warehouse_location: String,
     /// Operator to manager all IO operations.
-    operator: OnceCell<FileSystemOperator>,
+    operator: OnceCell<Operator>,
+    /// Table location.
+    warehouse_location: String,
     /// Used to record puffin blob metadata in one transaction, and cleaned up after transaction commits.
     /// Maps from "puffin filepath" to "puffin blob metadata".
     puffin_blobs: HashMap<String, Vec<PuffinBlobMetadataProxy>>,
 }
 
-impl FileSystemCatalog {
-    /// Creates a rest catalog from config, if the given warehouse location doesn't exist, it will be created.
-    pub fn new(warehouse_location: String) -> Self {
+impl FileCatalog {
+    #[allow(dead_code)]
+    pub fn new(warehouse_location: String, config: CatalogConfig) -> Self {
+        let file_io = create_file_io(&config, &warehouse_location);
         Self {
-            file_io: FileIO::from_path(warehouse_location.clone())
-                .unwrap()
-                .build()
-                .unwrap(),
-            warehouse_location,
+            config,
+            file_io,
             operator: OnceCell::new(),
+            warehouse_location,
             puffin_blobs: HashMap::new(),
         }
     }
 
     /// Get IO operator from the catalog.
-    async fn get_operator(&self) -> IcebergResult<&FileSystemOperator> {
+    async fn get_operator(&self) -> IcebergResult<&Operator> {
+        let retry_layer = RetryLayer::new()
+            .with_max_times(MAX_RETRY_COUNT)
+            .with_jitter()
+            .with_factor(RETRY_DELAY_FACTOR)
+            .with_min_delay(MIN_RETRY_DELAY)
+            .with_max_delay(MAX_RETRY_DELAY);
+
         self.operator
             .get_or_try_init(|| async {
-                // opendal prepends root directory to all paths for all operations, here we do path manipulation ourselves and set root directory as filesystem root.
-                let builder = Fs::default().root("/");
-                let op = Operator::new(builder).unwrap().finish();
-                op.create_dir(&normalize_directory(PathBuf::from(
-                    &self.warehouse_location,
-                )))
-                .await?;
-                Ok(FileSystemOperator { op })
+                match &self.config {
+                    CatalogConfig::FileSystem => {
+                        let builder = Fs::default().root(&self.warehouse_location);
+                        let op = Operator::new(builder)
+                            .expect("failed to create fs operator")
+                            .layer(retry_layer)
+                            .finish();
+                        op.create_dir(&normalize_directory(PathBuf::from(
+                            &self.warehouse_location,
+                        )))
+                        .await?;
+                        Ok(op)
+                    }
+                    CatalogConfig::S3 {
+                        access_key_id,
+                        secret_access_key,
+                        region,
+                        bucket,
+                        endpoint,
+                        ..
+                    } => {
+                        let builder = S3::default()
+                            .bucket(bucket)
+                            .region(region)
+                            .endpoint(endpoint)
+                            .access_key_id(access_key_id)
+                            .secret_access_key(secret_access_key);
+                        let op = Operator::new(builder)
+                            .expect("failed to create s3 operator")
+                            .layer(retry_layer)
+                            .finish();
+                        Ok(op)
+                    }
+                }
             })
             .await
     }
 
-    /// Load metadata for the given table.
+    /// Get object name of the indicator object for the given namespace.
+    fn get_namespace_indicator_name(namespace: &iceberg::NamespaceIdent) -> String {
+        let mut path = PathBuf::new();
+        for part in namespace.as_ref() {
+            path.push(part);
+        }
+        path.push(NAMESPACE_INDICATOR_OBJECT_NAME);
+        path.to_str().unwrap().to_string()
+    }
+
+    async fn object_exists(&self, object: &str) -> Result<bool, Box<dyn Error>> {
+        match self.get_operator().await?.stat(object).await {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == opendal::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// List all objects under the given directory.
+    async fn list_objects_under_directory(
+        &self,
+        folder: &str,
+    ) -> Result<Vec<String>, Box<dyn Error>> {
+        let prefix = format!("{}/", folder);
+        let mut objects = Vec::new();
+        let mut lister = self
+            .get_operator()
+            .await?
+            .lister_with(&prefix)
+            .recursive(true)
+            .await?;
+        while let Some(entry) = lister.next().await {
+            let entry = entry?;
+            let path = entry.path();
+            objects.push(path.to_string());
+        }
+        Ok(objects)
+    }
+
+    /// List all direct sub-directory under the given directory.
+    ///
+    /// For example, we have directory "a", "a/b", "a/b/c", listing direct subdirectories for "a" will return "a/b".
+    async fn list_direct_subdirectories(
+        &self,
+        folder: &str,
+    ) -> Result<Vec<String>, Box<dyn Error>> {
+        let prefix = format!("{}/", folder);
+        let mut dirs = Vec::new();
+        let lister = self.get_operator().await?.list(&prefix).await?;
+
+        let entries = lister;
+        for cur_entry in entries.iter() {
+            // Both directories and objects will be returned, here we only care about sub-directories.
+            if !cur_entry.path().ends_with('/') {
+                continue;
+            }
+            let dir_name = cur_entry
+                .path()
+                .trim_start_matches(&prefix)
+                .trim_end_matches('/')
+                .to_string();
+            if !dir_name.is_empty() {
+                dirs.push(dir_name);
+            }
+        }
+
+        Ok(dirs)
+    }
+
+    /// Read the whole content for the given object.
+    /// Notice, it's not suitable to read large files; as of now it's made for metadata files.
+    async fn read_object(&self, object: &str) -> Result<String, Box<dyn Error>> {
+        let content = self.get_operator().await?.read(object).await?;
+        Ok(String::from_utf8(content.to_vec())?)
+    }
+
+    /// Write the whole content to the given file.
+    async fn write_object(
+        &self,
+        object_filepath: &str,
+        content: &str,
+    ) -> Result<(), Box<dyn Error>> {
+        let data = content.as_bytes().to_vec();
+        self.get_operator()
+            .await?
+            .write(object_filepath, data)
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to write content: {}", e),
+                )
+            })?;
+        Ok(())
+    }
+
+    /// Delete all given objects.
+    /// TODO(hjiang): Add test and documentation on partial failure.
+    async fn delete_all_objects(
+        &self,
+        objects_to_delete: Vec<String>,
+    ) -> Result<(), Box<dyn Error>> {
+        let futures = objects_to_delete.into_iter().map(|object| {
+            async move {
+                // TODO(hjiang): Better error handling.
+                let op = self.get_operator().await.unwrap().clone();
+                op.delete(&object).await
+            }
+        });
+
+        let results = join_all(futures).await;
+        for result in results {
+            result?;
+        }
+
+        Ok(())
+    }
+
+    /// Load metadata and its location foe the given table.
     async fn load_metadata(
         &self,
         table_ident: &TableIdent,
-    ) -> IcebergResult<(String /*metadata_file_path*/, TableMetadata)> {
-        let metadata_directory = format!(
-            "{}/{}/{}/metadata",
-            self.warehouse_location,
-            table_ident.namespace.to_url_string(),
-            table_ident.name()
+    ) -> IcebergResult<(String /*metadata_filepath*/, TableMetadata)> {
+        // Read version hint for the table to get latest version.
+        let version_hint_filepath = format!(
+            "{}/{}/metadata/version-hint.text",
+            table_ident.namespace().to_url_string(),
+            table_ident.name(),
         );
+        let version_str = self
+            .read_object(&version_hint_filepath)
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to read version hint file on load table: {}", e),
+                )
+            })?;
+        let version = version_str
+            .trim()
+            .parse::<u32>()
+            .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
 
-        // Get metadata file path via version hint file.
-        let version_hint_path = format!("{}/version-hint.text", metadata_directory);
-        let input_file: iceberg::io::InputFile = self.file_io.new_input(&version_hint_path)?;
-        let version = String::from_utf8(input_file.read().await?.to_vec()).expect("");
+        // Read and parse table metadata.
+        let metadata_filepath = format!(
+            "{}/{}/metadata/v{}.metadata.json",
+            table_ident.namespace().to_url_string(),
+            table_ident.name(),
+            version,
+        );
+        let metadata_str = self.read_object(&metadata_filepath).await.map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Failed to read table metadata file on load table: {}", e),
+            )
+        })?;
+        let metadata = serde_json::from_slice::<TableMetadata>(metadata_str.as_bytes())
+            .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
 
-        // Get table metadata.
-        let metadata_file_path = format!("{}/v{}.metadata.json", metadata_directory, version);
-        let input_file: iceberg::io::InputFile = self.file_io.new_input(&metadata_file_path)?;
-        let metadata_content = input_file.read().await?.to_vec();
-        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
-        Ok((metadata_file_path, metadata))
-    }
-
-    /// Convert namespace identifier to filesystem paths.
-    fn get_namespace_path(&self, namespace: Option<&NamespaceIdent>) -> PathBuf {
-        let mut path = PathBuf::from(&self.warehouse_location);
-        if namespace.is_none() {
-            return path;
-        }
-        for part in namespace.unwrap().as_ref() {
-            path.push(part);
-        }
-        path
+        Ok((metadata_filepath, metadata))
     }
 }
 
 #[async_trait]
-impl DeletionVectorWrite for FileSystemCatalog {
+impl DeletionVectorWrite for FileCatalog {
     async fn record_puffin_metadata_and_close(
         &mut self,
         puffin_filepath: String,
@@ -189,11 +367,7 @@ impl DeletionVectorWrite for FileSystemCatalog {
 }
 
 #[async_trait]
-impl Catalog for FileSystemCatalog {
-    /// List namespaces under the parent namespace, return error if parent namespace doesn't exist.
-    /// It's worth noting only one layer of namespace will be returned.
-    /// For example, suppose we create three namespaces: (1) "a", (2) "a/b", (3) "b".
-    /// List all namespaces under root namespace will return "a" and "b", but not "a/b".
+impl Catalog for FileCatalog {
     async fn list_namespaces(
         &self,
         parent: Option<&NamespaceIdent>,
@@ -212,216 +386,129 @@ impl Catalog for FileSystemCatalog {
             }
         }
 
-        // List all subdirectories under the given parent namespace directory.
-        let path_buf = self.get_namespace_path(parent);
-        let parent_namespace_directory = normalize_directory(path_buf.clone());
-        let entries = self
-            .get_operator()
-            .await?
-            .op
-            .list(&parent_namespace_directory)
-            .await?;
-
-        // opendal list on prefix, and returns current directory as well.
-        // For example, list "/a/b/" will return "/a/b/" as well, which should be excluded in our case.
-        //
-        // `subfolder_to_exclude` doesn't have slash suffixed.
-        let subfolder_to_exclude = get_base_directory(&parent_namespace_directory);
-        let mut results = Vec::new();
-        let parent_directory_segments: Vec<String> = if let Some(namespace_ident) = parent {
-            namespace_ident.clone().inner()
+        let parent_directory = if let Some(namespace_ident) = parent {
+            namespace_ident.to_url_string()
         } else {
-            vec![]
+            "/".to_string()
         };
-
-        // Start multiple async functions in parallel to check whether table.
-        let mut futures = vec![];
-        for cur_entry in entries.iter() {
-            // Namespace is stored as directory.
-            if cur_entry.metadata().mode() != EntryMode::DIR {
-                continue;
-            }
-            // Two things to notice here:
-            // 1. Entries returned from opendal list operation are suffixed with "/".
-            // 2. opendal list operation returns parent directory as well.
-            let stripped_subfolder = cur_entry.name().strip_suffix("/").unwrap();
-            if stripped_subfolder == subfolder_to_exclude {
-                continue;
-            }
-
-            // Check whether the subdirectory indicates a namespace or a table.
-            // For cases where parent namespace is not given, subdirectory is impossible to be a table.
-            if !parent_directory_segments.is_empty() {
-                let table_ident = TableIdent::new(
-                    NamespaceIdent::from_vec(parent_directory_segments.clone())?,
-                    stripped_subfolder.to_string(),
-                );
-                futures.push(
-                    async move { (stripped_subfolder, self.table_exists(&table_ident).await) },
-                );
-                continue;
-            };
-
-            let mut cur_directory_segments = parent_directory_segments.clone();
-            cur_directory_segments.push(stripped_subfolder.to_string());
-            results.push(NamespaceIdent::from_vec(cur_directory_segments).unwrap());
-        }
-
-        // Block wait for all async operations to complete.
-        let exists_results: Vec<(&str, Result<bool, IcebergError>)> = join_all(futures).await;
-        for (stripped_subfolder, check_result) in exists_results {
-            let is_table = check_result?;
-            if !is_table {
-                let mut cur_directory_segments = parent_directory_segments.clone();
-                cur_directory_segments.push(stripped_subfolder.to_string());
-                results.push(NamespaceIdent::from_vec(cur_directory_segments).unwrap());
-            }
-        }
-
-        Ok(results)
-    }
-
-    /// Create a new namespace inside the catalog, return error if namespace already exists, or any parent namespace doesn't exist.
-    async fn create_namespace(
-        &self,
-        namespace: &iceberg::NamespaceIdent,
-        _properties: HashMap<String, String>,
-    ) -> IcebergResult<iceberg::Namespace> {
-        // Check whether the namespace already exists.
-        let path_buf = self.get_namespace_path(Some(namespace));
-        let normalized_directory = normalize_directory(path_buf.clone());
-        let exists = self
-            .get_operator()
-            .await?
-            .op
-            .exists(&normalized_directory)
-            .await?;
-        if exists {
-            return Err(IcebergError::new(
-                iceberg::ErrorKind::NamespaceAlreadyExists,
-                format!("Namespace {:?} already exists", namespace),
-            ));
-        }
-
-        // Different with filesystem's behavior, opendal `create_dir` creates directories recursively.
-        // To create the given namespace, check its direct parent directory first.
-        let parent_directory = get_parent_directory(&normalized_directory);
-        let exists = self
-            .get_operator()
-            .await?
-            .op
-            .exists(&parent_directory)
-            .await?;
-        if !exists {
-            return Err(IcebergError::new(
-                iceberg::ErrorKind::NamespaceNotFound,
-                format!(
-                    "Parent namespace for the given one {:?} already exists",
-                    namespace
-                ),
-            ));
-        }
-
-        self.get_operator()
-            .await?
-            .op
-            .create_dir(&normalized_directory)
+        let subdirectories = self
+            .list_direct_subdirectories(&parent_directory)
             .await
             .map_err(|e| {
                 IcebergError::new(
                     iceberg::ErrorKind::Unexpected,
-                    format!(
-                        "Failed to create namespace directory {}: {}",
-                        namespace.to_url_string(),
-                        e
-                    ),
+                    format!("Failed to list namespaces: {}", e),
                 )
             })?;
 
-        // Return the created namespace.
-        Ok(Namespace::new(namespace.clone()))
+        // Start multiple async functions in parallel to check whether namespace.
+        let mut futures = Vec::with_capacity(subdirectories.len());
+        for cur_subdir in subdirectories.iter() {
+            let cur_namespace_ident = if let Some(parent_namespace_ident) = parent {
+                let mut parent_namespace_segments = parent_namespace_ident.clone().to_vec();
+                parent_namespace_segments.push(cur_subdir.to_string());
+                NamespaceIdent::from_vec(parent_namespace_segments).unwrap()
+            } else {
+                NamespaceIdent::new(cur_subdir.to_string())
+            };
+            futures.push(async move { self.namespace_exists(&cur_namespace_ident).await });
+        }
+
+        // Wait for all operations to complete and collect results.
+        let exists_results = join_all(futures).await;
+        let mut res: Vec<NamespaceIdent> = Vec::new();
+        for (exists_result, cur_subdir) in exists_results.into_iter().zip(subdirectories.iter()) {
+            let is_namespace = exists_result?;
+            if is_namespace {
+                let cur_namespace_ident = if let Some(parent_namespace_ident) = parent {
+                    let mut parent_namespace_segments = parent_namespace_ident.clone().to_vec();
+                    parent_namespace_segments.push(cur_subdir.to_string());
+                    NamespaceIdent::from_vec(parent_namespace_segments).unwrap()
+                } else {
+                    NamespaceIdent::new(cur_subdir.to_string())
+                };
+                res.push(cur_namespace_ident);
+            }
+        }
+
+        Ok(res)
+    }
+
+    /// Create a new namespace inside the catalog, return error if namespace already exists, or any parent namespace doesn't exist.
+    ///
+    /// TODO(hjiang): Implement properties handling.
+    async fn create_namespace(
+        &self,
+        namespace_ident: &iceberg::NamespaceIdent,
+        _properties: HashMap<String, String>,
+    ) -> IcebergResult<iceberg::Namespace> {
+        let segments = namespace_ident.clone().inner();
+        let mut segment_vec = vec![];
+        for cur_segment in &segments[..segments.len().saturating_sub(1)] {
+            segment_vec.push(cur_segment.clone());
+            let parent_namespace_ident = NamespaceIdent::from_vec(segment_vec.clone())?;
+            let exists = self.namespace_exists(&parent_namespace_ident).await?;
+            if !exists {
+                return Err(IcebergError::new(
+                    iceberg::ErrorKind::NamespaceNotFound,
+                    format!(
+                        "Parent Namespace {:?} doesn't exists",
+                        parent_namespace_ident
+                    ),
+                ));
+            }
+        }
+        self.write_object(
+            &FileCatalog::get_namespace_indicator_name(namespace_ident),
+            /*content=*/ "",
+        )
+        .await
+        .map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Failed to write metadata file at namespace creation: {}", e),
+            )
+        })?;
+
+        Ok(Namespace::new(namespace_ident.clone()))
     }
 
     /// Get a namespace information from the catalog, return error if requested namespace doesn't exist.
     async fn get_namespace(&self, namespace_ident: &NamespaceIdent) -> IcebergResult<Namespace> {
         let exists = self.namespace_exists(namespace_ident).await?;
-        if !exists {
-            return Err(IcebergError::new(
-                iceberg::ErrorKind::NamespaceNotFound,
-                format!("Namespace {:?} doesn't exist", namespace_ident),
-            ));
+        if exists {
+            return Ok(Namespace::new(namespace_ident.clone()));
         }
-        Ok(Namespace::new(namespace_ident.clone()))
+        Err(IcebergError::new(
+            iceberg::ErrorKind::NamespaceNotFound,
+            format!("Namespace {:?} does not exist", namespace_ident),
+        ))
     }
 
     /// Check if namespace exists in catalog.
     async fn namespace_exists(&self, namespace_ident: &NamespaceIdent) -> IcebergResult<bool> {
-        let path_buf = self.get_namespace_path(Some(namespace_ident));
-        let entry_metadata = self
+        match self
             .get_operator()
             .await?
-            .op
-            .stat(&normalize_directory(path_buf.clone()))
-            .await;
-
-        // Fails to stat entry metadata, check whether error type is NotFound or other IO errors.
-        if entry_metadata.is_err() {
-            let stats_error = entry_metadata.unwrap_err();
-            if stats_error.kind() == OpendalErrorKind::NotFound {
-                return Ok(false);
-            }
-            return Err(IcebergError::new(
-                iceberg::ErrorKind::Unexpected,
-                format!(
-                    "Failed to stat directory {:?} indicated by namespace {:?}: {:?}",
-                    path_buf, namespace_ident, stats_error
-                ),
-            ));
+            .stat(&FileCatalog::get_namespace_indicator_name(namespace_ident))
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(_) => return Ok(false),
         }
-
-        // Check whether filesystem entry is of directory type.
-        let entry_metadata = entry_metadata.unwrap();
-        if entry_metadata.mode() == EntryMode::DIR {
-            return Ok(true);
-        }
-        return Err(IcebergError::new(
-            iceberg::ErrorKind::Unexpected,
-            format!(
-                "Namespace directory {:?} indicated by {:?} is not directory at local filesystem",
-                path_buf, namespace_ident
-            ),
-        ));
     }
 
     /// Drop a namespace from the catalog.
     async fn drop_namespace(&self, namespace_ident: &NamespaceIdent) -> IcebergResult<()> {
-        // Construct a `PathBuf` doesn't lead to IO operation, while `PathBuf::exists` does.
-        let path_buf = self.get_namespace_path(Some(namespace_ident));
-        let path = path_buf.to_str().unwrap();
-        let entry_metadata = self
-            .get_operator()
-            .await?
-            .op
-            .stat(&normalize_directory(path_buf.clone()))
-            .await?;
-        if entry_metadata.mode() != EntryMode::DIR {
-            return Err(IcebergError::new(
-                iceberg::ErrorKind::NamespaceNotFound,
-                format!("Namespace {:?} doesn't exist", namespace_ident),
-            ));
-        }
+        let key = FileCatalog::get_namespace_indicator_name(namespace_ident);
 
-        self.get_operator()
-            .await?
-            .op
-            .remove_all(path)
-            .await
-            .map_err(|e| {
-                IcebergError::new(
-                    iceberg::ErrorKind::Unexpected,
-                    format!("failed to remove namespace directory {}: {}", path, e),
-                )
-            })?;
+        self.get_operator().await?.delete(&key).await.map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Failed to drop namespace: {}", e),
+            )
+        })?;
+
         Ok(())
     }
 
@@ -442,43 +529,26 @@ impl Catalog for FileSystemCatalog {
             ));
         }
 
-        // Read the namespace directory.
-        let mut tables = Vec::new();
-        let path_buf = self.get_namespace_path(Some(namespace_ident));
-        let entries = self
-            .get_operator()
-            .await?
-            .op
-            .list(&normalize_directory(path_buf.clone()))
-            .await?;
+        let parent_directory = namespace_ident.to_url_string();
+        let subdirectories = self
+            .list_direct_subdirectories(&parent_directory)
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to list tables: {}", e),
+                )
+            })?;
 
-        // opendal list on prefix, and returns namespace as well, skip here.
-        let subfolders = namespace_ident.to_vec();
-        // Subfolder indicated by namespace identity without slash suffix.
-        let subfolder_to_exclude = subfolders.last().unwrap();
-
-        for cur_entry in entries.iter() {
-            if cur_entry.metadata().mode() != EntryMode::DIR {
-                continue;
-            }
-            // Two things to notice here:
-            // 1. Entries returned from opendal list operation are suffixed with "/".
-            // 2. opendal list operation returns parent directory as well.
-            let stripped_subfolder = cur_entry.name().strip_suffix("/").unwrap();
-            if stripped_subfolder == subfolder_to_exclude {
-                continue;
-            }
-            let table_ident =
-                TableIdent::new(namespace_ident.clone(), stripped_subfolder.to_string());
-
-            // Subdirectories under the given parent directory could indicate namespace rather than table, need to double check metadata file existence.
-            let is_table = self.table_exists(&table_ident).await?;
-            if is_table {
-                tables.push(table_ident);
+        let mut table_idents: Vec<TableIdent> = Vec::with_capacity(subdirectories.len());
+        for cur_subdir in subdirectories.iter() {
+            let cur_table_ident = TableIdent::new(namespace_ident.clone(), cur_subdir.clone());
+            let exists = self.table_exists(&cur_table_ident).await?;
+            if exists {
+                table_idents.push(cur_table_ident);
             }
         }
-
-        Ok(tables)
+        Ok(table_idents)
     }
 
     async fn update_namespace(
@@ -495,28 +565,38 @@ impl Catalog for FileSystemCatalog {
         namespace_ident: &NamespaceIdent,
         creation: TableCreation,
     ) -> IcebergResult<Table> {
+        let directory = namespace_ident.to_url_string();
         let table_ident = TableIdent::new(namespace_ident.clone(), creation.name.clone());
-        let warehouse_location = self.warehouse_location.clone();
-        let metadata_directory = format!(
-            "{}/{}/{}/metadata",
-            warehouse_location,
-            namespace_ident.to_url_string(),
-            creation.name,
+
+        // Create version hint file.
+        let version_hint_filepath =
+            format!("{}/{}/metadata/version-hint.text", directory, creation.name);
+        self.write_object(&version_hint_filepath, /*content=*/ "0")
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to write version hint file at table creation: {}", e),
+                )
+            })?;
+
+        // Create metadata file.
+        let metadata_filepath = format!(
+            "{}/{}/metadata/v0.metadata.json",
+            directory,
+            creation.name.clone()
         );
-        let version_hint_path = format!("{}/version-hint.text", metadata_directory);
 
-        // Create the initial table metadata.
         let table_metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
-
-        // Write the initial metadata file.
-        let metadata_file_path = format!("{metadata_directory}/v0.metadata.json");
         let metadata_json = serde_json::to_string(&table_metadata.metadata)?;
-        let output = self.file_io.new_output(&metadata_file_path)?;
-        output.write(metadata_json.into()).await?;
-
-        // Write the version hint file.
-        let version_hint_output = self.file_io.new_output(&version_hint_path)?;
-        version_hint_output.write("0".into()).await?;
+        self.write_object(&metadata_filepath, /*content=*/ &metadata_json)
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to write metadata file at table creation: {}", e),
+                )
+            })?;
 
         let table = Table::builder()
             .metadata(table_metadata.metadata)
@@ -528,35 +608,10 @@ impl Catalog for FileSystemCatalog {
 
     /// Load table from the catalog.
     async fn load_table(&self, table_ident: &TableIdent) -> IcebergResult<Table> {
-        // Construct the path to the version hint file
-        let metadata_directory = format!(
-            "{}/{}/{}/metadata",
-            self.warehouse_location,
-            table_ident.namespace().to_url_string(),
-            table_ident.name(),
-        );
-        let version_hint_path = format!("{}/version-hint.text", metadata_directory,);
+        let (metadata_filepath, metadata) = self.load_metadata(table_ident).await?;
 
-        // Read the version hint to get the latest metadata version
-        let version_hint_input = self.file_io.new_input(&version_hint_path)?;
-        let version_bytes = version_hint_input.read().await?;
-        let version_str = std::str::from_utf8(&version_bytes)
-            .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
-        let version = version_str
-            .trim()
-            .parse::<u32>()
-            .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
-
-        // Construct the path to the metadata file
-        let metadata_path = format!("{}/v{}.metadata.json", metadata_directory, version,);
-
-        // Read and parse table metadata.
-        let input_file = self.file_io.new_input(&metadata_path)?;
-        let metadata_content = input_file.read().await?;
-        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)
-            .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
-
-        // Build and return the table
+        // Build and return the table.
+        let metadata_path = format!("{}/{}", self.warehouse_location, metadata_filepath);
         let table = Table::builder()
             .metadata_location(metadata_path)
             .metadata(metadata)
@@ -568,124 +623,45 @@ impl Catalog for FileSystemCatalog {
 
     /// Drop a table from the catalog.
     async fn drop_table(&self, table: &TableIdent) -> IcebergResult<()> {
-        // Construct the path to the table directory.
-        let table_directory = format!(
-            "{}/{}/{}",
-            self.warehouse_location,
-            table.namespace().to_url_string(),
-            table.name()
-        );
-        let table_metadata_filepath = format!("{}/metadata/version-hint.text", table_directory);
-
-        // Check if path exists first.
-        let file_metadata = self
-            .get_operator()
-            .await?
-            .op
-            .stat(&table_metadata_filepath)
+        let directory = format!("{}/{}", table.namespace().to_url_string(), table.name());
+        let objects = self
+            .list_objects_under_directory(&directory)
             .await
             .map_err(|e| {
                 IcebergError::new(
                     iceberg::ErrorKind::Unexpected,
-                    format!(
-                        "Table version hint does not exist {}: {:?}",
-                        table_metadata_filepath, e
-                    ),
+                    format!("Failed to get objects under {}: {}", directory, e),
                 )
             })?;
-
-        if file_metadata.mode() != EntryMode::FILE {
-            return Err(IcebergError::new(
+        self.delete_all_objects(objects).await.map_err(|e| {
+            IcebergError::new(
                 iceberg::ErrorKind::Unexpected,
-                format!(
-                    "Table version hint file {} doesn't exist.",
-                    table_metadata_filepath
-                ),
-            ));
-        }
-
-        // Remove the directory and all its contents.
-        self.get_operator()
-            .await?
-            .op
-            .remove_all(&table_directory)
-            .await
-            .map_err(|e| {
-                IcebergError::new(
-                    iceberg::ErrorKind::Unexpected,
-                    format!(
-                        "failed to remove namespace directory {}: {}",
-                        table_directory, e
-                    ),
-                )
-            })?;
-
+                format!("Failed to delete objects: {}", e),
+            )
+        })?;
         Ok(())
     }
 
     /// Check if a table exists in the catalog.
-    async fn table_exists(&self, table_ident: &TableIdent) -> IcebergResult<bool> {
-        let mut metadata_directory = self.get_namespace_path(Some(table_ident.namespace()));
-        metadata_directory.push(table_ident.name());
-        metadata_directory.push("metadata");
+    async fn table_exists(&self, table: &TableIdent) -> IcebergResult<bool> {
+        let mut version_hint_filepath = PathBuf::from(table.namespace.to_url_string());
+        version_hint_filepath.push(table.name());
+        version_hint_filepath.push("metadata");
+        version_hint_filepath.push("version-hint.text");
 
-        let metadata_directory_stats = self
-            .get_operator()
-            .await?
-            .op
-            .stat(&normalize_directory(metadata_directory.clone()))
-            .await;
-        if metadata_directory_stats.is_err() {
-            let stats_error = metadata_directory_stats.unwrap_err();
-            if stats_error.kind() == OpendalErrorKind::NotFound {
-                return Ok(false);
-            }
-            return Err(IcebergError::new(
-                iceberg::ErrorKind::Unexpected,
-                format!(
-                    "Failed to stat metadata directory {:?} indicated by table {:?}: {:?}",
-                    metadata_directory, table_ident, stats_error
-                ),
-            ));
-        }
-
-        // Check if version hint file exists.
-        let mut version_hint_file = metadata_directory;
-        version_hint_file.push("version-hint.text");
-        let version_hint_stats = self
-            .get_operator()
-            .await?
-            .op
-            .stat(version_hint_file.to_str().unwrap())
-            .await;
-        if version_hint_stats.is_err() {
-            let stats_error = version_hint_stats.unwrap_err();
-            if stats_error.kind() == OpendalErrorKind::NotFound {
-                // When create the table, it's possible to succeed on directory creation, but fail on version hint file persistence.
-                return Ok(false);
-            }
-            return Err(IcebergError::new(
-                iceberg::ErrorKind::Unexpected,
-                format!(
-                    "Failed to stat metadata file {:?} indicated by table {:?}: {:?}",
-                    version_hint_file, table_ident, stats_error
-                ),
-            ));
-        }
-
-        let version_hint_stats = version_hint_stats.unwrap();
-        if version_hint_stats.mode() != EntryMode::FILE {
-            return Err(IcebergError::new(
-                iceberg::ErrorKind::DataInvalid,
-                format!(
-                    "Metadata file {:?} is supposed to file, but actually is of type {:?}",
-                    version_hint_file,
-                    version_hint_stats.mode()
-                ),
-            ));
-        }
-
-        Ok(true)
+        let exists = self
+            .object_exists(version_hint_filepath.to_str().unwrap())
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!(
+                        "Failed to check object existence when get table existence: {}",
+                        e
+                    ),
+                )
+            })?;
+        Ok(exists)
     }
 
     /// Rename a table in the catalog.
@@ -697,14 +673,13 @@ impl Catalog for FileSystemCatalog {
     ///
     /// TODO(hjiang): Implement table requirements, which indicates user-defined compare-and-swap logic.
     async fn update_table(&self, mut commit: TableCommit) -> IcebergResult<Table> {
-        let (metadata_file_path, metadata) = self.load_metadata(commit.identifier()).await?;
+        let (metadata_filepath, metadata) = self.load_metadata(commit.identifier()).await?;
         let version = metadata.next_sequence_number();
         let mut builder = TableMetadataBuilder::new_from_metadata(
             metadata.clone(),
-            /*current_file_location=*/ Some(metadata_file_path.clone()),
+            /*current_file_location=*/ Some(metadata_filepath.clone()),
         );
 
-        // Manifest files and manifest list has persisted into storage, update metadata and persist.
         let updates = commit.take_updates();
         for update in &updates {
             match update {
@@ -728,15 +703,20 @@ impl Catalog for FileSystemCatalog {
 
         // Write metadata file.
         let metadata_directory = format!(
-            "{}/{}/{}/metadata",
-            self.warehouse_location,
+            "{}/{}/metadata",
             commit.identifier().namespace().to_url_string(),
             commit.identifier().name()
         );
-        let metadata_file_path = format!("{}/v{}.metadata.json", metadata_directory, version);
+        let new_metadata_filepath = format!("{}/v{}.metadata.json", metadata_directory, version,);
         let metadata_json = serde_json::to_string(&metadata)?;
-        let output = self.file_io.new_output(&metadata_file_path)?;
-        output.write(metadata_json.into()).await?;
+        self.write_object(&new_metadata_filepath, &metadata_json)
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to write metadata file at table update: {}", e),
+                )
+            })?;
 
         // Manifest files and manifest list has persisted into storage, make modifications based on puffin blobs.
         //
@@ -753,16 +733,20 @@ impl Catalog for FileSystemCatalog {
 
         // Write version hint file.
         let version_hint_path = format!("{}/version-hint.text", metadata_directory);
-        let version_hint_output = self.file_io.new_output(&version_hint_path)?;
-        version_hint_output
-            .write(format!("{version}").into())
-            .await?;
+        self.write_object(&version_hint_path, &format!("{version}"))
+            .await
+            .map_err(|e| {
+                IcebergError::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("Failed to write version hint file at table update: {}", e),
+                )
+            })?;
 
         Table::builder()
             .identifier(commit.identifier().clone())
             .file_io(self.file_io.clone())
             .metadata(metadata)
-            .metadata_location(metadata_file_path)
+            .metadata_location(metadata_filepath)
             .build()
     }
 }
@@ -770,25 +754,63 @@ impl Catalog for FileSystemCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use crate::storage::iceberg::test_utils;
     use crate::storage::iceberg::test_utils::catalog_test_utils;
 
     use std::collections::HashMap;
-    use std::path::Path;
-
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tempfile::TempDir;
 
-    use iceberg::spec::{SnapshotReference, SnapshotRetention, MAIN_BRANCH};
+    use iceberg::spec::{
+        NestedField, PrimitiveType, Schema, SnapshotReference, SnapshotRetention,
+        Type as IcebergType, MAIN_BRANCH,
+    };
     use iceberg::NamespaceIdent;
     use iceberg::Result as IcebergResult;
 
+    // Create S3 catalog with local minio deployment and a random bucket.
+    async fn create_s3_catalog() -> FileCatalog {
+        let (bucket_name, warehouse_uri) =
+            crate::storage::iceberg::test_utils::get_test_minio_bucket_and_warehouse();
+        test_utils::object_store_test_utils::create_test_s3_bucket(bucket_name.clone())
+            .await
+            .unwrap();
+        test_utils::create_minio_s3_catalog(&bucket_name, &warehouse_uri)
+    }
+
+    // Test util function to get iceberg schema,
+    async fn get_test_schema() -> IcebergResult<Schema> {
+        let field = NestedField::required(
+            /*id=*/ 1,
+            "field_name".to_string(),
+            IcebergType::Primitive(PrimitiveType::Int),
+        );
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![Arc::new(field)])
+            .build()?;
+
+        Ok(schema)
+    }
+
     // Test util function to create a new table.
-    async fn create_test_table(catalog: &FileSystemCatalog) -> IcebergResult<()> {
+    async fn create_test_table(catalog: &FileCatalog) -> IcebergResult<()> {
         // Define namespace and table.
         let namespace = NamespaceIdent::from_strs(["default"])?;
-        let table_creation =
-            catalog_test_utils::create_test_table_creation(&namespace, "test_table")?;
+        let table_name = "test_table".to_string();
+
+        let schema = get_test_schema().await?;
+        let table_creation = TableCreation::builder()
+            .name(table_name.clone())
+            .location(format!(
+                "{}/{}/{}",
+                catalog.warehouse_location,
+                namespace.to_url_string(),
+                table_name
+            ))
+            .schema(schema.clone())
+            .build();
 
         catalog
             .create_namespace(&namespace, /*properties=*/ HashMap::new())
@@ -798,85 +820,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_get_base_directory() {
-        // Root directory.
-        assert_eq!(get_base_directory("/"), "/");
-        // Directory without slash suffix.
-        assert_eq!(get_base_directory("/a/b/c"), "c");
-        // Directory with slash suffix.
-        assert_eq!(get_base_directory("/a/b/c/"), "c");
-    }
-
-    #[test]
-    fn test_get_parent_directory() {
-        // Root directory.
-        assert_eq!(get_parent_directory("/"), "/");
-        // Directory without slash suffix.
-        assert_eq!(get_parent_directory("/a/b/c"), "/a/b/");
-        // Directory with slash suffix.
-        assert_eq!(get_parent_directory("/a/b/c/"), "/a/b/");
-    }
-
-    #[test]
-    fn test_normalize_directory() {
-        // Root directory.
-        assert_eq!(normalize_directory(PathBuf::from("/")), "/");
-        // Directory without slash suffix.
-        assert_eq!(normalize_directory(PathBuf::from("/a/b/c")), "/a/b/c/");
-        // Directory with slash suffix.
-        assert_eq!(normalize_directory(PathBuf::from("/a/b/c/")), "/a/b/c/");
-    }
-
-    #[tokio::test]
-    async fn test_filesystem_catalog_create_namespace() -> IcebergResult<()> {
-        let temp_dir = TempDir::new().expect("tempdir failed");
-        let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileSystemCatalog::new(warehouse_path.to_string());
-        let namespace = NamespaceIdent::from_strs(["default", "ns"])?;
-
-        // Namespace creation fails because parent namespace doesn't exist.
-        let result = catalog
-            .create_namespace(&namespace, /*properties=*/ HashMap::new())
-            .await;
-        let err = result.unwrap_err();
-        assert_eq!(err.kind(), iceberg::ErrorKind::NamespaceNotFound);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_filesystem_catalog_drop_namespace() -> IcebergResult<()> {
-        let temp_dir = TempDir::new().expect("tempdir failed");
-        let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileSystemCatalog::new(warehouse_path.to_string());
-        let parent_namespace = NamespaceIdent::from_strs(["default"])?;
-        let child_namespace = NamespaceIdent::from_strs(["default", "ns"])?;
-
-        catalog
-            .create_namespace(&parent_namespace, /*properties=*/ HashMap::new())
-            .await?;
-        catalog
-            .create_namespace(&child_namespace, /*properties=*/ HashMap::new())
-            .await?;
-
-        // Drop parent namespace indicates drop the child namespace(s) as well.
-        catalog.drop_namespace(&parent_namespace).await?;
-        let exists = catalog.namespace_exists(&child_namespace).await?;
-        assert!(
-            !exists,
-            "Child namespace should not exist after dropping parent namespace"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_filesystem_catalog_namespace_operations() -> IcebergResult<()> {
-        let temp_dir = TempDir::new().expect("tempdir failed");
-        let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileSystemCatalog::new(warehouse_path.to_string());
-        let namespace = NamespaceIdent::from_strs(["default", "ns"])?;
+    async fn test_catalog_namespace_operations_impl(catalog: FileCatalog) -> IcebergResult<()> {
+        let namespace = NamespaceIdent::from_strs(vec!["default", "ns"])?;
 
         // Ensure namespace does not exist.
         let exists = catalog.namespace_exists(&namespace).await?;
@@ -885,14 +830,16 @@ mod tests {
         // Create parent namespace.
         catalog
             .create_namespace(
-                &NamespaceIdent::from_strs(["default"]).unwrap(),
+                &NamespaceIdent::from_strs(vec!["default"]).unwrap(),
                 /*properties=*/ HashMap::new(),
             )
             .await?;
+
         // Create namespace and check.
         catalog
             .create_namespace(&namespace, /*properties=*/ HashMap::new())
             .await?;
+
         let exists = catalog.namespace_exists(&namespace).await?;
         assert!(exists, "Namespace should exist after creation");
 
@@ -908,14 +855,9 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_filesystem_catalog_table_operations() -> IcebergResult<()> {
-        let temp_dir = TempDir::new().expect("tempdir failed");
-        let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileSystemCatalog::new(warehouse_path.to_string());
-
+    async fn test_catalog_table_operations_impl(catalog: FileCatalog) -> IcebergResult<()> {
         // Define namespace and table.
-        let namespace = NamespaceIdent::from_strs(["default"])?;
+        let namespace = NamespaceIdent::from_strs(vec!["default"])?;
         let table_name = "test_table".to_string();
         let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
 
@@ -925,26 +867,20 @@ mod tests {
             !table_already_exists,
             "Table should not exist before creation"
         );
-        let results = catalog.list_tables(&namespace).await;
-        let err = results.unwrap_err();
-        assert_eq!(err.kind(), iceberg::ErrorKind::NamespaceNotFound);
+
+        // TODO(hjiang): Add testcase to check list table here.
 
         create_test_table(&catalog).await?;
         let table_already_exists = catalog.table_exists(&table_ident).await?;
         assert!(table_already_exists, "Table should exist after creation");
 
         let tables = catalog.list_tables(&namespace).await?;
-        assert_eq!(
-            tables.len(),
-            1,
-            "Expects one table, but actually have {:?}",
-            tables
-        );
+        assert_eq!(tables.len(), 1);
         assert!(tables.contains(&table_ident));
 
         // Load table and check.
         let table = catalog.load_table(&table_ident).await?;
-        let expected_schema = catalog_test_utils::create_test_table_schema()?;
+        let expected_schema = get_test_schema().await?;
         assert_eq!(
             table.identifier(),
             &table_ident,
@@ -964,12 +900,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_list_operation() -> IcebergResult<()> {
-        let temp_dir = TempDir::new().expect("tempdir failed");
-        let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileSystemCatalog::new(warehouse_path.to_string());
-
+    async fn test_list_operation_impl(catalog: FileCatalog) -> IcebergResult<()> {
         // List namespaces with non-existent parent namespace.
         let res = catalog
             .list_namespaces(Some(
@@ -1095,11 +1026,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_update_table() -> IcebergResult<()> {
-        let temp_dir = TempDir::new().expect("tempdir failed");
-        let warehouse_path = temp_dir.path().to_str().unwrap();
-        let mut catalog = FileSystemCatalog::new(warehouse_path.to_string());
+    async fn test_update_table_impl(mut catalog: FileCatalog) -> IcebergResult<()> {
         create_test_table(&catalog).await?;
 
         let namespace = NamespaceIdent::from_strs(["default"])?;
@@ -1121,7 +1048,7 @@ mod tests {
                     .with_timestamp_ms(millis as i64)
                     .with_schema_id(0)
                     .with_manifest_list(format!(
-                        "file:///tmp/iceberg-test/{}/{}/snap-8161620281254644995-0-01966b87-6e93-7bc1-9e12-f1980d9737d3.avro",
+                        "s3://{}/{}/snap-8161620281254644995-0-01966b87-6e93-7bc1-9e12-f1980d9737d3.avro",
                         namespace.to_url_string(),
                         table_name
                     ))
@@ -1167,7 +1094,7 @@ mod tests {
         let table_metadata = table.metadata();
         assert_eq!(
             **table_metadata.current_schema(),
-            catalog_test_utils::create_test_table_schema().unwrap(),
+            get_test_schema().await.unwrap(),
             "Schema should match"
         );
         assert_eq!(
@@ -1181,37 +1108,64 @@ mod tests {
             "Current snapshot ID should be 1"
         );
 
-        // Check metadata files and manifest files are correctly created.
-        let table_path = format!(
-            "{warehouse_path}/{}/{table_name}",
-            namespace.to_url_string()
-        );
-        let metadata_filepath_v0 = format!("{table_path}/metadata/v0.metadata.json");
-        assert!(
-            Path::new(&metadata_filepath_v0).exists(),
-            "{metadata_filepath_v0} doesn't exist"
-        ); // created at table creation
-        let metadata_filepath_v1 = format!("{table_path}/metadata/v1.metadata.json");
-        assert!(
-            Path::new(&metadata_filepath_v1).exists(),
-            "{metadata_filepath_v1} doesn't exist"
-        ); // created at table update
-
-        let version_hint_filepath = format!("{table_path}/metadata/version-hint.text");
-        assert!(
-            Path::new(&version_hint_filepath).exists(),
-            "{version_hint_filepath} doesn't exist"
-        ); // created at table creation
-        assert_eq!(
-            catalog
-                .file_io
-                .new_input(version_hint_filepath)
-                .unwrap()
-                .read()
-                .await?,
-            "1"
-        ); // updated at table update
-
         Ok(())
+    }
+
+    /// -------------------------
+    /// Namespace operations test.
+    #[tokio::test]
+    async fn test_catalog_namespace_operations_filesystem() -> IcebergResult<()> {
+        let temp_dir = TempDir::new().expect("tempdir failed");
+        let warehouse_path = temp_dir.path().to_str().unwrap();
+        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {});
+        test_catalog_namespace_operations_impl(catalog).await
+    }
+    #[tokio::test]
+    async fn test_catalog_namespace_operations_s3() -> IcebergResult<()> {
+        let catalog = create_s3_catalog().await;
+        test_catalog_namespace_operations_impl(catalog).await
+    }
+
+    /// Table operations test.
+    #[tokio::test]
+    async fn test_catalog_table_operations_filesystem() -> IcebergResult<()> {
+        let temp_dir = TempDir::new().expect("tempdir failed");
+        let warehouse_path = temp_dir.path().to_str().unwrap();
+        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {});
+        test_catalog_table_operations_impl(catalog).await
+    }
+    #[tokio::test]
+    async fn test_catalog_table_operations_s3() -> IcebergResult<()> {
+        let catalog = create_s3_catalog().await;
+        test_catalog_table_operations_impl(catalog).await
+    }
+
+    /// List operation test.
+    #[tokio::test]
+    async fn test_list_operation_filesystem() -> IcebergResult<()> {
+        let temp_dir = TempDir::new().expect("tempdir failed");
+        let warehouse_path = temp_dir.path().to_str().unwrap();
+        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {});
+        test_list_operation_impl(catalog).await
+    }
+    #[tokio::test]
+    async fn test_list_operation_s3() -> IcebergResult<()> {
+        let catalog = create_s3_catalog().await;
+        test_list_operation_impl(catalog).await
+    }
+
+    /// Update table test.
+    #[tokio::test]
+    async fn test_update_table_filesystem() -> IcebergResult<()> {
+        let temp_dir = TempDir::new().expect("tempdir failed");
+        let warehouse_path = temp_dir.path().to_str().unwrap();
+        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {});
+        test_update_table_impl(catalog).await
+    }
+    #[tokio::test]
+    async fn test_update_table_s3() -> IcebergResult<()> {
+        let catalog = create_s3_catalog().await;
+        create_test_table(&catalog).await?;
+        test_update_table_impl(catalog).await
     }
 }

@@ -1,5 +1,5 @@
 /// This module provides a few test util functions.
-use crate::storage::iceberg::object_storage_catalog::{S3Catalog, S3CatalogConfig};
+use crate::storage::iceberg::file_catalog::{CatalogConfig, FileCatalog};
 
 use randomizer::Randomizer;
 
@@ -25,16 +25,15 @@ static TEST_BUCKET_NAME_LEN: usize = 10;
 
 /// Create a S3 catalog, which communicates with local minio server.
 #[allow(dead_code)]
-pub(crate) fn create_minio_s3_catalog(bucket: &str, warehouse_uri: &str) -> S3Catalog {
-    let config = S3CatalogConfig::new(
-        /*warehouse_location=*/ "/tmp/iceberg-table".to_string(),
-        /*access_key_id=*/ MINIO_ACCESS_KEY_ID.to_string(),
-        /*secret_access_key=*/ MINIO_SECRET_ACCESS_KEY.to_string(),
-        /*region=*/ "auto".to_string(), // minio doesn't care about region.
-        /*bucket=*/ bucket.to_string(),
-        /*endpoint=*/ MINIO_ENDPOINT.to_string(),
-    );
-    S3Catalog::new(config)
+pub(crate) fn create_minio_s3_catalog(bucket: &str, warehouse_uri: &str) -> FileCatalog {
+    let catalog_config = CatalogConfig::S3 {
+        access_key_id: MINIO_ACCESS_KEY_ID.to_string(),
+        secret_access_key: MINIO_SECRET_ACCESS_KEY.to_string(),
+        region: "auto".to_string(), // minio doesn't care about region.
+        bucket: bucket.to_string(),
+        endpoint: MINIO_ENDPOINT.to_string(),
+    };
+    FileCatalog::new(warehouse_uri.to_string(), catalog_config)
 }
 
 #[allow(dead_code)]

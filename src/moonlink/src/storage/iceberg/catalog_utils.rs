@@ -1,4 +1,4 @@
-use crate::storage::iceberg::file_catalog::FileSystemCatalog;
+use crate::storage::iceberg::file_catalog::{CatalogConfig, FileCatalog};
 use crate::storage::iceberg::moonlink_catalog::MoonlinkCatalog;
 use crate::storage::iceberg::test_utils;
 
@@ -25,7 +25,6 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::properties::WriterProperties;
 
 /// Create a catelog based on the provided type.
-/// There're only two catalogs supported: filesystem catalog and object storage, all other catalogs either don't support transactional commit, or deletion vector.
 ///
 /// It's worth noting catalog and warehouse uri are not 1-1 mapping; for example, rest catalog could handle warehouse.
 /// Here we simply deduce catalog type from warehouse because both filesystem and object storage catalog are only able to handle certain scheme.
@@ -50,7 +49,10 @@ pub fn create_catalog(warehouse_uri: &str) -> IcebergResult<Box<dyn MoonlinkCata
 
     if url.scheme() == "file" {
         let absolute_path = url.path();
-        return Ok(Box::new(FileSystemCatalog::new(absolute_path.to_string())));
+        return Ok(Box::new(FileCatalog::new(
+            absolute_path.to_string(),
+            CatalogConfig::FileSystem {},
+        )));
     }
 
     // TODO(hjiang): Fallback to object storage for all warehouse uris.
