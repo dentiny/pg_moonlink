@@ -13,14 +13,18 @@ use crate::storage::iceberg::deletion_vector::{
     DELETION_VECTOR_CADINALITY, DELETION_VECTOR_REFERENCED_DATA_FILE,
 };
 
+use iceberg::spec::ManifestWriter;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 use iceberg::io::FileIO;
 use iceberg::puffin::CompressionCodec;
 use iceberg::puffin::PuffinWriter;
+use iceberg::spec::FormatVersion;
 use iceberg::spec::TableMetadata;
 use iceberg::spec::{
-    DataContentType, DataFile, DataFileFormat, Datum, ManifestWriterBuilder, Struct,
+    DataContentType, DataFile, DataFileFormat, Datum, ManifestContentType, ManifestListWriter,
+    ManifestWriterBuilder, Struct,
 };
 use iceberg::Result as IcebergResult;
 
@@ -204,11 +208,12 @@ pub(crate) async fn get_puffin_metadata_and_close(
     Ok(puffin_metadata)
 }
 
-/// Get manifest with the given sequence number, append with puffion deletion vector blob and rewrite it.
+/// Get all manifest files, keep data files unchanged, and merge existing deletion vectors with puffion deletion vector blob and rewrite it.
+/// For more details, please refer to https://docs.google.com/document/d/1fIvrRfEHWBephsX0Br2G-Ils_30JIkmGkcdbFbovQjI/edit?usp=sharing
 ///
 /// Note: this function should be called before catalog transaction commit.
 ///
-/// path: filepath for the puffin file.
+/// TODO(hjiang): There're too many sequential IO operations to rewrite deletion vectors, need to optimize.
 pub(crate) async fn append_puffin_metadata_and_rewrite(
     table_metadata: &TableMetadata,
     file_io: &FileIO,
@@ -220,63 +225,72 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
     let manifest_list = cur_snapshot
         .load_manifest_list(file_io, table_metadata)
         .await?;
-    let manifest_file = manifest_list
-        .entries()
-        .iter()
-        .find(|cur_manifest| cur_manifest.sequence_number == latest_seq_no)
-        .unwrap();
-    let manifest_file_path = manifest_file.manifest_path.clone();
-    let manifest = manifest_file.load_manifest(file_io).await?;
-    let (manifest_entries, manifest_metadata) = manifest.into_parts();
 
+    // Delete existing manifest list file and rewrite.
+    file_io.delete(cur_snapshot.manifest_list()).await?;
+    let manifest_list_outfile = file_io.new_output(cur_snapshot.manifest_list())?;
+    let mut manifest_list_writer = if table_metadata.format_version() == FormatVersion::V1 {
+        ManifestListWriter::v1(
+            manifest_list_outfile,
+            cur_snapshot.snapshot_id(),
+            /*parent_snapshot_id=*/ None,
+        )
+    } else {
+        ManifestListWriter::v2(
+            manifest_list_outfile,
+            cur_snapshot.snapshot_id(),
+            /*parent_snapshot_id=*/ None,
+            latest_seq_no,
+        )
+    };
 
-
-    println!("\n\n\nwhen update table, before write puffin file, the manifest entris look like {:?}\n\n\n", manifest_entries);
-
-    // Rewrite the manifest file.
-    // There's only one moonlink process/thread writing manifest file, so we don't need to write to temporary file and rename.
-    let output_file = file_io.new_output(manifest_file_path)?;
+    // Rewrite the deletion vector manifest files.
+    // TODO(hjiang): Double confirm for deletion vector manifest filename.
+    let manifest_outfile = file_io.new_output(format!(
+        "{}/metadata/{}-m0.avro",
+        table_metadata.location(),
+        Uuid::new_v4()
+    ))?;
     let mut manifest_writer = ManifestWriterBuilder::new(
-        output_file,
+        manifest_outfile,
         table_metadata.current_snapshot_id(),
         /*key_metadata=*/ vec![],
-        manifest_metadata.schema,
-        manifest_metadata.partition_spec,
+        table_metadata.current_schema().clone(),
+        table_metadata.default_partition_spec().as_ref().clone(),
     )
-    .build_v2_data();
+    .build_v2_deletes();
 
     // Map from referenced data file to deletion vector manifest entry.
-    //
-    // TODO(hjiang): Avoid a few clones for manifest entries.
     let mut existing_deletion_vector_entries = HashMap::new();
-    for cur_manifest_entry in manifest_entries.iter() {
-        // Add existing data files manifest entries to manifest writer.
-        if cur_manifest_entry.file_format() == DataFileFormat::Parquet {
-            manifest_writer.add_file(
-                cur_manifest_entry.data_file.clone(),
-                cur_manifest_entry.sequence_number().unwrap(),
-            )?;
+
+    // Iterate through all manifest files, keep data files and merge all deletion vectors.
+    for cur_manifest_file in manifest_list.entries() {
+        if cur_manifest_file.content == ManifestContentType::Data {
+            manifest_list_writer.add_manifests([cur_manifest_file.clone()].into_iter())?;
             continue;
         }
 
-        // Keep record deletion vector for potential later overwrite.
-        assert_eq!(
-            cur_manifest_entry.file_format(),
-            DataFileFormat::Puffin,
-            "Expect manifest entry to be either parquet or puffin."
-        );
-        let old_entry = existing_deletion_vector_entries.insert(
-            cur_manifest_entry
-                .data_file()
-                .referenced_data_file()
-                .unwrap(),
-            cur_manifest_entry,
-        );
-        assert!(
-            old_entry.is_none(),
-            "Deletion vector for the same data file {:?} appeared for multiple times!",
-            old_entry.unwrap().data_file().file_path()
-        );
+        let manifest = cur_manifest_file.load_manifest(file_io).await?;
+        let (manifest_entries, _) = manifest.into_parts();
+        for cur_manifest_entry in manifest_entries.into_iter() {
+            assert_eq!(
+                cur_manifest_entry.file_format(),
+                DataFileFormat::Puffin,
+                "Expect manifest entry to be either parquet or puffin."
+            );
+            let old_entry = existing_deletion_vector_entries.insert(
+                cur_manifest_entry
+                    .data_file()
+                    .referenced_data_file()
+                    .unwrap(),
+                cur_manifest_entry,
+            );
+            assert!(
+                old_entry.is_none(),
+                "Deletion vector for the same data file {:?} appeared for multiple times!",
+                old_entry.unwrap().data_file().file_path()
+            );
+        }
     }
 
     // Append puffin blobs into existing manifest entries.
@@ -288,7 +302,7 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
             .clone();
 
         let new_data_file = DataFileProxy {
-            content: DataContentType::Data,
+            content: DataContentType::PositionDeletes,
             file_path: puffin_filepath.to_string(),
             file_format: DataFileFormat::Puffin,
             partition: Struct::empty(),
@@ -329,7 +343,11 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
     }
 
     // Flush manifest file.
-    manifest_writer.write_manifest_file().await?;
+    let deletion_vector_manifest = manifest_writer.write_manifest_file().await?;
+
+    // Flush the manifest list, there's no need to rewrite metadata.
+    manifest_list_writer.add_manifests(std::iter::once(deletion_vector_manifest))?;
+    manifest_list_writer.close().await?;
 
     Ok(())
 }

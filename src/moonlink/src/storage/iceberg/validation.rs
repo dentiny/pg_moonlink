@@ -8,7 +8,7 @@ pub(crate) fn validate_puffin_manifest_entry(entry: &ManifestEntry) -> IcebergRe
 
     // Check data file content type.
     let data_file = entry.data_file();
-    if data_file.content_type() != DataContentType::Data {
+    if data_file.content_type() != DataContentType::PositionDeletes {
         return Err(iceberg::Error::new(
             iceberg::ErrorKind::DataInvalid,
             format!(

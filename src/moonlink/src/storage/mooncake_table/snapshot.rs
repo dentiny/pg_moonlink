@@ -88,9 +88,6 @@ impl SnapshotTableState {
 
         // Sync the latest change to iceberg.
         // TODO(hjiang): Error handling for snapshot sync-up.
-
-        println!("attempt to update snapshot\n\n");
-
         if self.iceberg_table_manager.is_some() {
             self.iceberg_table_manager
                 .as_mut()
@@ -296,8 +293,6 @@ impl SnapshotTableState {
     }
 
     fn process_deletion_log(&mut self, task: &mut SnapshotTask) {
-        println!("when deletion log, task is {:?}", task.new_deletions);
-
         self.advance_pending_deletions(task);
         self.apply_new_deletions(task);
     }
@@ -335,16 +330,9 @@ impl SnapshotTableState {
     fn apply_new_deletions(&mut self, task: &mut SnapshotTask) {
         for raw in take(&mut task.new_deletions) {
             let processed = Self::process_delete_record(self, raw);
-
-            println!("checking deletion record {:?}", processed);
-
             if processed.lsn <= task.new_lsn {
-                println!("push to committed deletion log: {:?}", processed);
-
                 Self::commit_deletion(self, processed);
             } else {
-                println!("push to committed deletion log: {:?}", processed);
-
                 self.uncommitted_deletion_log.push(Some(processed));
             }
         }

@@ -250,11 +250,6 @@ impl IcebergSnapshot for Snapshot {
         let mut disk_file_to_deletion_vector: HashMap<PathBuf, BatchDeletionVector> =
             HashMap::new();
         for manifest_file in manifest_list.entries().iter() {
-            // We're only interested in DATA files when recover snapshot status.
-            if manifest_file.content != ManifestContentType::Data {
-                continue;
-            }
-
             let manifest = manifest_file.load_manifest(file_io).await?;
 
             // All files (i.e. data files, deletion vector, manifest files) under the same snapshot are assigned with the same sequence number.
