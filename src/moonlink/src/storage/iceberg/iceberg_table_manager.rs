@@ -20,7 +20,6 @@ use arrow_schema::Schema as ArrowSchema;
 use iceberg::io::FileIO;
 use iceberg::puffin::CompressionCodec;
 use iceberg::spec::DataFileFormat;
-use iceberg::spec::ManifestContentType;
 use iceberg::spec::{DataFile, ManifestEntry};
 use iceberg::table::Table as IcebergTable;
 use iceberg::transaction::Transaction;
@@ -360,21 +359,16 @@ impl IcebergOperation for IcebergTableManager {
 mod tests {
     use super::*;
 
-    use crate::error::{Error, Result};
-    use crate::row;
     use crate::row::MoonlinkRow;
     use crate::row::{Identity, RowValue};
     use crate::storage::iceberg::iceberg_table_manager::IcebergTableManager;
-    use crate::storage::mooncake_table::{TableConfig, TableMetadata as MooncakeTableMetadata};
-    use crate::storage::verify_files_and_deletions;
+
     use crate::storage::MooncakeTable;
-    use crate::union_read::decode_read_state_for_testing;
-    use crate::union_read::ReadStateManager;
 
     use std::collections::HashMap;
     use std::fs::File;
     use std::sync::Arc;
-    use tempfile::{tempdir, TempDir};
+    use tempfile::tempdir;
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
@@ -382,7 +376,6 @@ mod tests {
     use iceberg::io::FileRead;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::arrow::ArrowWriter;
-    use tokio::sync::watch;
 
     /// Create test batch deletion vector.
     fn test_deletion_vector_1() -> BatchDeletionVector {
@@ -762,7 +755,7 @@ mod tests {
         );
 
         let deleted_rows = data_entry.deletion_vector.collect_deleted_rows();
-        let expected_deleted_rows = vec![0 as u64];
+        let expected_deleted_rows = vec![0_u64];
         assert_eq!(
             deleted_rows, expected_deleted_rows,
             "Expected deletion vector {:?}, actual deletion vector {:?}",
@@ -776,10 +769,7 @@ mod tests {
         table.flush(/*lsn=*/ 400).await.map_err(|e| {
             IcebergError::new(
                 iceberg::ErrorKind::Unexpected,
-                format!(
-                    "Failed to flush records to mooncake table because {:?}",
-                    e
-                ),
+                format!("Failed to flush records to mooncake table because {:?}", e),
             )
         })?;
         table.commit(/*lsn=*/ 400);
@@ -817,7 +807,7 @@ mod tests {
         );
 
         let deleted_rows = data_entry.deletion_vector.collect_deleted_rows();
-        let expected_deleted_rows = vec![0 as u64, 1 as u64];
+        let expected_deleted_rows = vec![0_u64, 1_u64];
         assert_eq!(
             deleted_rows, expected_deleted_rows,
             "Expected deletion vector {:?}, actual deletion vector {:?}",

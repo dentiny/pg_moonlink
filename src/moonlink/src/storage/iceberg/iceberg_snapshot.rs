@@ -21,7 +21,6 @@ use std::rc::Rc;
 
 use iceberg::puffin::CompressionCodec;
 use iceberg::spec::DataFileFormat;
-use iceberg::spec::ManifestContentType;
 use iceberg::transaction::Transaction;
 use iceberg::writer::file_writer::location_generator::DefaultLocationGenerator;
 use iceberg::writer::file_writer::location_generator::LocationGenerator;

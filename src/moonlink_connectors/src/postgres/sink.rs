@@ -82,6 +82,7 @@ impl BatchSink for Sink {
                 table_id as u64,
                 table_path,
                 identity,
+                /*iceberg_table_config=*/ None,
             );
             let (table_commit_tx, table_commit_rx) = watch::channel(0u64);
             self.last_committed_lsn_per_table

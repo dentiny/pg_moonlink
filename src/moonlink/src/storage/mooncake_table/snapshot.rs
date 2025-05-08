@@ -67,7 +67,7 @@ impl SnapshotTableState {
             last_commit: RecordLocation::MemoryBatch(0, 0),
             committed_deletion_log: Vec::new(),
             uncommitted_deletion_log: Vec::new(),
-            iceberg_table_manager: iceberg_table_manager,
+            iceberg_table_manager,
         }
     }
 

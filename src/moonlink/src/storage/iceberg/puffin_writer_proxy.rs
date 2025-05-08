@@ -13,7 +13,6 @@ use crate::storage::iceberg::deletion_vector::{
     DELETION_VECTOR_CADINALITY, DELETION_VECTOR_REFERENCED_DATA_FILE,
 };
 
-use iceberg::spec::ManifestWriter;
 use std::collections::HashMap;
 use uuid::Uuid;
 
