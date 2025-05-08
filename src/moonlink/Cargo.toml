@@ -9,6 +9,7 @@ arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
+aws-sdk-s3 = { version = "1.14", optional = true }
 bincode = { workspace = true }
 bitstream-io = { workspace = true }
 crc32fast = { workspace = true }
@@ -29,7 +30,6 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-aws-sdk-s3 = "1.14"
 mockall = "0.13"
 pprof = { version = "0.14", features = ["flamegraph"] }
 rand = "0.9.1"
@@ -39,3 +39,10 @@ tempfile = { workspace = true }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(profiling_enabled)'] }
+
+[features]
+default = ["storage-fs"]
+storage-all = ["storage-fs", "storage-s3"]
+
+storage-fs = ["opendal/services-fs", "iceberg/storage-fs"]
+storage-s3 = ["opendal/services-s3", "iceberg/storage-s3", "aws-sdk-s3"]

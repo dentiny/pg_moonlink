@@ -48,8 +48,7 @@ use iceberg::{
     Catalog, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableUpdate,
 };
 use opendal::layers::RetryLayer;
-use opendal::services::Fs;
-use opendal::services::S3;
+use opendal::services;
 use opendal::Operator;
 use tokio::sync::OnceCell;
 
@@ -74,7 +73,9 @@ fn normalize_directory(mut path: PathBuf) -> String {
 #[derive(Debug)]
 #[warn(dead_code)]
 pub enum CatalogConfig {
+    #[cfg(feature = "storage-fs")]
     FileSystem,
+    #[cfg(feature = "storage-s3")]
     S3 {
         access_key_id: String,
         secret_access_key: String,
@@ -85,12 +86,11 @@ pub enum CatalogConfig {
 }
 
 /// Create `FileIO` object based on the catalog config.
-fn create_file_io(config: &CatalogConfig, warehouse_location: &str) -> FileIO {
+fn create_file_io(config: &CatalogConfig) -> FileIO {
     match config {
-        CatalogConfig::FileSystem => FileIO::from_path(warehouse_location)
-            .unwrap()
-            .build()
-            .unwrap(),
+        #[cfg(feature = "storage-fs")]
+        CatalogConfig::FileSystem => FileIOBuilder::new_fs_io().build().unwrap(),
+        #[cfg(feature = "storage-s3")]
         CatalogConfig::S3 {
             access_key_id,
             secret_access_key,
@@ -125,7 +125,7 @@ pub struct FileCatalog {
 impl FileCatalog {
     #[allow(dead_code)]
     pub fn new(warehouse_location: String, config: CatalogConfig) -> Self {
-        let file_io = create_file_io(&config, &warehouse_location);
+        let file_io = create_file_io(&config);
         Self {
             config,
             file_io,
@@ -147,8 +147,9 @@ impl FileCatalog {
         self.operator
             .get_or_try_init(|| async {
                 match &self.config {
+                    #[cfg(feature = "storage-fs")]
                     CatalogConfig::FileSystem => {
-                        let builder = Fs::default().root(&self.warehouse_location);
+                        let builder = services::Fs::default().root(&self.warehouse_location);
                         let op = Operator::new(builder)
                             .expect("failed to create fs operator")
                             .layer(retry_layer)
@@ -159,6 +160,7 @@ impl FileCatalog {
                         .await?;
                         Ok(op)
                     }
+                    #[cfg(feature = "storage-s3")]
                     CatalogConfig::S3 {
                         access_key_id,
                         secret_access_key,
@@ -167,7 +169,7 @@ impl FileCatalog {
                         endpoint,
                         ..
                     } => {
-                        let builder = S3::default()
+                        let builder = services::S3::default()
                             .bucket(bucket)
                             .region(region)
                             .endpoint(endpoint)
@@ -754,8 +756,9 @@ impl Catalog for FileCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "storage-s3")]
+    use crate::storage::iceberg::s3_test_utils;
     use crate::storage::iceberg::test_utils;
-    use crate::storage::iceberg::test_utils::catalog_test_utils;
 
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -770,13 +773,13 @@ mod tests {
     use iceberg::Result as IcebergResult;
 
     // Create S3 catalog with local minio deployment and a random bucket.
+    #[cfg(feature = "storage-s3")]
     async fn create_s3_catalog() -> FileCatalog {
-        let (bucket_name, warehouse_uri) =
-            crate::storage::iceberg::test_utils::get_test_minio_bucket_and_warehouse();
-        test_utils::object_store_test_utils::create_test_s3_bucket(bucket_name.clone())
+        let (bucket_name, warehouse_uri) = s3_test_utils::get_test_minio_bucket_and_warehouse();
+        s3_test_utils::object_store_test_utils::create_test_s3_bucket(bucket_name.clone())
             .await
             .unwrap();
-        test_utils::create_minio_s3_catalog(&bucket_name, &warehouse_uri)
+        s3_test_utils::create_minio_s3_catalog(&bucket_name, &warehouse_uri)
     }
 
     // Test util function to get iceberg schema,
@@ -952,14 +955,18 @@ mod tests {
             .await?;
 
         // Create two tables under default namespace.
-        let table_creation_1 =
-            catalog_test_utils::create_test_table_creation(&default_namespace, "child_table_1")?;
+        let table_creation_1 = test_utils::catalog_test_utils::create_test_table_creation(
+            &default_namespace,
+            "child_table_1",
+        )?;
         catalog
             .create_table(&default_namespace, table_creation_1)
             .await?;
 
-        let table_creation_2 =
-            catalog_test_utils::create_test_table_creation(&default_namespace, "child_table_2")?;
+        let table_creation_2 = test_utils::catalog_test_utils::create_test_table_creation(
+            &default_namespace,
+            "child_table_2",
+        )?;
         catalog
             .create_table(&default_namespace, table_creation_2)
             .await?;
@@ -1121,6 +1128,7 @@ mod tests {
         test_catalog_namespace_operations_impl(catalog).await
     }
     #[tokio::test]
+    #[cfg(feature = "storage-s3")]
     async fn test_catalog_namespace_operations_s3() -> IcebergResult<()> {
         let catalog = create_s3_catalog().await;
         test_catalog_namespace_operations_impl(catalog).await
@@ -1135,6 +1143,7 @@ mod tests {
         test_catalog_table_operations_impl(catalog).await
     }
     #[tokio::test]
+    #[cfg(feature = "storage-s3")]
     async fn test_catalog_table_operations_s3() -> IcebergResult<()> {
         let catalog = create_s3_catalog().await;
         test_catalog_table_operations_impl(catalog).await
@@ -1149,6 +1158,7 @@ mod tests {
         test_list_operation_impl(catalog).await
     }
     #[tokio::test]
+    #[cfg(feature = "storage-s3")]
     async fn test_list_operation_s3() -> IcebergResult<()> {
         let catalog = create_s3_catalog().await;
         test_list_operation_impl(catalog).await
@@ -1163,6 +1173,7 @@ mod tests {
         test_update_table_impl(catalog).await
     }
     #[tokio::test]
+    #[cfg(feature = "storage-s3")]
     async fn test_update_table_s3() -> IcebergResult<()> {
         let catalog = create_s3_catalog().await;
         create_test_table(&catalog).await?;

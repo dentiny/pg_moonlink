@@ -8,3 +8,6 @@ pub(crate) mod puffin_writer_proxy;
 pub(crate) mod test_utils;
 pub(crate) mod tokio_retry_utils;
 pub(crate) mod validation;
+
+#[cfg(feature = "storage-s3")]
+pub(crate) mod s3_test_utils;

@@ -1,6 +1,7 @@
 use crate::storage::iceberg::file_catalog::{CatalogConfig, FileCatalog};
 use crate::storage::iceberg::moonlink_catalog::MoonlinkCatalog;
-use crate::storage::iceberg::test_utils;
+#[cfg(feature = "storage-s3")]
+use crate::storage::iceberg::s3_test_utils;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -30,12 +31,15 @@ use parquet::file::properties::WriterProperties;
 /// Here we simply deduce catalog type from warehouse because both filesystem and object storage catalog are only able to handle certain scheme.
 pub fn create_catalog(warehouse_uri: &str) -> IcebergResult<Box<dyn MoonlinkCatalog>> {
     // Special handle testing situation.
-    if warehouse_uri.starts_with(test_utils::MINIO_TEST_WAREHOUSE_URI_PREFIX) {
-        let test_bucket = test_utils::get_test_minio_bucket(warehouse_uri);
-        return Ok(Box::new(test_utils::create_minio_s3_catalog(
-            &test_bucket,
-            warehouse_uri,
-        )));
+    #[cfg(feature = "storage-s3")]
+    {
+        if warehouse_uri.starts_with(s3_test_utils::MINIO_TEST_WAREHOUSE_URI_PREFIX) {
+            let test_bucket = s3_test_utils::get_test_minio_bucket(warehouse_uri);
+            return Ok(Box::new(s3_test_utils::create_minio_s3_catalog(
+                &test_bucket,
+                warehouse_uri,
+            )));
+        }
     }
 
     let url = Url::parse(warehouse_uri)

@@ -356,7 +356,8 @@ mod tests {
     use crate::row::MoonlinkRow;
     use crate::row::{Identity, RowValue};
     use crate::storage::iceberg::iceberg_table_manager::IcebergTableManager;
-    use crate::storage::iceberg::test_utils;
+    #[cfg(feature = "storage-s3")]
+    use crate::storage::iceberg::s3_test_utils;
     use crate::storage::MooncakeTable;
 
     use std::collections::HashMap;
@@ -892,10 +893,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "storage-s3")]
     async fn test_object_storage_sync_snapshots() -> IcebergResult<()> {
-        let (bucket_name, warehouse_uri) =
-            crate::storage::iceberg::test_utils::get_test_minio_bucket_and_warehouse();
-        test_utils::object_store_test_utils::create_test_s3_bucket(bucket_name.clone()).await?;
+        let (bucket_name, warehouse_uri) = s3_test_utils::get_test_minio_bucket_and_warehouse();
+        s3_test_utils::object_store_test_utils::create_test_s3_bucket(bucket_name.clone()).await?;
         mooncake_table_snapshot_persist_impl(warehouse_uri).await
     }
 }
