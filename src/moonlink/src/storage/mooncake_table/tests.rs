@@ -1,7 +1,7 @@
 use super::test_utils::*;
 #[cfg(test)]
 use super::*;
-
+use crate::storage::mooncake_table::snapshot::ReadOutput;
 use rstest::*;
 use rstest_reuse::{self, *};
 

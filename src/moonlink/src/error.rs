@@ -3,7 +3,7 @@ use parquet::errors::ParquetError;
 use std::io;
 use std::result;
 use thiserror::Error;
-
+use tokio::sync::watch;
 /// Custom error type for moonlink
 #[derive(Debug, Error)]
 pub enum Error {
@@ -18,6 +18,12 @@ pub enum Error {
 
     #[error("Transaction {0} not found")]
     TransactionNotFound(u32),
+
+    #[error("Watch channel receiver error: {source}")]
+    WatchChannelRecvError {
+        #[source]
+        source: watch::error::RecvError,
+    },
 }
 
 pub type Result<T> = result::Result<T, Error>;
