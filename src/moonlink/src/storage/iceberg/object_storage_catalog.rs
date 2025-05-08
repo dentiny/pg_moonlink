@@ -1,4 +1,5 @@
 use super::puffin_writer_proxy::append_puffin_metadata_and_rewrite;
+use crate::storage::iceberg::deletion_vector_trait::DeletionVectorWrite;
 use crate::storage::iceberg::puffin_writer_proxy::{
     get_puffin_metadata_and_close, PuffinBlobMetadataProxy,
 };
@@ -280,27 +281,6 @@ impl S3Catalog {
         Ok(())
     }
 
-    // Get puffin metadata from the writer, and close it.
-    //
-    // TODO(hjiang): iceberg-rust currently doesn't support puffin write, to workaround and reduce code change,
-    // we record puffin metadata ourselves and rewrite manifest file before transaction commits.
-    pub(crate) async fn record_puffin_metadata_and_close(
-        &mut self,
-        puffin_filepath: String,
-        puffin_writer: PuffinWriter,
-    ) -> IcebergResult<()> {
-        self.puffin_blobs.insert(
-            puffin_filepath,
-            get_puffin_metadata_and_close(puffin_writer).await?,
-        );
-        Ok(())
-    }
-
-    /// After transaction commits, puffin metadata should be cleared for next puffin write.
-    pub(crate) fn clear_puffin_metadata(&mut self) {
-        self.puffin_blobs.clear();
-    }
-
     /// Load metadata and its location foe the given table.
     async fn load_metadata(
         &self,
@@ -343,6 +323,25 @@ impl S3Catalog {
             .map_err(|e| IcebergError::new(iceberg::ErrorKind::DataInvalid, e.to_string()))?;
 
         Ok((metadata_filepath, metadata))
+    }
+}
+
+#[async_trait]
+impl DeletionVectorWrite for S3Catalog {
+    async fn record_puffin_metadata_and_close(
+        &mut self,
+        puffin_filepath: String,
+        puffin_writer: PuffinWriter,
+    ) -> IcebergResult<()> {
+        self.puffin_blobs.insert(
+            puffin_filepath,
+            get_puffin_metadata_and_close(puffin_writer).await?,
+        );
+        Ok(())
+    }
+
+    fn clear_puffin_metadata(&mut self) {
+        self.puffin_blobs.clear();
     }
 }
 
@@ -499,8 +498,6 @@ impl Catalog for S3Catalog {
     }
 
     /// List tables from namespace, return error if the given namespace doesn't exist.
-    ///
-    /// TODO(hjiang): We should check namespace existence before list.
     async fn list_tables(
         &self,
         namespace_ident: &NamespaceIdent,

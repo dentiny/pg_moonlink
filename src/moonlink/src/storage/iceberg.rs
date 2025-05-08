@@ -1,7 +1,7 @@
 pub(crate) mod catalog_utils;
 pub(crate) mod deletion_vector;
+pub(crate) mod deletion_vector_trait;
 pub(crate) mod file_catalog;
-pub(crate) mod iceberg_snapshot;
 pub(crate) mod iceberg_table_manager;
 pub(crate) mod object_storage_catalog;
 pub(crate) mod puffin_utils;

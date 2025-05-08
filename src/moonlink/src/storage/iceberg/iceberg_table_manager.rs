@@ -3,11 +3,7 @@ use crate::storage::iceberg::deletion_vector::DeletionVector;
 use crate::storage::iceberg::deletion_vector::{
     DELETION_VECTOR_CADINALITY, DELETION_VECTOR_REFERENCED_DATA_FILE,
 };
-/// IcebergTableManager is responsible to interact with an iceberg table, including
-/// - read and write operations for all types of storage backends
-/// - maintain metadata for table status; for example, persisted data files and their corresponding deletion vector
-/// - local caching
-use crate::storage::iceberg::file_catalog::FileSystemCatalog;
+use crate::storage::iceberg::deletion_vector_trait::CatalogWithDeletionVectorWrite;
 use crate::storage::iceberg::puffin_utils;
 use crate::storage::iceberg::validation as IcebergValidation;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
@@ -90,7 +86,7 @@ pub struct IcebergTableManager {
 
     /// TODO(hjiang): A workaround iceberg-rust doesn't support deletion vector yet.
     /// Support only filesystem catalog for now, will add object storage catalog.
-    filesystem_catalog: FileSystemCatalog,
+    catalog: Box<dyn CatalogWithDeletionVectorWrite>,
 
     /// The iceberg table it's managing.
     iceberg_table: Option<IcebergTable>,
@@ -100,13 +96,12 @@ pub struct IcebergTableManager {
 }
 
 impl IcebergTableManager {
-    // TODO(hjiang): Revisit if we could have synchronous IO operations at table creation.
     #[allow(dead_code)]
     pub fn new(config: IcebergTableManagerConfig) -> IcebergTableManager {
-        let filesystem_catalog = FileSystemCatalog::new(config.warehouse_uri.clone());
+        let catalog = catalog_utils::create_catalog(&config.warehouse_uri).unwrap();
         Self {
             config,
-            filesystem_catalog,
+            catalog,
             iceberg_table: None,
             persisted_items: HashMap::new(),
         }
@@ -116,7 +111,7 @@ impl IcebergTableManager {
     async fn get_or_create_table(&mut self) -> IcebergResult<()> {
         if self.iceberg_table.is_none() {
             let table = catalog_utils::get_or_create_iceberg_table(
-                &self.filesystem_catalog,
+                &*self.catalog,
                 &self.config.warehouse_uri,
                 &self.config.namespace,
                 &self.config.table_name.clone(),
@@ -172,7 +167,7 @@ impl IcebergTableManager {
             // TODO(hjiang): Provide option to enable compression for puffin blob.
             puffin_writer.add(blob, CompressionCodec::None).await?;
 
-            self.filesystem_catalog
+            self.catalog
                 .record_puffin_metadata_and_close(puffin_filepath, puffin_writer)
                 .await?;
         }
@@ -299,8 +294,8 @@ impl IcebergOperation for IcebergTableManager {
             txn = action.apply().await?;
         }
 
-        self.iceberg_table = Some(txn.commit(&self.filesystem_catalog).await?);
-        self.filesystem_catalog.clear_puffin_metadata();
+        self.iceberg_table = Some(txn.commit(&*self.catalog).await?);
+        self.catalog.clear_puffin_metadata();
 
         Ok(())
     }
@@ -362,6 +357,7 @@ mod tests {
     use crate::row::MoonlinkRow;
     use crate::row::{Identity, RowValue};
     use crate::storage::iceberg::iceberg_table_manager::IcebergTableManager;
+    use crate::storage::iceberg::test_utils;
     use crate::storage::MooncakeTable;
 
     use std::collections::HashMap;
@@ -563,8 +559,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_mooncake_table_snapshot_persist() -> IcebergResult<()> {
+    async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergResult<()> {
         // Create a schema for testing.
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
@@ -583,7 +578,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().to_path_buf();
         let iceberg_table_config = IcebergTableManagerConfig {
-            warehouse_uri: path.to_str().unwrap().to_string(),
+            warehouse_uri,
             mooncake_table_schema: Arc::new(schema.clone()),
             namespace: vec!["namespace".to_string()],
             table_name: "test_table".to_string(),
@@ -888,5 +883,20 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filesystem_sync_snapshots() -> IcebergResult<()> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().to_str().unwrap().to_string();
+        mooncake_table_snapshot_persist_impl(path).await
+    }
+
+    #[tokio::test]
+    async fn test_object_storage_sync_snapshots() -> IcebergResult<()> {
+        let (bucket_name, warehouse_uri) =
+            crate::storage::iceberg::test_utils::get_test_minio_bucket_and_warehouse();
+        test_utils::object_store_test_utils::create_test_s3_bucket(bucket_name.clone()).await?;
+        mooncake_table_snapshot_persist_impl(warehouse_uri).await
     }
 }

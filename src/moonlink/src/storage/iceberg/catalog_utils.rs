@@ -1,3 +1,4 @@
+use crate::storage::iceberg::deletion_vector_trait::CatalogWithDeletionVectorWrite;
 use crate::storage::iceberg::file_catalog::FileSystemCatalog;
 use crate::storage::iceberg::test_utils;
 
@@ -18,8 +19,7 @@ use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::IcebergWriter;
 use iceberg::writer::IcebergWriterBuilder;
 use iceberg::{
-    Catalog, Error as IcebergError, NamespaceIdent, Result as IcebergResult, TableCreation,
-    TableIdent,
+    Error as IcebergError, NamespaceIdent, Result as IcebergResult, TableCreation, TableIdent,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::properties::WriterProperties;
@@ -29,7 +29,9 @@ use parquet::file::properties::WriterProperties;
 ///
 /// It's worth noting catalog and warehouse uri are not 1-1 mapping; for example, rest catalog could handle warehouse.
 /// Here we simply deduce catalog type from warehouse because both filesystem and object storage catalog are only able to handle certain scheme.
-pub fn create_catalog(warehouse_uri: &str) -> IcebergResult<Box<dyn Catalog>> {
+pub fn create_catalog(
+    warehouse_uri: &str,
+) -> IcebergResult<Box<dyn CatalogWithDeletionVectorWrite>> {
     // Special handle testing situation.
     if warehouse_uri.starts_with(test_utils::MINIO_TEST_WAREHOUSE_URI_PREFIX) {
         let test_bucket = test_utils::get_test_minio_bucket(warehouse_uri);
@@ -58,7 +60,7 @@ pub fn create_catalog(warehouse_uri: &str) -> IcebergResult<Box<dyn Catalog>> {
 }
 
 // Get or create an iceberg table in the given catalog from the given namespace and table name.
-pub(crate) async fn get_or_create_iceberg_table<C: Catalog + ?Sized>(
+pub(crate) async fn get_or_create_iceberg_table<C: CatalogWithDeletionVectorWrite + ?Sized>(
     catalog: &C,
     warehouse_uri: &str,
     namespace: &Vec<String>,
