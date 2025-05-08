@@ -27,7 +27,7 @@ static TEST_BUCKET_NAME_LEN: usize = 10;
 #[allow(dead_code)]
 pub(crate) fn create_minio_s3_catalog(bucket: &str, warehouse_uri: &str) -> S3Catalog {
     let config = S3CatalogConfig::new(
-        /*warehouse_location=*/ warehouse_uri.to_string(),
+        /*warehouse_location=*/ "/tmp/iceberg-table".to_string(),
         /*access_key_id=*/ MINIO_ACCESS_KEY_ID.to_string(),
         /*secret_access_key=*/ MINIO_SECRET_ACCESS_KEY.to_string(),
         /*region=*/ "auto".to_string(), // minio doesn't care about region.

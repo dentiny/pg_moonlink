@@ -47,6 +47,7 @@ use opendal::layers::RetryLayer;
 use opendal::services::S3;
 use opendal::Operator;
 use tokio::sync::OnceCell;
+use opendal::services::Fs;
 
 // Object storage usually doesn't have "folder" concept, when creating a new namespace, we create an indicator file under certain folder.
 static NAMESPACE_INDICATOR_OBJECT_NAME: &str = "indicator.text";
@@ -56,6 +57,15 @@ static MIN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(5
 static MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
 static RETRY_DELAY_FACTOR: f32 = 1.5;
 static MAX_RETRY_COUNT: usize = 5;
+
+fn normalize_directory(mut path: PathBuf) -> String {
+    let mut os_string = path.as_mut_os_str().to_os_string();
+    if os_string.to_str().unwrap().ends_with("/") {
+        return os_string.to_str().unwrap().to_string();
+    }
+    os_string.push("/");
+    os_string.to_str().unwrap().to_string()
+}
 
 #[derive(Debug)]
 struct ObjectStorageOperator {
@@ -140,22 +150,30 @@ impl S3Catalog {
     async fn get_operator(&self) -> IcebergResult<&ObjectStorageOperator> {
         self.operator
             .get_or_try_init(|| async {
-                let builder = S3::default()
-                    .bucket(&self.config.bucket)
-                    .region(&self.config.region)
-                    .endpoint(&self.config.endpoint)
-                    .access_key_id(&self.config.access_key_id)
-                    .secret_access_key(&self.config.secret_access_key);
-                let retry_layer = RetryLayer::new()
-                    .with_max_times(MAX_RETRY_COUNT)
-                    .with_jitter()
-                    .with_factor(RETRY_DELAY_FACTOR)
-                    .with_min_delay(MIN_RETRY_DELAY)
-                    .with_max_delay(MAX_RETRY_DELAY);
-                let op = Operator::new(builder)
-                    .expect("failed to create operator")
-                    .layer(retry_layer)
-                    .finish();
+                // let builder = S3::default()
+                //     .bucket(&self.config.bucket)
+                //     .region(&self.config.region)
+                //     .endpoint(&self.config.endpoint)
+                //     .access_key_id(&self.config.access_key_id)
+                //     .secret_access_key(&self.config.secret_access_key);
+                // let retry_layer = RetryLayer::new()
+                //     .with_max_times(MAX_RETRY_COUNT)
+                //     .with_jitter()
+                //     .with_factor(RETRY_DELAY_FACTOR)
+                //     .with_min_delay(MIN_RETRY_DELAY)
+                //     .with_max_delay(MAX_RETRY_DELAY);
+                // let op = Operator::new(builder)
+                //     .expect("failed to create operator")
+                //     .layer(retry_layer)
+                //     .finish();
+                // Ok(ObjectStorageOperator { op })
+
+                let builder = Fs::default().root("/tmp/iceberg-table");
+                let op = Operator::new(builder).unwrap().finish();
+                op.create_dir(&normalize_directory(PathBuf::from(
+                    &self.warehouse_location,
+                )))
+                .await?;
                 Ok(ObjectStorageOperator { op })
             })
             .await
