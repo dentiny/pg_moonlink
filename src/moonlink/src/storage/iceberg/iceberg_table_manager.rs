@@ -3,7 +3,7 @@ use crate::storage::iceberg::deletion_vector::DeletionVector;
 use crate::storage::iceberg::deletion_vector::{
     DELETION_VECTOR_CADINALITY, DELETION_VECTOR_REFERENCED_DATA_FILE,
 };
-use crate::storage::iceberg::deletion_vector_trait::CatalogWithDeletionVectorWrite;
+use crate::storage::iceberg::moonlink_catalog::MoonlinkCatalog;
 use crate::storage::iceberg::puffin_utils;
 use crate::storage::iceberg::validation as IcebergValidation;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
@@ -84,9 +84,8 @@ pub struct IcebergTableManager {
     /// Iceberg table configuration.
     config: IcebergTableManagerConfig,
 
-    /// TODO(hjiang): A workaround iceberg-rust doesn't support deletion vector yet.
-    /// Support only filesystem catalog for now, will add object storage catalog.
-    catalog: Box<dyn CatalogWithDeletionVectorWrite>,
+    /// Iceberg catalog, which interacts with the iceberg table.
+    catalog: Box<dyn MoonlinkCatalog>,
 
     /// The iceberg table it's managing.
     iceberg_table: Option<IcebergTable>,

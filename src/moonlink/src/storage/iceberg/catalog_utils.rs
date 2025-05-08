@@ -1,5 +1,5 @@
-use crate::storage::iceberg::deletion_vector_trait::CatalogWithDeletionVectorWrite;
 use crate::storage::iceberg::file_catalog::FileSystemCatalog;
+use crate::storage::iceberg::moonlink_catalog::MoonlinkCatalog;
 use crate::storage::iceberg::test_utils;
 
 use std::collections::HashMap;
@@ -29,9 +29,7 @@ use parquet::file::properties::WriterProperties;
 ///
 /// It's worth noting catalog and warehouse uri are not 1-1 mapping; for example, rest catalog could handle warehouse.
 /// Here we simply deduce catalog type from warehouse because both filesystem and object storage catalog are only able to handle certain scheme.
-pub fn create_catalog(
-    warehouse_uri: &str,
-) -> IcebergResult<Box<dyn CatalogWithDeletionVectorWrite>> {
+pub fn create_catalog(warehouse_uri: &str) -> IcebergResult<Box<dyn MoonlinkCatalog>> {
     // Special handle testing situation.
     if warehouse_uri.starts_with(test_utils::MINIO_TEST_WAREHOUSE_URI_PREFIX) {
         let test_bucket = test_utils::get_test_minio_bucket(warehouse_uri);
@@ -60,7 +58,7 @@ pub fn create_catalog(
 }
 
 // Get or create an iceberg table in the given catalog from the given namespace and table name.
-pub(crate) async fn get_or_create_iceberg_table<C: CatalogWithDeletionVectorWrite + ?Sized>(
+pub(crate) async fn get_or_create_iceberg_table<C: MoonlinkCatalog + ?Sized>(
     catalog: &C,
     warehouse_uri: &str,
     namespace: &Vec<String>,
@@ -101,11 +99,26 @@ pub(crate) async fn get_or_create_iceberg_table<C: CatalogWithDeletionVectorWrit
 }
 
 /// Write the given record batch in the given local file to the iceberg table (parquet file keeps unchanged).
-///
-/// TODO(hjiang): Uploading local file to remote is inefficient, it reads local arrow batches and write them one by one.
-/// The reason we keep the dummy style, instead of copying the file directly to target is we need the `DataFile` struct,
-/// which is used when upload to iceberg table.
-/// One way to resolve is to use DataFileWrite on local write, and remember the `DataFile` returned.
+//
+// TODO(hjiang):
+// 1. Uploading local file to remote is inefficient, it reads local arrow batches and write them one by one.
+// The reason we keep the dummy style, instead of copying the file directly to target is we need the `DataFile` struct,
+// which is used when upload to iceberg table.
+// One way to resolve is to use DataFileWrite on local write, and remember the `DataFile` returned.
+//
+// 2. A few data file properties need to respect and consider.
+// Reference:
+// - https://iceberg.apache.org/docs/latest/configuration/#table-properties
+// - https://iceberg.apache.org/docs/latest/configuration/#table-behavior-properties
+//
+// - write.parquet.row-group-size-bytes
+// - write.parquet.page-size-bytes
+// - write.parquet.page-row-limit
+// - write.parquet.dict-size-bytes
+// - write.parquet.compression-codec
+// - write.parquet.compression-level
+// - write.parquet.bloom-filter-max-bytes
+// - write.metadata.compression-codec
 pub(crate) async fn write_record_batch_to_iceberg(
     table: &IcebergTable,
     parquet_filepath: &PathBuf,

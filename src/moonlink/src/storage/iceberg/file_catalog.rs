@@ -1,5 +1,5 @@
 use super::puffin_writer_proxy::append_puffin_metadata_and_rewrite;
-use crate::storage::iceberg::deletion_vector_trait::DeletionVectorWrite;
+use crate::storage::iceberg::moonlink_catalog::DeletionVectorWrite;
 use crate::storage::iceberg::puffin_writer_proxy::{
     get_puffin_metadata_and_close, PuffinBlobMetadataProxy,
 };

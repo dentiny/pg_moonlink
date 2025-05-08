@@ -18,5 +18,5 @@ pub trait DeletionVectorWrite {
     fn clear_puffin_metadata(&mut self);
 }
 
-pub trait CatalogWithDeletionVectorWrite: DeletionVectorWrite + Catalog {}
-impl<T: DeletionVectorWrite + Catalog> CatalogWithDeletionVectorWrite for T {}
+pub trait MoonlinkCatalog: DeletionVectorWrite + Catalog {}
+impl<T: DeletionVectorWrite + Catalog> MoonlinkCatalog for T {}
