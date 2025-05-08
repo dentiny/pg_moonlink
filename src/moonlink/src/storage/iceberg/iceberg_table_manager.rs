@@ -600,7 +600,7 @@ mod tests {
         // Perform a few table write operations.
         //
         // Operation series 1: append three rows, delete one of them, flush, commit and create snapshot.
-        // Expects to see one data file with no deletion vector, because mooncake table handle deletion inline before persistence.
+        // Expects to see one data file with no deletion vector, because mooncake table handle deletion inline before persistence, and all record batches are dumped into one single data file.
         // The three rows are deleted in three operations series respectively.
         let row1 = MoonlinkRow::new(vec![
             RowValue::Int32(1),
@@ -649,10 +649,7 @@ mod tests {
         table.flush(/*lsn=*/ 200).await.map_err(|e| {
             IcebergError::new(
                 iceberg::ErrorKind::Unexpected,
-                format!(
-                    "Failed to flush records {:?} to mooncake table because {:?}",
-                    row2, e
-                ),
+                format!("Failed to flush records to mooncake table because {:?}", e),
             )
         })?;
         table.commit(/*lsn=*/ 200);
@@ -663,11 +660,9 @@ mod tests {
             )
         })?;
 
-        // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, which is lazy and asynchronous by design.
+        // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, whose construction is lazy and asynchronous by design.
         let mut iceberg_table_manager = IcebergTableManager::new(iceberg_table_config.clone());
         iceberg_table_manager.load_snapshot_from_table().await?;
-
-        // The two records written are batched into one parquet file.
         assert_eq!(
             iceberg_table_manager.persisted_items.len(),
             1,
@@ -727,10 +722,9 @@ mod tests {
             )
         })?;
 
-        // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, which is lazy and asynchronous by design.
+        // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, whose construction is lazy and asynchronous by design.
         let mut iceberg_table_manager = IcebergTableManager::new(iceberg_table_config.clone());
         iceberg_table_manager.load_snapshot_from_table().await?;
-        // The two records written are batched into one parquet file.
         assert_eq!(
             iceberg_table_manager.persisted_items.len(),
             1,
@@ -779,10 +773,9 @@ mod tests {
             )
         })?;
 
-        // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, which is lazy and asynchronous by design.
+        // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, whose construction is lazy and asynchronous by design.
         let mut iceberg_table_manager = IcebergTableManager::new(iceberg_table_config.clone());
         iceberg_table_manager.load_snapshot_from_table().await?;
-        // The two records written are batched into one parquet file.
         assert_eq!(
             iceberg_table_manager.persisted_items.len(),
             1,
@@ -813,8 +806,87 @@ mod tests {
             expected_deleted_rows, deleted_rows
         );
 
+        // --------------------------------------
+        // Operation series 4: append a new row, and don't delete any rows.
+        // Expects to see the existing deletion vector unchanged and new data file created.
+        let row4 = MoonlinkRow::new(vec![
+            RowValue::Int32(4),
+            RowValue::ByteArray("Tom".as_bytes().to_vec()),
+            RowValue::Int32(40),
+        ]);
+        table.append(row4.clone()).map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!(
+                    "Failed to append row4 {:?} to mooncake table because {:?}",
+                    row4, e
+                ),
+            )
+        })?;
+        table.flush(/*lsn=*/ 500).await.map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Failed to flush records to mooncake table because {:?}", e),
+            )
+        })?;
+        table.commit(/*lsn=*/ 500);
+        table.create_snapshot().unwrap().await.map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::Unexpected,
+                format!("Failed to create snapshot to iceberg table because {:?}", e),
+            )
+        })?;
+
+        // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, whose construction is lazy and asynchronous by design.
+        let mut iceberg_table_manager = IcebergTableManager::new(iceberg_table_config.clone());
+        iceberg_table_manager.load_snapshot_from_table().await?;
+        assert_eq!(
+            iceberg_table_manager.persisted_items.len(),
+            2,
+            "Persisted items for table manager is {:?}",
+            iceberg_table_manager.persisted_items
+        );
+
+        // The old data file and deletion vector is unchanged.
+        let old_data_entry = iceberg_table_manager.persisted_items.remove(loaded_path);
+        assert!(
+            old_data_entry.is_some(),
+            "Add new data file shouldn't change existing persisted items"
+        );
+        assert_eq!(
+            &old_data_entry.unwrap(),
+            data_entry,
+            "Add new data file shouldn't change existing persisted items"
+        );
+
+        // Check new data file is correctly managed by iceberg table with no deletion vector.
+        let (loaded_path, data_entry) =
+            iceberg_table_manager.persisted_items.iter().next().unwrap();
+        let loaded_arrow_batch = load_arrow_batch(file_io, loaded_path.to_str().unwrap()).await?;
+
+        let expected_arrow_batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            // row4
+            vec![
+                Arc::new(Int32Array::from(vec![4])),
+                Arc::new(StringArray::from(vec!["Tom"])),
+                Arc::new(Int32Array::from(vec![40])),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            loaded_arrow_batch, expected_arrow_batch,
+            "Expected arrow data is {:?}, actual data is {:?}",
+            expected_arrow_batch, loaded_arrow_batch
+        );
+
+        let deleted_rows = data_entry.deletion_vector.collect_deleted_rows();
+        assert!(
+            deleted_rows.is_empty(),
+            "The new appended data file should have no deletion vector aside, but actually it contains deletion vector {:?}",
+            deleted_rows
+        );
+
         Ok(())
     }
-
-    // TOOD(hjiang): Add a test case where there's neither data file nor deletion vector change.
 }
