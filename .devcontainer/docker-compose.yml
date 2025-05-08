@@ -18,13 +18,6 @@ services:
       - shared_network
     command: ["-c", "wal_level=logical"]
 
-  iceberg:
-    image: apache/iceberg-rest-fixture
-    networks:
-      - shared_network
-    ports:
-      - "8181:8181"
-
   minio:
     image: minio/minio:latest
     hostname: minio

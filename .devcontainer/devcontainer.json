@@ -7,5 +7,5 @@
             "version": "17"
         }
     },
-    "postCreateCommand": "git config devcontainers-theme.show-dirty 1 && echo \"alias psql='psql -h localhost -U postgres'\" >> ~/.bashrc"
+    "postCreateCommand": "./.devcontainer/setup.sh"
 }

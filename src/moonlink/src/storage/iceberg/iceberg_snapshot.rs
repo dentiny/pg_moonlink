@@ -29,12 +29,6 @@ use iceberg::{Catalog, Result as IcebergResult};
 use url::Url;
 use uuid::Uuid;
 
-// UNDONE(Iceberg):
-// 1. Implement deletion file related load and store operations.
-// (unrelated to functionality) 2. Update rest catalog service ip/port, currently it's hard-coded to devcontainer's config, which should be parsed from env variable or config files.
-// (unrelated to functionality) 3. Add timeout to rest catalog access.
-// (unrelated to functionality) 4. Use real namespace and table name, which we should be able to get it from moonlink, it's hard-coded to "default" and "test_table" for now.
-
 // TODO(hjiang): A few data file properties need to respect and consider.
 // Reference:
 // - https://iceberg.apache.org/docs/latest/configuration/#table-properties
