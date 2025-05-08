@@ -141,6 +141,9 @@ pub(crate) async fn write_record_batch_to_iceberg(
     }
 
     let data_files = data_file_writer.close().await?;
+
+    println!("\n\nwriting {:?} to {:?}\n\n", parquet_filepath, data_files[0].file_path());
+
     assert_eq!(
         data_files.len(),
         1,

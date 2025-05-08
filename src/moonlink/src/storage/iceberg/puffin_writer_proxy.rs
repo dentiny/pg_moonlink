@@ -229,6 +229,10 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
     let manifest = manifest_file.load_manifest(file_io).await?;
     let (manifest_entries, manifest_metadata) = manifest.into_parts();
 
+
+
+    println!("\n\n\nwhen update table, before write puffin file, the manifest entris look like {:?}\n\n\n", manifest_entries);
+
     // Rewrite the manifest file.
     // There's only one moonlink process/thread writing manifest file, so we don't need to write to temporary file and rename.
     let output_file = file_io.new_output(manifest_file_path)?;
