@@ -24,7 +24,6 @@ pub struct RawDeletionRecord {
     pub(crate) row_identity: Option<MoonlinkRow>,
     pub(crate) pos: Option<(u64, usize)>,
     pub(crate) lsn: u64,
-    pub(crate) xact_id: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -32,7 +31,6 @@ pub struct ProcessedDeletionRecord {
     pub(crate) _lookup_key: u64,
     pub(crate) pos: RecordLocation,
     pub(crate) lsn: u64,
-    pub(crate) xact_id: Option<u32>,
 }
 
 impl From<RecordLocation> for (u64, usize) {

@@ -218,7 +218,6 @@ impl SnapshotTableState {
             _lookup_key: deletion.lookup_key,
             pos,
             lsn: deletion.lsn,
-            xact_id: deletion.xact_id,
         }
     }
 
@@ -302,18 +301,7 @@ impl SnapshotTableState {
         let mut still_uncommitted = Vec::new();
 
         for mut entry in take(&mut self.uncommitted_deletion_log) {
-            let mut deletion = entry.take().unwrap();
-
-            // refresh LSN if the xact was flushed
-            // TODO(nbiscaro): We will likely end up moving this logic to strema commit.
-            if let Some(xid) = deletion.xact_id {
-                if let Some(lsn) = task.flushed_xacts.get(&xid) {
-                    deletion.lsn = *lsn;
-                }
-                if task.aborted_xacts.contains(&xid) {
-                    continue; // drop aborted txns
-                }
-            }
+            let deletion = entry.take().unwrap();
 
             if deletion.lsn <= task.new_lsn {
                 Self::commit_deletion(self, deletion);

@@ -174,7 +174,6 @@ mod tests {
                     lsn: 0,
                     pos: None,
                     row_identity: None,
-                    xact_id: None,
                 },
                 &Identity::SinglePrimitiveKey(0)
             ),
@@ -187,7 +186,6 @@ mod tests {
                     lsn: 0,
                     pos: None,
                     row_identity: None,
-                    xact_id: None
                 },
                 &Identity::SinglePrimitiveKey(0)
             ),
@@ -200,7 +198,6 @@ mod tests {
                     lsn: 0,
                     pos: None,
                     row_identity: None,
-                    xact_id: None,
                 },
                 &Identity::SinglePrimitiveKey(0)
             ),

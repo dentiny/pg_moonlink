@@ -82,7 +82,6 @@ mod tests {
             row_identity: None,
             pos: None,
             lsn: 1,
-            xact_id: None,
         };
 
         // Test the Index trait implementation

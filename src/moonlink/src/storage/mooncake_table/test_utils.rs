@@ -2,7 +2,7 @@ use super::*;
 use crate::row::{Identity, RowValue};
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field};
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use std::collections::HashSet;
 use std::fs::{create_dir_all, File};
 use tempfile::{tempdir, TempDir};
@@ -65,13 +65,23 @@ pub fn test_table(context: &TestContext, table_name: &str, identity: Identity) -
     )
 }
 
+pub fn read_batch(reader: ParquetRecordBatchReader) -> Option<RecordBatch> {
+    match reader.into_iter().next() {
+        Some(Ok(batch)) => Some(batch),
+        _ => None,
+    }
+}
+
 pub fn read_ids_from_parquet(file_path: &String) -> Vec<Option<i32>> {
     let file = File::open(file_path).unwrap();
     let reader = ParquetRecordBatchReaderBuilder::try_new(file)
         .unwrap()
         .build()
         .unwrap();
-    let batch = reader.into_iter().next().unwrap().unwrap();
+    let batch = match read_batch(reader) {
+        Some(batch) => batch,
+        None => return vec![],
+    };
     let col = batch
         .column(0)
         .as_any()

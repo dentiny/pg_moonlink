@@ -116,3 +116,73 @@ async fn test_concurrent_streaming_transactions() {
 
     env.shutdown().await;
 }
+
+#[tokio::test]
+async fn test_stream_delete_unflushed_non_streamed_row() {
+    let mut env = TestEnvironment::new();
+
+    // Define LSNs and transaction ID for clarity
+    let initial_insert_lsn = 10; // LSN for the non-streaming insert
+    let stream_xact_id = 101; // Transaction ID for the streaming delete operation
+
+    println!("Initial insert LSN: {}", initial_insert_lsn);
+
+    // The LSN passed to env.delete_row for a streaming op is used for the RawDeletionRecord,
+    // but this LSN is typically overridden by the stream_commit_lsn when the transaction commits.
+    // We use a distinct value here for clarity, but it's the stream_commit_lsn that's ultimately effective.
+    let delete_op_event_lsn = 15;
+    let stream_commit_lsn = 20; // LSN at which the streaming transaction (and its delete) is committed
+
+    // --- Phase 1: Setup - Insert a row non-streamingly ---
+    // This row (PK=1) will be added to pending writes.
+    env.append_row(1, "Target User", 30, None).await;
+
+    // Commit the non-streaming operation. This moves the row to the main mem_slice.
+    // It is now "committed" at initial_insert_lsn but not yet flushed to disk.
+    env.commit(initial_insert_lsn).await;
+
+    // Inform the ReadStateManager that data up to initial_insert_lsn is committed.
+    env.set_table_commit_lsn(initial_insert_lsn);
+    // Set the replication LSN cap to allow reading up to initial_insert_lsn.
+    env.set_replication_lsn(initial_insert_lsn);
+
+    // Verify: The row (PK=1) should be visible in a snapshot at initial_insert_lsn.
+    println!("1 Verifying snapshot at LSN {}", initial_insert_lsn);
+    env.verify_snapshot(initial_insert_lsn, &[1]).await;
+
+    // --- Phase 2: Action - Delete the non-streamed, unflushed row via a streaming transaction ---
+    // Call delete_row for PK=1 within the context of stream_xact_id.
+    // Inside table_handler.delete_in_stream_batch:
+    //   - stream_state.mem_slice.delete() will be called. Since PK=1 was not added
+    //     by stream_xact_id, it won't be in this transaction's mem_slice.
+    //   - Thus, 'pos' returned by stream_state.mem_slice.delete() will be None.
+    //   - The RawDeletionRecord will be created with pos: None.
+    env.delete_row(
+        1,
+        "Target User",
+        30,
+        delete_op_event_lsn,
+        Some(stream_xact_id),
+    )
+    .await;
+
+    // Commit the streaming transaction.
+    // During this commit, the TableHandler will process new_deletions for stream_xact_id.
+    // For the deletion of PK=1 (which has pos: None), it should search the main mem_slice.
+    // It will find PK=1 there and apply the deletion, associating it with stream_commit_lsn.
+    env.stream_commit(stream_commit_lsn, stream_xact_id).await;
+
+    // Update ReadStateManager: table state is now committed up to stream_commit_lsn.
+    env.set_table_commit_lsn(stream_commit_lsn);
+    // Update replication LSN cap to allow reading up to the new commit LSN.
+    env.set_replication_lsn(stream_commit_lsn);
+
+    // --- Phase 3: Verification ---
+    // Verify: The row (PK=1) should NOT be visible in a snapshot at stream_commit_lsn.
+    // The effective LSN for the read will be min(target_lsn=20, table_commit_lsn=20, replication_cap=20) = 20.
+    println!("2 Verifying snapshot at LSN {}", stream_commit_lsn);
+    env.verify_snapshot(stream_commit_lsn, &[]).await; // Expect empty slice (PK=1 deleted)
+
+    env.shutdown().await;
+    println!("Test test_stream_delete_unflushed_non_streamed_row passed!");
+}

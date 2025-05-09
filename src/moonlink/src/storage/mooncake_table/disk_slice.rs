@@ -335,7 +335,6 @@ mod tests {
                 row_identity: None,
                 pos: Some((0, 1)),
                 lsn: 1,
-                xact_id: None,
             },
             &Identity::SinglePrimitiveKey(0),
         ); // Delete Bob (ID 2)
@@ -345,7 +344,6 @@ mod tests {
                 row_identity: None,
                 pos: Some((0, 3)),
                 lsn: 1,
-                xact_id: None,
             },
             &Identity::SinglePrimitiveKey(0),
         ); // Delete David (ID 4)
