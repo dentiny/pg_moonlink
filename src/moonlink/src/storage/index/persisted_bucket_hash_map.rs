@@ -579,7 +579,7 @@ mod tests {
     fn test_new() {
         let data_file = Arc::new(PathBuf::from("test.parquet"));
         let files = vec![data_file.clone()];
-        let vec = vec![
+        let hash_entries = vec![
             (1, 0, 0),
             (2, 0, 1),
             (3, 0, 2),
@@ -598,21 +598,25 @@ mod tests {
         builder
             .set_files(files)
             .set_directory(tempfile::tempdir().unwrap().into_path());
-        let index = builder.build_from_flush(vec.clone());
+        let index = builder.build_from_flush(hash_entries.clone());
 
-        let data_file_ids = vec![FileId(data_file.clone())];
-        for (hash, seg_idx, row_idx) in vec.into_iter() {
+        let data_file_ids = [FileId(data_file.clone())];
+        for (hash, seg_idx, row_idx) in hash_entries.iter() {
             let expected_record_loc =
-                RecordLocation::DiskFile(data_file_ids[seg_idx].clone(), row_idx);
-            assert_eq!(index.search(&hash), vec![expected_record_loc]);
+                RecordLocation::DiskFile(data_file_ids[*seg_idx].clone(), *row_idx);
+            assert_eq!(index.search(hash), vec![expected_record_loc]);
         }
 
+        let mut hash_entry_num = 0;
         let file_id_remap = vec![0; index.files.len()];
         for block in index.index_blocks.iter() {
             for (hash, seg_idx, row_idx) in block.iter(&index, &file_id_remap) {
                 println!("{} {} {}", hash, seg_idx, row_idx);
+                hash_entry_num += 1;
             }
         }
+        // Check all hash entries are stored and iterated through via index iterator.
+        assert_eq!(hash_entry_num, hash_entries.len());
     }
 
     #[test]
