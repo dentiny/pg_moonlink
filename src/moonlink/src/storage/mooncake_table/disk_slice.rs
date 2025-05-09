@@ -145,9 +145,6 @@ impl DiskSliceWriter {
         }
         if let Some(writer) = writer {
             writer.close()?;
-
-            println!("flush parquet file to local disk slice");
-
             files.push((file_path.unwrap(), out_row_idx));
         }
         self.files = files;
