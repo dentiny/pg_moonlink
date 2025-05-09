@@ -1,3 +1,4 @@
+use crate::storage::index::file_index_id::get_next_file_index_id;
 use crate::storage::storage_utils::{FileId, RecordLocation};
 use bitstream_io::{BigEndian, BitRead, BitReader, BitWrite, BitWriter};
 use memmap2::Mmap;
@@ -24,38 +25,42 @@ fn splitmix64(mut x: u64) -> u64 {
     z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
     z ^ (z >> 31)
 }
-// Hash index
-// that maps a u64 to [seg_idx, row_idx]
-//
-// Structure:
-// Buckets:
-// [entry_offset],[entry_offset]...[entry_offset]
-//
-// Values
-// [lower_bit_hash, seg_idx, row_idx]
+/// Hash index
+/// that maps a u64 to [seg_idx, row_idx]
+///
+/// Structure:
+/// Buckets:
+/// [entry_offset],[entry_offset]...[entry_offset]
+///
+/// Values
+/// [lower_bit_hash, seg_idx, row_idx]
 pub struct GlobalIndex {
-    files: Vec<Arc<PathBuf>>,
-    num_rows: u32,
-    hash_bits: u32,
-    hash_upper_bits: u32,
-    hash_lower_bits: u32,
-    seg_id_bits: u32,
-    row_id_bits: u32,
-    bucket_bits: u32,
+    /// A unique id to identify each global index.
+    pub(crate) global_index_id: u32,
 
-    index_blocks: Vec<IndexBlock>,
+    pub(crate) files: Vec<Arc<PathBuf>>,
+    pub(crate) num_rows: u32,
+    pub(crate) hash_bits: u32,
+    pub(crate) hash_upper_bits: u32,
+    pub(crate) hash_lower_bits: u32,
+    pub(crate) seg_id_bits: u32,
+    pub(crate) row_id_bits: u32,
+    pub(crate) bucket_bits: u32,
+
+    pub(crate) index_blocks: Vec<IndexBlock>,
 }
 
-struct IndexBlock {
-    bucket_start_idx: u32,
-    bucket_end_idx: u32,
-    bucket_start_offset: u64,
-    _file_name: String,
-    data: Mmap,
+pub(crate) struct IndexBlock {
+    pub(crate) bucket_start_idx: u32,
+    pub(crate) bucket_end_idx: u32,
+    pub(crate) bucket_start_offset: u64,
+    // TODO(hjiang): Need to store fully-qualified filepat instead of filename.
+    pub(crate) file_name: String,
+    data: Option<Mmap>,
 }
 
 impl IndexBlock {
-    fn new(
+    pub(crate) fn new(
         bucket_start_idx: u32,
         bucket_end_idx: u32,
         bucket_start_offset: u64,
@@ -67,9 +72,9 @@ impl IndexBlock {
         Self {
             bucket_start_idx,
             bucket_end_idx,
-            _file_name: file_name,
             bucket_start_offset,
-            data,
+            file_name,
+            data: Some(data),
         }
     }
 
@@ -127,7 +132,7 @@ impl IndexBlock {
         metadata: &GlobalIndex,
     ) -> Vec<RecordLocation> {
         assert!(bucket_idx >= self.bucket_start_idx && bucket_idx < self.bucket_end_idx);
-        let cursor = Cursor::new(self.data.as_ref());
+        let cursor = Cursor::new(self.data.as_ref().unwrap().as_ref());
         let mut reader = BitReader::endian(cursor, BigEndian);
         let mut entry_reader = reader.clone();
         let (entry_start, entry_end) = self.read_bucket(bucket_idx, &mut reader, metadata);
@@ -322,6 +327,7 @@ impl GlobalIndexBuilder {
         let lower_bits = 64 - upper_bits;
         let seg_id_bits = 32 - (self.files.len() as u32).trailing_zeros();
         let mut global_index = GlobalIndex {
+            global_index_id: get_next_file_index_id(),
             files: self.files,
             num_rows,
             hash_bits: HASH_BITS,
@@ -365,7 +371,10 @@ impl<'a> IndexBlockIterator<'a> {
         metadata: &'a GlobalIndex,
         file_id_remap: &'a Vec<u32>,
     ) -> Self {
-        let mut bucket_reader = BitReader::endian(Cursor::new(collection.data.as_ref()), BigEndian);
+        let mut bucket_reader = BitReader::endian(
+            Cursor::new(collection.data.as_ref().unwrap().as_ref()),
+            BigEndian,
+        );
         let entry_reader = bucket_reader.clone();
         bucket_reader
             .seek_bits(SeekFrom::Start(collection.bucket_start_offset))
@@ -532,7 +541,7 @@ impl IndexBlock {
             "\nIndexBlock {{ \n   bucket_start_idx: {}, \n   bucket_end_idx: {},",
             self.bucket_start_idx, self.bucket_end_idx
         )?;
-        let cursor = Cursor::new(self.data.as_ref());
+        let cursor = Cursor::new(self.data.as_ref().unwrap().as_ref());
         let mut reader = BitReader::endian(cursor, BigEndian);
         write!(f, "\n   Buckets: ")?;
         let mut num = 0;

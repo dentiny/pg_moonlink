@@ -6,9 +6,10 @@ use crate::storage::iceberg::deletion_vector::{
 use crate::storage::iceberg::moonlink_catalog::MoonlinkCatalog;
 use crate::storage::iceberg::puffin_utils;
 use crate::storage::iceberg::validation as IcebergValidation;
+use crate::storage::index::FileIndex;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -51,13 +52,20 @@ pub(crate) trait IcebergOperation {
     /// Write a new snapshot to iceberg table.
     /// It could be called for multiple times to write and commit multiple snapshots.
     ///
+    /// # Arguments
+    ///
+    /// * disk_files: a map from data file paths to batch deletion vector.
+    ///   Data file path could be either local (when upload local data file to iceberg), or remote (after recovery from iceberg table).
+    /// * file_indexes: all file indexes which have been persisted, could be either local or remote.
+    ///
     /// Please notice, it takes full content to commit snapshot.
     ///
     /// TODO(hjiang): We're storing the iceberg table status in two places, one for iceberg table manager, another at snapshot.
     /// Provide delta change interface, so snapshot doesn't need to store everything.
     async fn sync_snapshot(
         &mut self,
-        snapshot_disk_files: HashMap<PathBuf, BatchDeletionVector>,
+        disk_files: HashMap<PathBuf, BatchDeletionVector>,
+        file_indexes: Vec<FileIndex>,
     ) -> IcebergResult<()>;
 
     /// Load latest snapshot from iceberg table. Used for recovery and initialization.
@@ -91,7 +99,10 @@ pub struct IcebergTableManager {
     iceberg_table: Option<IcebergTable>,
 
     /// Maps from already persisted data file filepath to its deletion vector, and iceberg `DataFile`.
-    persisted_items: HashMap<PathBuf, DataFileEntry>,
+    persisted_data_files: HashMap<PathBuf, DataFileEntry>,
+
+    /// A set of file index id which has been managed by the iceberg table.
+    persisted_file_index_id: HashSet<u32>,
 }
 
 impl IcebergTableManager {
@@ -102,7 +113,8 @@ impl IcebergTableManager {
             config,
             catalog,
             iceberg_table: None,
-            persisted_items: HashMap::new(),
+            persisted_data_files: HashMap::new(),
+            persisted_file_index_id: HashSet::new(),
         }
     }
 
@@ -195,7 +207,9 @@ impl IcebergTableManager {
             data_file: data_file.clone(),
             deletion_vector: BatchDeletionVector::new(/*max_rows=*/ 0),
         };
-        let old_entry = self.persisted_items.insert(file_path, new_data_file_entry);
+        let old_entry = self
+            .persisted_data_files
+            .insert(file_path, new_data_file_entry);
         assert!(old_entry.is_none());
         Ok(())
     }
@@ -212,7 +226,7 @@ impl IcebergTableManager {
         }
 
         let referenced_path_buf: PathBuf = data_file.referenced_data_file().unwrap().into();
-        let data_file_entry = self.persisted_items.get_mut(&referenced_path_buf);
+        let data_file_entry = self.persisted_data_files.get_mut(&referenced_path_buf);
         assert!(
             data_file_entry.is_some(),
             "At recovery, the data file path for {:?} doesn't exist",
@@ -226,27 +240,27 @@ impl IcebergTableManager {
 
         Ok(())
     }
-}
 
-/// TODO(hjiang): Parallelize all IO operations.
-impl IcebergOperation for IcebergTableManager {
-    async fn sync_snapshot(
+    /// Dump in-memory data files and their deletion vector into iceberg table,
+    /// only the changed part (i.e. new data files, updated deletion vectors) will be persisted into the table.
+    /// Returns new data files to append into iceberg table.
+    async fn sync_data_files_and_deletion_vector(
         &mut self,
         mut disk_files: HashMap<PathBuf, BatchDeletionVector>,
-    ) -> IcebergResult<()> {
-        // Initialize iceberg table on access.
-        self.get_or_create_table().await?;
-
+    ) -> IcebergResult<(
+        Vec<DataFile>,                   /*new data files*/
+        HashMap<PathBuf, DataFileEntry>, /*new data file entries*/
+    )> {
         let mut new_data_files = vec![];
-        let mut new_persisted_items: HashMap<PathBuf, DataFileEntry> = HashMap::new();
-        let old_persisted_items = self.persisted_items.clone();
+        let mut new_persisted_data_files: HashMap<PathBuf, DataFileEntry> = HashMap::new();
+        let old_persisted_data_files = self.persisted_data_files.clone();
         for (local_path, deletion_vector) in disk_files.drain() {
-            match old_persisted_items.get(&local_path) {
+            match old_persisted_data_files.get(&local_path) {
                 Some(entry) => {
                     if entry.deletion_vector == deletion_vector {
                         let mut new_data_file_entry: DataFileEntry = entry.clone();
                         new_data_file_entry.deletion_vector = deletion_vector;
-                        new_persisted_items.insert(local_path, new_data_file_entry);
+                        new_persisted_data_files.insert(local_path, new_data_file_entry);
                         continue;
                     }
                     let path_str = entry.data_file.file_path().to_string();
@@ -255,7 +269,7 @@ impl IcebergOperation for IcebergTableManager {
 
                     let mut new_data_file_entry: DataFileEntry = entry.clone();
                     new_data_file_entry.deletion_vector = deletion_vector;
-                    new_persisted_items.insert(local_path, new_data_file_entry);
+                    new_persisted_data_files.insert(local_path, new_data_file_entry);
                 }
                 None => {
                     let data_file = catalog_utils::write_record_batch_to_iceberg(
@@ -267,7 +281,7 @@ impl IcebergOperation for IcebergTableManager {
                     new_data_files.push(data_file.clone());
                     self.write_deletion_vector(data_filepath, deletion_vector.clone())
                         .await?;
-                    new_persisted_items.insert(
+                    new_persisted_data_files.insert(
                         local_path,
                         DataFileEntry {
                             data_file,
@@ -277,12 +291,37 @@ impl IcebergOperation for IcebergTableManager {
                 }
             }
         }
+        Ok((new_data_files, new_persisted_data_files))
+    }
+
+    /// Dump file indexes into the iceberg table, only new file indexes will be persisted into the table.
+    /// Return file index ids which should be added into iceberg table.
+    async fn sync_file_indexes(
+        &mut self,
+        _file_indices: &Vec<FileIndex>,
+    ) -> IcebergResult<HashSet<u32>> {
+        Ok(HashSet::new())
+    }
+}
+
+/// TODO(hjiang): Parallelize all IO operations.
+impl IcebergOperation for IcebergTableManager {
+    async fn sync_snapshot(
+        &mut self,
+        mut disk_files: HashMap<PathBuf, BatchDeletionVector>,
+        mut file_indexes: Vec<FileIndex>,
+    ) -> IcebergResult<()> {
+        // Initialize iceberg table on access.
+        self.get_or_create_table().await?;
+
+        let (new_data_files, new_persisted_data_files) =
+            self.sync_data_files_and_deletion_vector(disk_files).await?;
 
         // If no change for both data files and deletion vectors, no need to initiate a new transaction.
-        if self.persisted_items == new_persisted_items {
+        if self.persisted_data_files == new_persisted_data_files {
             return Ok(());
         }
-        self.persisted_items = new_persisted_items;
+        self.persisted_data_files = new_persisted_data_files;
 
         // Only start append action when there're new data files.
         let mut txn = Transaction::new(self.iceberg_table.as_ref().unwrap());
@@ -450,7 +489,7 @@ mod tests {
         iceberg_table_manager: &mut IcebergTableManager,
     ) -> IcebergResult<()> {
         // At the beginning of the test, there's nothing in table.
-        assert!(iceberg_table_manager.persisted_items.is_empty());
+        assert!(iceberg_table_manager.persisted_data_files.is_empty());
 
         // Create arrow schema and table.
         let arrow_schema = create_test_arrow_schema();
@@ -465,7 +504,7 @@ mod tests {
         let mut snapshot_disk_files: HashMap<PathBuf, BatchDeletionVector> = HashMap::new();
         snapshot_disk_files.insert(parquet_path.clone(), test_deletion_vector_1());
         iceberg_table_manager
-            .sync_snapshot(snapshot_disk_files.clone())
+            .sync_snapshot(snapshot_disk_files.clone(), /*file_indexes=*/ vec![])
             .await?;
 
         // Write second snapshot to iceberg table, with updated deletion vector and new data file.
@@ -478,15 +517,15 @@ mod tests {
             .await?;
         snapshot_disk_files.insert(parquet_path.clone(), test_deletion_vector_1());
         iceberg_table_manager
-            .sync_snapshot(snapshot_disk_files)
+            .sync_snapshot(snapshot_disk_files, /*file_indexes=*/ vec![])
             .await?;
 
         // Check persisted items in the iceberg table.
         assert_eq!(
-            iceberg_table_manager.persisted_items.len(),
+            iceberg_table_manager.persisted_data_files.len(),
             2,
             "Persisted items for table manager is {:?}",
-            iceberg_table_manager.persisted_items
+            iceberg_table_manager.persisted_data_files
         );
 
         // Check the loaded data file is of the expected format and content.
@@ -495,7 +534,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .file_io();
-        for (loaded_path, data_entry) in iceberg_table_manager.persisted_items.iter() {
+        for (loaded_path, data_entry) in iceberg_table_manager.persisted_data_files.iter() {
             let loaded_arrow_batch =
                 load_arrow_batch(file_io, loaded_path.to_str().unwrap()).await?;
             let deleted_rows = data_entry.deletion_vector.collect_deleted_rows();
@@ -659,10 +698,10 @@ mod tests {
         let mut iceberg_table_manager = IcebergTableManager::new(iceberg_table_config.clone());
         iceberg_table_manager.load_snapshot_from_table().await?;
         assert_eq!(
-            iceberg_table_manager.persisted_items.len(),
+            iceberg_table_manager.persisted_data_files.len(),
             1,
             "Persisted items for table manager is {:?}",
-            iceberg_table_manager.persisted_items
+            iceberg_table_manager.persisted_data_files
         );
 
         // Check the loaded data file is of the expected format and content.
@@ -671,8 +710,11 @@ mod tests {
             .as_ref()
             .unwrap()
             .file_io();
-        let (loaded_path, data_entry) =
-            iceberg_table_manager.persisted_items.iter().next().unwrap();
+        let (loaded_path, data_entry) = iceberg_table_manager
+            .persisted_data_files
+            .iter()
+            .next()
+            .unwrap();
         let loaded_arrow_batch = load_arrow_batch(file_io, loaded_path.to_str().unwrap()).await?;
         let expected_arrow_batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
@@ -721,10 +763,10 @@ mod tests {
         let mut iceberg_table_manager = IcebergTableManager::new(iceberg_table_config.clone());
         iceberg_table_manager.load_snapshot_from_table().await?;
         assert_eq!(
-            iceberg_table_manager.persisted_items.len(),
+            iceberg_table_manager.persisted_data_files.len(),
             1,
             "Persisted items for table manager is {:?}",
-            iceberg_table_manager.persisted_items
+            iceberg_table_manager.persisted_data_files
         );
 
         // Check the loaded data file is of the expected format and content.
@@ -733,8 +775,11 @@ mod tests {
             .as_ref()
             .unwrap()
             .file_io();
-        let (loaded_path, data_entry) =
-            iceberg_table_manager.persisted_items.iter().next().unwrap();
+        let (loaded_path, data_entry) = iceberg_table_manager
+            .persisted_data_files
+            .iter()
+            .next()
+            .unwrap();
         let loaded_arrow_batch = load_arrow_batch(file_io, loaded_path.to_str().unwrap()).await?;
         assert_eq!(
             loaded_arrow_batch, expected_arrow_batch,
@@ -772,10 +817,10 @@ mod tests {
         let mut iceberg_table_manager = IcebergTableManager::new(iceberg_table_config.clone());
         iceberg_table_manager.load_snapshot_from_table().await?;
         assert_eq!(
-            iceberg_table_manager.persisted_items.len(),
+            iceberg_table_manager.persisted_data_files.len(),
             1,
             "Persisted items for table manager is {:?}",
-            iceberg_table_manager.persisted_items
+            iceberg_table_manager.persisted_data_files
         );
 
         // Check the loaded data file is of the expected format and content.
@@ -784,8 +829,11 @@ mod tests {
             .as_ref()
             .unwrap()
             .file_io();
-        let (loaded_path, data_entry) =
-            iceberg_table_manager.persisted_items.iter().next().unwrap();
+        let (loaded_path, data_entry) = iceberg_table_manager
+            .persisted_data_files
+            .iter()
+            .next()
+            .unwrap();
         let loaded_arrow_batch = load_arrow_batch(file_io, loaded_path.to_str().unwrap()).await?;
         assert_eq!(
             loaded_arrow_batch, expected_arrow_batch,
@@ -836,14 +884,16 @@ mod tests {
         let mut iceberg_table_manager = IcebergTableManager::new(iceberg_table_config.clone());
         iceberg_table_manager.load_snapshot_from_table().await?;
         assert_eq!(
-            iceberg_table_manager.persisted_items.len(),
+            iceberg_table_manager.persisted_data_files.len(),
             2,
             "Persisted items for table manager is {:?}",
-            iceberg_table_manager.persisted_items
+            iceberg_table_manager.persisted_data_files
         );
 
         // The old data file and deletion vector is unchanged.
-        let old_data_entry = iceberg_table_manager.persisted_items.remove(loaded_path);
+        let old_data_entry = iceberg_table_manager
+            .persisted_data_files
+            .remove(loaded_path);
         assert!(
             old_data_entry.is_some(),
             "Add new data file shouldn't change existing persisted items"
@@ -855,8 +905,11 @@ mod tests {
         );
 
         // Check new data file is correctly managed by iceberg table with no deletion vector.
-        let (loaded_path, data_entry) =
-            iceberg_table_manager.persisted_items.iter().next().unwrap();
+        let (loaded_path, data_entry) = iceberg_table_manager
+            .persisted_data_files
+            .iter()
+            .next()
+            .unwrap();
         let loaded_arrow_batch = load_arrow_batch(file_io, loaded_path.to_str().unwrap()).await?;
 
         let expected_arrow_batch = RecordBatch::try_new(

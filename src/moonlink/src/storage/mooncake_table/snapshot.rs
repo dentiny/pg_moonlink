@@ -14,6 +14,7 @@ use parquet::arrow::ArrowWriter;
 use std::collections::BTreeMap;
 use std::mem::take;
 use std::sync::Arc;
+
 pub(crate) struct SnapshotTableState {
     /// Current snapshot
     current_snapshot: Snapshot,
@@ -92,7 +93,7 @@ impl SnapshotTableState {
             self.iceberg_table_manager
                 .as_mut()
                 .unwrap()
-                .sync_snapshot(self.current_snapshot.disk_files.clone())
+                .sync_snapshot(self.current_snapshot.disk_files.clone(), vec![])
                 .await
                 .unwrap();
         }

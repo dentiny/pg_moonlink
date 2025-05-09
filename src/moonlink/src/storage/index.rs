@@ -1,3 +1,4 @@
+pub mod file_index_id;
 pub mod hash_index;
 pub mod persisted_bucket_hash_map;
 
