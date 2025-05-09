@@ -1,0 +1,35 @@
+// This file describes mooncake index schema stored in iceberg schema.
+
+// 1-1 mapping with `IndexBlock` struct.
+message MooncakeIndexBlock {
+  uint32 bucket_start_idx = 1;
+  uint32 bucket_end_idx = 2;
+  uint64 bucket_start_offset = 3;
+  // Remote file path for index file.
+  // TODO(hjiang): Currently the `file_name` fields inside of `MooncakeIndexBlock` struct are still local filepaths.
+  string index_filepath = 4;
+}
+
+// 1-1 mapping with `GlobalIndex` struct.
+message MooncakeGlobalIndex {
+  // Remote file path for data files.
+  // TODO(hjiang): Currently the `files` fields inside of `GlobalIndex` struct are still local filepaths.
+  repeated string data_files = 1;
+  repeated string index_blocks = 9;
+
+  uint32 num_rows = 2;
+  uint32 hash_bits = 3;
+  uint32 hash_upper_bits = 4;
+  uint32 hash_lower_bits = 5;
+  uint32 seg_id_bits = 6;
+  uint32 row_id_bits = 7;
+  uint32 bucket_bits = 8;
+}
+
+message MooncakeIndexBlob {
+  // Index version.
+  int32 version = 1;
+  
+  // Global indexes.
+  repeated MooncakeGlobalIndex global_indexes = 2;
+} 

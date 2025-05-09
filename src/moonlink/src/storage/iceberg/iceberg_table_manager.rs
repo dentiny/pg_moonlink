@@ -887,9 +887,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_filesystem_sync_snapshots() -> IcebergResult<()> {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let path = temp_dir.path().to_str().unwrap().to_string();
-        mooncake_table_snapshot_persist_impl(path).await
+        // let temp_dir = tempfile::tempdir().unwrap();
+        // let path = temp_dir.path().to_str().unwrap().to_string();
+
+        let path = "/tmp/3939-test_filesystem_sync_snapshots";
+
+        mooncake_table_snapshot_persist_impl(path.to_string()).await
     }
 
     #[tokio::test]
