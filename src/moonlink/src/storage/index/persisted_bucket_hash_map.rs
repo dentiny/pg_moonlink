@@ -573,9 +573,12 @@ mod tests {
 
     use super::*;
 
+    use crate::storage::storage_utils::FileId;
+
     #[test]
     fn test_new() {
-        let files = vec![Arc::new(PathBuf::from("test.parquet"))];
+        let data_file = Arc::new(PathBuf::from("test.parquet"));
+        let files = vec![data_file.clone()];
         let vec = vec![
             (1, 0, 0),
             (2, 0, 1),
@@ -595,10 +598,14 @@ mod tests {
         builder
             .set_files(files)
             .set_directory(tempfile::tempdir().unwrap().into_path());
-        let index = builder.build_from_flush(vec);
-        println!("{:?}", index);
-        println!("{:?}", index.search(&1));
-        println!("{:?}", index.search(&2));
+        let index = builder.build_from_flush(vec.clone());
+
+        let data_file_ids = vec![FileId(data_file.clone())];
+        for (hash, seg_idx, row_idx) in vec.into_iter() {
+            let expected_record_loc =
+                RecordLocation::DiskFile(data_file_ids[seg_idx].clone(), row_idx);
+            assert_eq!(index.search(&hash), vec![expected_record_loc]);
+        }
 
         let file_id_remap = vec![0; index.files.len()];
         for block in index.index_blocks.iter() {
