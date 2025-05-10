@@ -1,12 +1,16 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use crate::storage::iceberg::blob_proxy::IcebergBlobProxy;
+use crate::storage::iceberg::puffin_utils;
 use crate::storage::index::file_index_id::get_next_file_index_id;
 use crate::storage::index::persisted_bucket_hash_map::IndexBlock as MooncakeIndexBlock;
 /// This module defines the file index struct used for iceberg, which corresponds to in-memory mooncake table file index structs, and supports the serde between mooncake table format and iceberg format.
 use crate::storage::index::FileIndex as MooncakeFileIndex;
 
+use iceberg::io::FileIO;
 use iceberg::puffin::Blob;
+use iceberg::spec::DataFile;
+use iceberg::{Error as IcebergError, Result as IcebergResult};
 use serde::{Deserialize, Serialize};
 
 /// Blob type for index v1.
@@ -123,8 +127,13 @@ impl FileIndexBlob {
 
     /// Serialize the file index into iceberg puffin blob.
     #[allow(dead_code)]
-    pub(crate) fn as_blob(&self) -> Blob {
-        let blob_bytes = serde_json::to_vec(self).unwrap();
+    pub(crate) fn as_blob(&self) -> IcebergResult<Blob> {
+        let blob_bytes = serde_json::to_vec(self).map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::DataInvalid,
+                format!("Failed to serialize file index into json: {:?}", e),
+            )
+        })?;
         let mut properties = HashMap::new();
         let total_num_rows: u32 = self
             .file_indices
@@ -146,12 +155,24 @@ impl FileIndexBlob {
             data: blob_bytes,
             properties,
         };
-        unsafe { std::mem::transmute::<IcebergBlobProxy, Blob>(blob_proxy) }
+        Ok(unsafe { std::mem::transmute::<IcebergBlobProxy, Blob>(blob_proxy) })
+    }
+
+    /// Load file index from puffin file blob.
+    ///
+    /// TODO(hjiang): Add unit test for load blob from local filesystem.
+    #[allow(dead_code)]
+    pub async fn load_from_index_blob(
+        file_io: FileIO,
+        puffin_file: &DataFile,
+    ) -> IcebergResult<Self> {
+        let blob = puffin_utils::load_blob_from_puffin_file(file_io, puffin_file).await?;
+        FileIndexBlob::from_blob(blob)
     }
 
     /// Deserialize from iceberg puffin blob.
     #[allow(dead_code)]
-    pub(crate) fn from_blob(blob: Blob) -> Self {
+    pub(crate) fn from_blob(blob: Blob) -> IcebergResult<Self> {
         // Check blob type.
         let blob_proxy = unsafe { std::mem::transmute::<Blob, IcebergBlobProxy>(blob) };
         assert_eq!(
@@ -160,7 +181,12 @@ impl FileIndexBlob {
             MOONCAKE_HASH_INDEX_V1, blob_proxy.r#type
         );
 
-        serde_json::from_slice(&blob_proxy.data).unwrap()
+        serde_json::from_slice(&blob_proxy.data).map_err(|e| {
+            IcebergError::new(
+                iceberg::ErrorKind::DataInvalid,
+                format!("Failed to deserialize blob from json string: {:?}", e),
+            )
+        })
     }
 }
 
@@ -197,10 +223,10 @@ mod tests {
 
         // Serialization.
         let file_index_blob = FileIndexBlob::new(&mooncake_file_indices);
-        let blob = file_index_blob.as_blob();
+        let blob = file_index_blob.as_blob().unwrap();
 
         // Deserialization.
-        let mut deserialized_file_index_blob = FileIndexBlob::from_blob(blob);
+        let mut deserialized_file_index_blob = FileIndexBlob::from_blob(blob).unwrap();
         assert_eq!(deserialized_file_index_blob.file_indices.len(), 1);
         let mut file_index = std::mem::take(&mut deserialized_file_index_blob.file_indices[0]);
         let mooncake_file_index = file_index.as_mooncake_file_index();

@@ -6,6 +6,7 @@ use crate::storage::iceberg::deletion_vector::{
 use crate::storage::iceberg::index::FileIndexBlob;
 use crate::storage::iceberg::moonlink_catalog::MoonlinkCatalog;
 use crate::storage::iceberg::puffin_utils;
+use crate::storage::iceberg::utils;
 use crate::storage::iceberg::validation as IcebergValidation;
 use crate::storage::index::FileIndex as MooncakeFileIndex;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
@@ -17,7 +18,7 @@ use std::sync::Arc;
 use arrow_schema::Schema as ArrowSchema;
 use iceberg::io::FileIO;
 use iceberg::puffin::CompressionCodec;
-use iceberg::spec::{DataContentType, DataFileFormat};
+use iceberg::spec::DataFileFormat;
 use iceberg::spec::{DataFile, ManifestEntry};
 use iceberg::table::Table as IcebergTable;
 use iceberg::transaction::Transaction;
@@ -188,13 +189,24 @@ impl IcebergTableManager {
         Ok(())
     }
 
+    /// Load index file into table manager from the current manifest entry.
+    async fn load_file_index_from_manifest_entry(
+        &mut self,
+        entry: &ManifestEntry,
+    ) -> IcebergResult<()> {
+        if utils::is_file_index(entry) {
+            return Ok(());
+        }
+        Ok(())
+    }
+
     /// Load data file into table manager from the current manifest entry.
     async fn load_data_file_from_manifest_entry(
         &mut self,
         entry: &ManifestEntry,
     ) -> IcebergResult<()> {
         let data_file = entry.data_file();
-        if data_file.file_format() == DataFileFormat::Puffin {
+        if !utils::is_data_file_entry(entry) {
             return Ok(());
         }
 
@@ -224,10 +236,7 @@ impl IcebergTableManager {
     ) -> IcebergResult<()> {
         // Skip data files and file indices.
         let data_file = entry.data_file();
-        if data_file.file_format() == DataFileFormat::Parquet {
-            return Ok(());
-        }
-        if data_file.content_type() == DataContentType::Data {
+        if !utils::is_deletion_vector_entry(entry) {
             return Ok(());
         }
 
@@ -323,7 +332,7 @@ impl IcebergTableManager {
         });
 
         let file_index_blob = FileIndexBlob::new(file_indices);
-        let puffin_blob = file_index_blob.as_blob();
+        let puffin_blob = file_index_blob.as_blob()?;
         puffin_writer
             .add(puffin_blob, iceberg::puffin::CompressionCodec::None)
             .await?;
@@ -401,10 +410,15 @@ impl IcebergOperation for IcebergTableManager {
             // Reference: https://iceberg.apache.org/spec/?h=content#sequence-numbers
             let manifest = manifest_file.load_manifest(&file_io).await?;
             let (manifest_entries, _) = manifest.into_parts();
-            for entry in manifest_entries.into_iter() {
-                // On load, we do two pass on all entries, to check whether all deletion vector has a corresponding data file.
+
+            // On load, we do two pass on all entries, to check whether all deletion vector has a corresponding data file.
+            for entry in manifest_entries.iter() {
                 self.load_data_file_from_manifest_entry(entry.as_ref())
                     .await?;
+                self.load_file_index_from_manifest_entry(entry.as_ref())
+                    .await?;
+            }
+            for entry in manifest_entries.into_iter() {
                 self.load_deletion_vector_from_manifest_entry(entry.as_ref(), &file_io)
                     .await?;
             }
