@@ -11,6 +11,7 @@ use super::storage_utils::{RawDeletionRecord, RecordLocation};
 use crate::error::{Error, Result};
 use crate::row::{Identity, MoonlinkRow};
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
+use futures::executor::block_on;
 use std::collections::HashMap;
 use std::mem::take;
 use std::path::{Path, PathBuf};
@@ -364,7 +365,7 @@ impl MooncakeTable {
                 lsn,
                 index,
             );
-            disk_slice.write()?;
+            block_on(disk_slice.write())?;
             Ok(disk_slice)
         });
 
@@ -391,7 +392,7 @@ impl MooncakeTable {
             index,
         );
         // TODO(nbiscaro): Find longer term solution that allows aysnc write
-        disk_slice.write()?;
+        block_on(disk_slice.write())?;
         Ok(disk_slice)
     }
 

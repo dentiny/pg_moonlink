@@ -38,6 +38,7 @@ tokio = { version = "1.38", default-features = false, features = [
   "sync",
   "time",
 ] }
+tokio-bitstream-io = "0.0.7"
 tokio-postgres = { git = "https://github.com/Mooncake-labs/rust-postgres.git" }
 url = "2.5"
 uuid = { version = "1.16", default-features = false, features = ["v4"] }
