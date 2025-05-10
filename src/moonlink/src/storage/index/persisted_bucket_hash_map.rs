@@ -260,10 +260,11 @@ impl IndexBlockBuilder {
         }
         let bucket_start_offset = (self.current_entry as u64)
             * (metadata.hash_lower_bits + metadata.seg_id_bits + metadata.row_id_bits) as u64;
-        for bucket in self.buckets.clone() {
+        let buckets = std::mem::take(&mut self.buckets);
+        for cur_bucket in buckets {
             self.get_entry_writer()
                 .await
-                .write(metadata.bucket_bits, bucket)
+                .write(metadata.bucket_bits, cur_bucket)
                 .await
                 .unwrap();
         }
