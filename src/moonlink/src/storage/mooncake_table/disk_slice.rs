@@ -66,7 +66,7 @@ impl DiskSliceWriter {
     }
 
     /// Apply deletion vector to in-memory batches, write to parquet files and remap index.
-    pub(super) fn write(&mut self) -> Result<()> {
+    pub(super) async fn write(&mut self) -> Result<()> {
         let mut filtered_batches = Vec::new();
         let mut id = 0;
         for entry in self.batches.iter() {
@@ -86,7 +86,7 @@ impl DiskSliceWriter {
             }
         }
         self.write_batch_to_parquet(&filtered_batches)?;
-        self.remap_index()?;
+        self.remap_index().await?;
         Ok(())
     }
 
@@ -155,7 +155,7 @@ impl DiskSliceWriter {
         Ok(())
     }
 
-    fn remap_index(&mut self) -> Result<()> {
+    async fn remap_index(&mut self) -> Result<()> {
         let list = self
             .old_index
             .iter()
@@ -176,7 +176,7 @@ impl DiskSliceWriter {
                 .collect(),
         );
         index_builder.set_directory(self.dir_path.clone());
-        self.new_index = Some(index_builder.build_from_flush(list));
+        self.new_index = Some(index_builder.build_from_flush(list).await);
         Ok(())
     }
 
@@ -212,8 +212,8 @@ mod tests {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use tempfile::tempdir;
 
-    #[test]
-    fn test_disk_slice_builder() -> Result<()> {
+    #[tokio::test]
+    async fn test_disk_slice_builder() -> Result<()> {
         // Create a temporary directory for the test
         let temp_dir = tempdir().map_err(Error::Io)?;
         // Create a schema for testing
@@ -255,7 +255,7 @@ mod tests {
             Some(1),
             Arc::new(old_index),
         );
-        disk_slice.write()?;
+        disk_slice.write().await?;
         // Verify files were created
         assert!(!disk_slice.output_files().is_empty());
         println!("Files: {:?}", disk_slice.output_files());
@@ -276,8 +276,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_index_remapping() -> Result<()> {
+    #[tokio::test]
+    async fn test_index_remapping() -> Result<()> {
         // Create a temporary directory for the test
         let temp_dir = tempdir().map_err(Error::Io)?;
 
@@ -360,7 +360,7 @@ mod tests {
         );
 
         // Write the disk slice
-        disk_slice.write()?;
+        disk_slice.write().await?;
 
         // Verify files were created
         assert!(!disk_slice.output_files().is_empty());
