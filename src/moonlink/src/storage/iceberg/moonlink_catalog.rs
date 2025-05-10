@@ -6,7 +6,7 @@ use iceberg::{Catalog, Result as IcebergResult};
 /// TODO(hjiang): iceberg-rust currently doesn't support puffin write, to workaround and reduce code change,
 /// we record puffin metadata ourselves and rewrite manifest file before transaction commits.
 #[async_trait]
-pub trait DeletionVectorWrite {
+pub trait PuffinWrite {
     /// Get puffin metadata from the writer, and close it.
     async fn record_puffin_metadata_and_close(
         &mut self,
@@ -18,5 +18,5 @@ pub trait DeletionVectorWrite {
     fn clear_puffin_metadata(&mut self);
 }
 
-pub trait MoonlinkCatalog: DeletionVectorWrite + Catalog {}
-impl<T: DeletionVectorWrite + Catalog> MoonlinkCatalog for T {}
+pub trait MoonlinkCatalog: PuffinWrite + Catalog {}
+impl<T: PuffinWrite + Catalog> MoonlinkCatalog for T {}

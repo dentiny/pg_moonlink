@@ -71,7 +71,7 @@ impl FileIndex {
     /// Transfer the ownership and convert into [storage::index::FileIndex].
     /// The file index id is generated on-the-fly.
     #[allow(dead_code)]
-    pub(crate) fn take_as_mooncake_file_index(&mut self) -> MooncakeFileIndex {
+    pub(crate) fn as_mooncake_file_index(&mut self) -> MooncakeFileIndex {
         MooncakeFileIndex {
             _global_index_id: get_next_file_index_id(),
             files: self
@@ -121,7 +121,7 @@ impl FileIndexBlob {
 
     /// Serialize the file index into iceberg puffin blob.
     #[allow(dead_code)]
-    pub(crate) fn take_as_blob(&mut self) -> Blob {
+    pub(crate) fn as_blob(&self) -> Blob {
         let blob_bytes = serde_json::to_vec(self).unwrap();
         // Snapshot ID and sequence number are not known at the time the Puffin file is created.
         // `snapshot-id` and `sequence-number` must be set to -1 in blob metadata for Puffin v1.
@@ -183,14 +183,14 @@ mod tests {
         }];
 
         // Serialization.
-        let mut file_index_blob = FileIndexBlob::new(&mooncake_file_indices);
-        let blob = file_index_blob.take_as_blob();
+        let file_index_blob = FileIndexBlob::new(&mooncake_file_indices);
+        let blob = file_index_blob.as_blob();
 
         // Deserialization.
         let mut deserialized_file_index_blob = FileIndexBlob::from_blob(blob);
         assert_eq!(deserialized_file_index_blob.file_indices.len(), 1);
         let mut file_index = std::mem::take(&mut deserialized_file_index_blob.file_indices[0]);
-        let mooncake_file_index = file_index.take_as_mooncake_file_index();
+        let mooncake_file_index = file_index.as_mooncake_file_index();
 
         // Check global index are equal before and after serde.
         assert_eq!(

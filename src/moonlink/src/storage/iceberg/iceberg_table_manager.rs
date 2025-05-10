@@ -3,10 +3,11 @@ use crate::storage::iceberg::deletion_vector::DeletionVector;
 use crate::storage::iceberg::deletion_vector::{
     DELETION_VECTOR_CADINALITY, DELETION_VECTOR_REFERENCED_DATA_FILE,
 };
+use crate::storage::iceberg::index::FileIndexBlob;
 use crate::storage::iceberg::moonlink_catalog::MoonlinkCatalog;
 use crate::storage::iceberg::puffin_utils;
 use crate::storage::iceberg::validation as IcebergValidation;
-use crate::storage::index::FileIndex;
+use crate::storage::index::FileIndex as MooncakeFileIndex;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 
 use std::collections::{HashMap, HashSet};
@@ -65,7 +66,7 @@ pub(crate) trait IcebergOperation {
     async fn sync_snapshot(
         &mut self,
         disk_files: HashMap<PathBuf, BatchDeletionVector>,
-        file_indexes: Vec<FileIndex>,
+        file_indexes: Vec<MooncakeFileIndex>,
     ) -> IcebergResult<()>;
 
     /// Load latest snapshot from iceberg table. Used for recovery and initialization.
@@ -118,6 +119,14 @@ impl IcebergTableManager {
         }
     }
 
+    /// Get a unique puffin filepath under table warehouse uri.
+    fn get_unique_puffin_filepath(&self) -> String {
+        let location_generator =
+            DefaultLocationGenerator::new(self.iceberg_table.as_ref().unwrap().metadata().clone())
+                .unwrap();
+        location_generator.generate_location(&format!("{}-puffin.bin", Uuid::new_v4()))
+    }
+
     /// Get or create an iceberg table, and load full table status into table manager.
     async fn get_or_create_table(&mut self) -> IcebergResult<()> {
         if self.iceberg_table.is_none() {
@@ -158,24 +167,18 @@ impl IcebergTableManager {
                 ),
             ]);
             let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
+            // TODO(hjiang): Fix sequence number and snapshot id, which should be -1.
             let blob = iceberg_deletion_vector.serialize(
                 table_metadata.current_snapshot_id().unwrap_or(-1),
                 table_metadata.next_sequence_number(),
                 blob_properties,
             );
-
-            // TODO(hjiang): Current iceberg-rust doesn't support deletion vector officially, so we do our own hack to rewrite manifest file by our own catalog implementation.
-            let location_generator = DefaultLocationGenerator::new(
-                self.iceberg_table.as_ref().unwrap().metadata().clone(),
-            )?;
-            let puffin_filepath =
-                location_generator.generate_location(&format!("{}-puffin.bin", Uuid::new_v4()));
+            let puffin_filepath = self.get_unique_puffin_filepath();
             let mut puffin_writer = puffin_utils::create_puffin_writer(
                 self.iceberg_table.as_ref().unwrap().file_io(),
                 puffin_filepath.clone(),
             )
             .await?;
-            // TODO(hjiang): Provide option to enable compression for puffin blob.
             puffin_writer.add(blob, CompressionCodec::None).await?;
 
             self.catalog
@@ -296,11 +299,36 @@ impl IcebergTableManager {
 
     /// Dump file indexes into the iceberg table, only new file indexes will be persisted into the table.
     /// Return file index ids which should be added into iceberg table.
-    async fn _sync_file_indexes(
-        &mut self,
-        _file_indices: &[FileIndex],
-    ) -> IcebergResult<HashSet<u32>> {
-        Ok(HashSet::new())
+    ///
+    /// TODO(hjiang): Need to configure (1) the number of blobs in a puffin file; and (2) the number of file index in a puffin blob.
+    /// For implementation simpicity, put everything in a single file and a single blob.
+    async fn sync_file_indexes(&mut self, file_indices: &[MooncakeFileIndex]) -> IcebergResult<()> {
+        if file_indices.is_empty() {
+            return Ok(());
+        }
+
+        let puffin_filepath = self.get_unique_puffin_filepath();
+        let mut puffin_writer = puffin_utils::create_puffin_writer(
+            self.iceberg_table.as_ref().unwrap().file_io(),
+            puffin_filepath.clone(),
+        )
+        .await?;
+
+        file_indices.iter().for_each(|mooncake_file_index| {
+            self.persisted_file_index_id
+                .insert(mooncake_file_index._global_index_id);
+        });
+
+        let file_index_blob = FileIndexBlob::new(file_indices);
+        let puffin_blob = file_index_blob.as_blob();
+        puffin_writer
+            .add(puffin_blob, iceberg::puffin::CompressionCodec::None)
+            .await?;
+        self.catalog
+            .record_puffin_metadata_and_close(puffin_filepath, puffin_writer)
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -309,19 +337,23 @@ impl IcebergOperation for IcebergTableManager {
     async fn sync_snapshot(
         &mut self,
         disk_files: HashMap<PathBuf, BatchDeletionVector>,
-        _file_indexes: Vec<FileIndex>,
+        file_indices: Vec<MooncakeFileIndex>,
     ) -> IcebergResult<()> {
         // Initialize iceberg table on access.
         self.get_or_create_table().await?;
 
+        // Persist data files and deletion vector changes.
         let (new_data_files, new_persisted_data_files) =
             self.sync_data_files_and_deletion_vector(disk_files).await?;
 
-        // If no change for both data files and deletion vectors, no need to initiate a new transaction.
+        // If no change for both data files and deletion vectors (it also implies no new index files), no need to initiate a new transaction.
         if self.persisted_data_files == new_persisted_data_files {
             return Ok(());
         }
         self.persisted_data_files = new_persisted_data_files;
+
+        // Persist file index changes.
+        self.sync_file_indexes(file_indices.as_slice()).await?;
 
         // Only start append action when there're new data files.
         let mut txn = Transaction::new(self.iceberg_table.as_ref().unwrap());
