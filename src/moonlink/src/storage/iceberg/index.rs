@@ -1,17 +1,19 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-/// This module defines the file index struct used for iceberg, which corresponds to in-memory mooncake table file index structs, and supports the serde between mooncake table format and iceberg format.
-use crate::storage::index as MooncakeIndex;
+use crate::storage::iceberg::blob_proxy::IcebergBlobProxy;
 use crate::storage::index::file_index_id::get_next_file_index_id;
 use crate::storage::index::persisted_bucket_hash_map::IndexBlock as MooncakeIndexBlock;
+/// This module defines the file index struct used for iceberg, which corresponds to in-memory mooncake table file index structs, and supports the serde between mooncake table format and iceberg format.
+use crate::storage::index::FileIndex as MooncakeFileIndex;
 
 use iceberg::puffin::Blob;
 use serde::{Deserialize, Serialize};
-use serde_json;
-use std::path::Path;
+
+/// Blob type for index v1.
+const MOONCAKE_HASH_INDEX_V1: &str = "mooncake-hash-index-v1";
 
 /// Corresponds to [storage::index::IndexBlock], which records the metadata for each index block.
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, PartialEq, Serialize)]
 pub(crate) struct IndexBlock {
     bucket_start_idx: u32,
     bucket_end_idx: u32,
@@ -20,7 +22,7 @@ pub(crate) struct IndexBlock {
 }
 
 /// Corresponds to [storage::index::FileIndex], used to persist at iceberg table.
-#[derive(Deserialize, Serialize)]
+#[derive(Default, Deserialize, Serialize)]
 pub(crate) struct FileIndex {
     /// Data file paths at iceberg table.
     data_files: Vec<String>,
@@ -38,7 +40,8 @@ pub(crate) struct FileIndex {
 
 impl FileIndex {
     /// Convert from mooncake table [storage::index::FileIndex].
-    pub(crate) fn from_mooncake_file_index(mooncake_index: &MooncakeIndex::FileIndex) -> Self {
+    #[allow(dead_code)]
+    pub(crate) fn new(mooncake_index: &MooncakeFileIndex) -> Self {
         Self {
             data_files: mooncake_index
                 .files
@@ -52,7 +55,7 @@ impl FileIndex {
                     bucket_start_idx: cur_index_block.bucket_start_idx,
                     bucket_end_idx: cur_index_block.bucket_end_idx,
                     bucket_start_offset: cur_index_block.bucket_start_offset,
-                    filepath: cur_index_block.file_name.clone(),
+                    filepath: cur_index_block.file_path.clone(),
                 })
                 .collect(),
             num_rows: mooncake_index.num_rows,
@@ -67,9 +70,10 @@ impl FileIndex {
 
     /// Transfer the ownership and convert into [storage::index::FileIndex].
     /// The file index id is generated on-the-fly.
-    pub(crate) fn take_as_mooncake_file_index(&mut self) -> MooncakeIndex::FileIndex {
-        MooncakeIndex::FileIndex {
-            global_index_id: get_next_file_index_id(),
+    #[allow(dead_code)]
+    pub(crate) fn take_as_mooncake_file_index(&mut self) -> MooncakeFileIndex {
+        MooncakeFileIndex {
+            _global_index_id: get_next_file_index_id(),
             files: self
                 .data_files
                 .iter()
@@ -91,7 +95,6 @@ impl FileIndex {
                         cur_index_block.bucket_start_idx,
                         cur_index_block.bucket_end_idx,
                         cur_index_block.bucket_start_offset,
-                        /*directory=*/ Path::new("/tmp/iceberg-table"),
                         cur_index_block.filepath.clone(),
                     )
                 })
@@ -102,19 +105,136 @@ impl FileIndex {
 
 /// In-memory structure for one file index blob in the puffin file, which contains multiple `FileIndex` structs.
 #[derive(Deserialize, Serialize)]
+#[allow(dead_code)]
 pub(crate) struct FileIndexBlob {
     /// A blob contains multiple file indexes.
-    pub(crate) file_indexes: Vec<FileIndex>,
+    pub(crate) file_indices: Vec<FileIndex>,
 }
 
 impl FileIndexBlob {
+    #[allow(dead_code)]
+    pub fn new(file_indices: &[MooncakeFileIndex]) -> Self {
+        Self {
+            file_indices: file_indices.iter().map(FileIndex::new).collect(),
+        }
+    }
+
     /// Serialize the file index into iceberg puffin blob.
-    pub(crate) fn serialize(&mut self) -> Blob {
-        todo!()
+    #[allow(dead_code)]
+    pub(crate) fn take_as_blob(&mut self) -> Blob {
+        let blob_bytes = serde_json::to_vec(self).unwrap();
+        // Snapshot ID and sequence number are not known at the time the Puffin file is created.
+        // `snapshot-id` and `sequence-number` must be set to -1 in blob metadata for Puffin v1.
+        let blob_proxy = IcebergBlobProxy {
+            r#type: MOONCAKE_HASH_INDEX_V1.to_string(),
+            fields: vec![],
+            snapshot_id: -1,
+            sequence_number: -1,
+            data: blob_bytes,
+            properties: HashMap::new(),
+        };
+        unsafe { std::mem::transmute::<IcebergBlobProxy, Blob>(blob_proxy) }
     }
 
     /// Deserialize from iceberg puffin blob.
-    pub(crate) fn deserialize(blob: Blob) -> Self {
-        todo!()
+    #[allow(dead_code)]
+    pub(crate) fn from_blob(blob: Blob) -> Self {
+        // Check blob type.
+        let blob_proxy = unsafe { std::mem::transmute::<Blob, IcebergBlobProxy>(blob) };
+        assert_eq!(
+            &blob_proxy.r#type, MOONCAKE_HASH_INDEX_V1,
+            "Expected hash index v1 blob type is {:?}, actual type is {:?}",
+            MOONCAKE_HASH_INDEX_V1, blob_proxy.r#type
+        );
+
+        serde_json::from_slice(&blob_proxy.data).unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tempfile::NamedTempFile;
+
+    use crate::storage::index::persisted_bucket_hash_map::IndexBlock as MooncakeIndexBlock;
+    use crate::storage::index::FileIndex as MooncakeFileIndex;
+
+    #[test]
+    fn test_hash_index_v1_serde() {
+        // Fill in meaningless random bytes, mainly to verify the correctness of serde.
+        let temp_file = NamedTempFile::new().unwrap();
+        let mooncake_file_indices = vec![MooncakeFileIndex {
+            _global_index_id: 0,
+            num_rows: 10,
+            hash_bits: 10,
+            hash_upper_bits: 4,
+            hash_lower_bits: 6,
+            seg_id_bits: 6,
+            row_id_bits: 3,
+            bucket_bits: 5,
+            files: vec![Arc::new(PathBuf::from(temp_file.path()))],
+            index_blocks: vec![MooncakeIndexBlock::new(
+                /*bucket_start_idx=*/ 0,
+                /*bucket_end_idx=*/ 3,
+                /*bucket_start_offset=*/ 10,
+                /*filepath=*/ temp_file.path().to_str().unwrap().to_string(),
+            )],
+        }];
+
+        // Serialization.
+        let mut file_index_blob = FileIndexBlob::new(&mooncake_file_indices);
+        let blob = file_index_blob.take_as_blob();
+
+        // Deserialization.
+        let mut deserialized_file_index_blob = FileIndexBlob::from_blob(blob);
+        assert_eq!(deserialized_file_index_blob.file_indices.len(), 1);
+        let mut file_index = std::mem::take(&mut deserialized_file_index_blob.file_indices[0]);
+        let mooncake_file_index = file_index.take_as_mooncake_file_index();
+
+        // Check global index are equal before and after serde.
+        assert_eq!(
+            mooncake_file_index.num_rows,
+            mooncake_file_indices[0].num_rows
+        );
+        assert_eq!(mooncake_file_index.files, mooncake_file_indices[0].files);
+        assert_eq!(
+            mooncake_file_index.hash_bits,
+            mooncake_file_indices[0].hash_bits
+        );
+        assert_eq!(
+            mooncake_file_index.hash_upper_bits,
+            mooncake_file_indices[0].hash_upper_bits
+        );
+        assert_eq!(
+            mooncake_file_index.hash_lower_bits,
+            mooncake_file_indices[0].hash_lower_bits
+        );
+        assert_eq!(
+            mooncake_file_index.seg_id_bits,
+            mooncake_file_indices[0].seg_id_bits
+        );
+        assert_eq!(
+            mooncake_file_index.row_id_bits,
+            mooncake_file_indices[0].row_id_bits
+        );
+        assert_eq!(
+            mooncake_file_index.bucket_bits,
+            mooncake_file_indices[0].bucket_bits
+        );
+
+        assert_eq!(mooncake_file_index.index_blocks.len(), 1);
+        assert_eq!(
+            mooncake_file_index.index_blocks[0].bucket_start_idx,
+            mooncake_file_indices[0].index_blocks[0].bucket_start_idx
+        );
+        assert_eq!(
+            mooncake_file_index.index_blocks[0].bucket_end_idx,
+            mooncake_file_indices[0].index_blocks[0].bucket_end_idx
+        );
+        assert_eq!(
+            mooncake_file_index.index_blocks[0].bucket_start_offset,
+            mooncake_file_indices[0].index_blocks[0].bucket_start_offset
+        );
     }
 }

@@ -296,9 +296,9 @@ impl IcebergTableManager {
 
     /// Dump file indexes into the iceberg table, only new file indexes will be persisted into the table.
     /// Return file index ids which should be added into iceberg table.
-    async fn sync_file_indexes(
+    async fn _sync_file_indexes(
         &mut self,
-        _file_indices: &Vec<FileIndex>,
+        _file_indices: &[FileIndex],
     ) -> IcebergResult<HashSet<u32>> {
         Ok(HashSet::new())
     }
@@ -308,8 +308,8 @@ impl IcebergTableManager {
 impl IcebergOperation for IcebergTableManager {
     async fn sync_snapshot(
         &mut self,
-        mut disk_files: HashMap<PathBuf, BatchDeletionVector>,
-        mut file_indexes: Vec<FileIndex>,
+        disk_files: HashMap<PathBuf, BatchDeletionVector>,
+        _file_indexes: Vec<FileIndex>,
     ) -> IcebergResult<()> {
         // Initialize iceberg table on access.
         self.get_or_create_table().await?;
