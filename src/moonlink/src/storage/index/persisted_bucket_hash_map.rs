@@ -41,7 +41,7 @@ fn splitmix64(mut x: u64) -> u64 {
 /// [lower_bit_hash, seg_idx, row_idx]
 pub struct GlobalIndex {
     /// A unique id to identify each global index.
-    pub(crate) _global_index_id: u32,
+    pub(crate) global_index_id: u32,
 
     pub(crate) files: Vec<Arc<PathBuf>>,
     pub(crate) num_rows: u32,
@@ -352,7 +352,7 @@ impl GlobalIndexBuilder {
         let lower_bits = 64 - upper_bits;
         let seg_id_bits = 32 - (self.files.len() as u32).trailing_zeros();
         let mut global_index = GlobalIndex {
-            _global_index_id: get_next_file_index_id(),
+            global_index_id: get_next_file_index_id(),
             files: self.files,
             num_rows,
             hash_bits: HASH_BITS,

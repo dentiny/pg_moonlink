@@ -10,7 +10,9 @@ use iceberg::puffin::Blob;
 use serde::{Deserialize, Serialize};
 
 /// Blob type for index v1.
-const MOONCAKE_HASH_INDEX_V1: &str = "mooncake-hash-index-v1";
+pub(crate) const MOONCAKE_HASH_INDEX_V1: &str = "mooncake-hash-index-v1";
+/// File index puffin blob property.
+pub(crate) const MOONCAKE_HASH_INDEX_V1_CARDINALITY: &str = "cardinality";
 
 /// Corresponds to [storage::index::IndexBlock], which records the metadata for each index block.
 #[derive(Deserialize, PartialEq, Serialize)]
@@ -73,7 +75,7 @@ impl FileIndex {
     #[allow(dead_code)]
     pub(crate) fn as_mooncake_file_index(&mut self) -> MooncakeFileIndex {
         MooncakeFileIndex {
-            _global_index_id: get_next_file_index_id(),
+            global_index_id: get_next_file_index_id(),
             files: self
                 .data_files
                 .iter()
@@ -123,6 +125,17 @@ impl FileIndexBlob {
     #[allow(dead_code)]
     pub(crate) fn as_blob(&self) -> Blob {
         let blob_bytes = serde_json::to_vec(self).unwrap();
+        let mut properties = HashMap::new();
+        let total_num_rows: u32 = self
+            .file_indices
+            .iter()
+            .map(|mooncake_file_index| mooncake_file_index.num_rows)
+            .sum();
+        properties.insert(
+            MOONCAKE_HASH_INDEX_V1_CARDINALITY.to_string(),
+            total_num_rows.to_string(),
+        );
+
         // Snapshot ID and sequence number are not known at the time the Puffin file is created.
         // `snapshot-id` and `sequence-number` must be set to -1 in blob metadata for Puffin v1.
         let blob_proxy = IcebergBlobProxy {
@@ -131,7 +144,7 @@ impl FileIndexBlob {
             snapshot_id: -1,
             sequence_number: -1,
             data: blob_bytes,
-            properties: HashMap::new(),
+            properties,
         };
         unsafe { std::mem::transmute::<IcebergBlobProxy, Blob>(blob_proxy) }
     }
@@ -165,7 +178,7 @@ mod tests {
         // Fill in meaningless random bytes, mainly to verify the correctness of serde.
         let temp_file = NamedTempFile::new().unwrap();
         let mooncake_file_indices = vec![MooncakeFileIndex {
-            _global_index_id: 0,
+            global_index_id: 0,
             num_rows: 10,
             hash_bits: 10,
             hash_upper_bits: 4,

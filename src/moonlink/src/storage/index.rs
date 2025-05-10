@@ -16,7 +16,7 @@ pub trait Index<'a>: Send + Sync {
 
 pub struct MooncakeIndex {
     in_memory_index: HashSet<IndexPtr>,
-    file_indices: Vec<FileIndex>,
+    pub(crate) file_indices: Vec<FileIndex>,
 }
 /// Type for primary keys
 pub type PrimaryKey = u64;

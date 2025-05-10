@@ -17,7 +17,7 @@ const DELETION_VECTOR_MAGIC_BYTES: [u8; 4] = [0xD1, 0xD3, 0x39, 0x64];
 const MIN_SERIALIZED_DELETION_VECTOR_BLOB: usize = 12;
 
 // Blob type for deletion vector.
-const DELETION_VECTOR_BLOB_TYPE: &str = "deletion-vector-v1";
+pub(crate) const DELETION_VECTOR_BLOB_TYPE: &str = "deletion-vector-v1";
 
 // Deletion vector puffin blob properties which must be contained.
 pub(crate) const DELETION_VECTOR_CADINALITY: &str = "cardinality";

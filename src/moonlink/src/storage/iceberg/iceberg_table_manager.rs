@@ -17,13 +17,12 @@ use std::sync::Arc;
 use arrow_schema::Schema as ArrowSchema;
 use iceberg::io::FileIO;
 use iceberg::puffin::CompressionCodec;
-use iceberg::spec::DataFileFormat;
+use iceberg::spec::{DataContentType, DataFileFormat};
 use iceberg::spec::{DataFile, ManifestEntry};
 use iceberg::table::Table as IcebergTable;
 use iceberg::transaction::Transaction;
 use iceberg::writer::file_writer::location_generator::DefaultLocationGenerator;
 use iceberg::writer::file_writer::location_generator::LocationGenerator;
-use iceberg::Error as IcebergError;
 use iceberg::Result as IcebergResult;
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
@@ -57,7 +56,7 @@ pub(crate) trait IcebergOperation {
     ///
     /// * disk_files: a map from data file paths to batch deletion vector.
     ///   Data file path could be either local (when upload local data file to iceberg), or remote (after recovery from iceberg table).
-    /// * file_indexes: all file indexes which have been persisted, could be either local or remote.
+    /// * file_indices: all file indexes which have been persisted, could be either local or remote.
     ///
     /// Please notice, it takes full content to commit snapshot.
     ///
@@ -66,7 +65,7 @@ pub(crate) trait IcebergOperation {
     async fn sync_snapshot(
         &mut self,
         disk_files: HashMap<PathBuf, BatchDeletionVector>,
-        file_indexes: Vec<MooncakeFileIndex>,
+        file_indices: &[MooncakeFileIndex],
     ) -> IcebergResult<()>;
 
     /// Load latest snapshot from iceberg table. Used for recovery and initialization.
@@ -223,8 +222,12 @@ impl IcebergTableManager {
         entry: &ManifestEntry,
         file_io: &FileIO,
     ) -> IcebergResult<()> {
+        // Skip data files and file indices.
         let data_file = entry.data_file();
         if data_file.file_format() == DataFileFormat::Parquet {
+            return Ok(());
+        }
+        if data_file.content_type() == DataContentType::Data {
             return Ok(());
         }
 
@@ -302,7 +305,7 @@ impl IcebergTableManager {
     ///
     /// TODO(hjiang): Need to configure (1) the number of blobs in a puffin file; and (2) the number of file index in a puffin blob.
     /// For implementation simpicity, put everything in a single file and a single blob.
-    async fn sync_file_indexes(&mut self, file_indices: &[MooncakeFileIndex]) -> IcebergResult<()> {
+    async fn sync_file_indices(&mut self, file_indices: &[MooncakeFileIndex]) -> IcebergResult<()> {
         if file_indices.is_empty() {
             return Ok(());
         }
@@ -316,7 +319,7 @@ impl IcebergTableManager {
 
         file_indices.iter().for_each(|mooncake_file_index| {
             self.persisted_file_index_id
-                .insert(mooncake_file_index._global_index_id);
+                .insert(mooncake_file_index.global_index_id);
         });
 
         let file_index_blob = FileIndexBlob::new(file_indices);
@@ -337,7 +340,7 @@ impl IcebergOperation for IcebergTableManager {
     async fn sync_snapshot(
         &mut self,
         disk_files: HashMap<PathBuf, BatchDeletionVector>,
-        file_indices: Vec<MooncakeFileIndex>,
+        file_indices: &[MooncakeFileIndex],
     ) -> IcebergResult<()> {
         // Initialize iceberg table on access.
         self.get_or_create_table().await?;
@@ -353,7 +356,7 @@ impl IcebergOperation for IcebergTableManager {
         self.persisted_data_files = new_persisted_data_files;
 
         // Persist file index changes.
-        self.sync_file_indexes(file_indices.as_slice()).await?;
+        self.sync_file_indices(file_indices).await?;
 
         // Only start append action when there're new data files.
         let mut txn = Transaction::new(self.iceberg_table.as_ref().unwrap());
@@ -398,16 +401,7 @@ impl IcebergOperation for IcebergTableManager {
             // Reference: https://iceberg.apache.org/spec/?h=content#sequence-numbers
             let manifest = manifest_file.load_manifest(&file_io).await?;
             let (manifest_entries, _) = manifest.into_parts();
-            let snapshot_seq_no = manifest_entries.first().unwrap().sequence_number();
             for entry in manifest_entries.into_iter() {
-                // Sanity check all manifest entries are of the sequence number.
-                let cur_entry_seq_no = entry.sequence_number();
-                if snapshot_seq_no != cur_entry_seq_no {
-                    return Err(IcebergError::new(
-                        iceberg::ErrorKind::DataInvalid,
-                        format!("When reading from iceberg table, snapshot sequence id inconsistency found {:?} vs {:?}", snapshot_seq_no, cur_entry_seq_no),
-                    ));
-                }
                 // On load, we do two pass on all entries, to check whether all deletion vector has a corresponding data file.
                 self.load_data_file_from_manifest_entry(entry.as_ref())
                     .await?;
@@ -440,6 +434,7 @@ mod tests {
     use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use iceberg::io::FileRead;
+    use iceberg::Error as IcebergError;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::arrow::ArrowWriter;
 
@@ -536,7 +531,10 @@ mod tests {
         let mut snapshot_disk_files: HashMap<PathBuf, BatchDeletionVector> = HashMap::new();
         snapshot_disk_files.insert(parquet_path.clone(), test_deletion_vector_1());
         iceberg_table_manager
-            .sync_snapshot(snapshot_disk_files.clone(), /*file_indexes=*/ vec![])
+            .sync_snapshot(
+                snapshot_disk_files.clone(),
+                /*file_indices=*/ vec![].as_slice(),
+            )
             .await?;
 
         // Write second snapshot to iceberg table, with updated deletion vector and new data file.
@@ -549,7 +547,10 @@ mod tests {
             .await?;
         snapshot_disk_files.insert(parquet_path.clone(), test_deletion_vector_1());
         iceberg_table_manager
-            .sync_snapshot(snapshot_disk_files, /*file_indexes=*/ vec![])
+            .sync_snapshot(
+                snapshot_disk_files,
+                /*file_indices=*/ vec![].as_slice(),
+            )
             .await?;
 
         // Check persisted items in the iceberg table.

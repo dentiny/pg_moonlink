@@ -93,7 +93,10 @@ impl SnapshotTableState {
             self.iceberg_table_manager
                 .as_mut()
                 .unwrap()
-                .sync_snapshot(self.current_snapshot.disk_files.clone(), vec![])
+                .sync_snapshot(
+                    self.current_snapshot.disk_files.clone(),
+                    self.current_snapshot.get_file_indices(),
+                )
                 .await
                 .unwrap();
         }
