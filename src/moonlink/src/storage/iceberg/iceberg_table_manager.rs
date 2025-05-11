@@ -1,4 +1,3 @@
-use crate::storage::iceberg::catalog_utils;
 use crate::storage::iceberg::deletion_vector::DeletionVector;
 use crate::storage::iceberg::deletion_vector::{
     DELETION_VECTOR_CADINALITY, DELETION_VECTOR_REFERENCED_DATA_FILE,
@@ -111,7 +110,7 @@ pub struct IcebergTableManager {
 impl IcebergTableManager {
     #[allow(dead_code)]
     pub fn new(config: IcebergTableManagerConfig) -> IcebergTableManager {
-        let catalog = catalog_utils::create_catalog(&config.warehouse_uri).unwrap();
+        let catalog = utils::create_catalog(&config.warehouse_uri).unwrap();
         Self {
             config,
             catalog,
@@ -132,7 +131,7 @@ impl IcebergTableManager {
     /// Get or create an iceberg table, and load full table status into table manager.
     async fn get_or_create_table(&mut self) -> IcebergResult<()> {
         if self.iceberg_table.is_none() {
-            let table = catalog_utils::get_or_create_iceberg_table(
+            let table = utils::get_or_create_iceberg_table(
                 &*self.catalog,
                 &self.config.warehouse_uri,
                 &self.config.namespace,
@@ -345,7 +344,7 @@ impl IcebergTableManager {
                     new_persisted_data_files.insert(local_path, new_data_file_entry);
                 }
                 None => {
-                    let data_file = catalog_utils::write_record_batch_to_iceberg(
+                    let data_file = utils::write_record_batch_to_iceberg(
                         self.iceberg_table.as_ref().unwrap(),
                         &local_path,
                     )
@@ -401,7 +400,7 @@ impl IcebergTableManager {
                 new_file_indices.push(cur_file_index);
                 // Upload new index file to iceberg table.
                 for cur_index_block in cur_file_index.index_blocks.iter() {
-                    let remote_index_block = catalog_utils::upload_index_file(
+                    let remote_index_block = utils::upload_index_file(
                         self.iceberg_table.as_ref().unwrap(),
                         &cur_index_block.file_path,
                     )
