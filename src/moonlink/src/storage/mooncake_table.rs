@@ -455,6 +455,10 @@ impl MooncakeTable {
     // UNDONE(BATCH_INSERT):
     // flush uncommitted batches from big batch insert
     pub async fn flush(&mut self, lsn: u64) -> Result<()> {
+        if self.mem_slice.is_empty() {
+            return Ok(());
+        }
+
         // Flush data files into iceberb table.
         let disk_slice = Self::inner_flush_data_files(
             &mut self.mem_slice,

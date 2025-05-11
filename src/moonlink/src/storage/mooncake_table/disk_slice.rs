@@ -215,12 +215,9 @@ mod tests {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use tempfile::tempdir;
 
-    #[tokio::test]
-    async fn test_disk_slice_builder() -> Result<()> {
-        // Create a temporary directory for the test
-        let temp_dir = tempdir().map_err(Error::Io)?;
-        // Create a schema for testing
-        let schema = Arc::new(Schema::new(vec![
+    /// Util function to create test schema.
+    fn get_test_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
                 "PARQUET:field_id".to_string(),
                 "1".to_string(),
@@ -229,7 +226,15 @@ mod tests {
                 "PARQUET:field_id".to_string(),
                 "2".to_string(),
             )])),
-        ]));
+        ]))
+    }
+
+    #[tokio::test]
+    async fn test_disk_slice_builder() -> Result<()> {
+        // Create a temporary directory for the test
+        let temp_dir = tempdir().map_err(Error::Io)?;
+        // Create a schema for testing
+        let schema = get_test_schema();
 
         // Create a MemSlice with test data
         let mut mem_slice = MemSlice::new(schema.clone(), 100);
@@ -285,16 +290,7 @@ mod tests {
         let temp_dir = tempdir().map_err(Error::Io)?;
 
         // Create a schema for testing
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
-                "PARQUET:field_id".to_string(),
-                "1".to_string(),
-            )])),
-            Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
-                "PARQUET:field_id".to_string(),
-                "2".to_string(),
-            )])),
-        ]));
+        let schema = get_test_schema();
 
         // Create a MemSlice with test data - more rows this time
         let mut mem_slice = MemSlice::new(schema.clone(), 3);
