@@ -140,9 +140,6 @@ pub(crate) async fn write_record_batch_to_iceberg(
         /*format=*/ DataFileFormat::Parquet,
     );
 
-    let file = File::open(parquet_filepath).await?;
-    let mut stream = ParquetRecordBatchStreamBuilder::new(file).await?.build()?;
-
     let parquet_writer_builder = ParquetWriterBuilder::new(
         /*props=*/ WriterProperties::default(),
         /*schame=*/ table.metadata().current_schema().clone(),
@@ -158,7 +155,12 @@ pub(crate) async fn write_record_batch_to_iceberg(
         /*partition_spec_id=*/ 0,
     );
     let mut data_file_writer = data_file_writer_builder.build().await?;
-    while let Some(record_batch) = stream.try_next().await? {
+
+    let local_file = File::open(parquet_filepath).await?;
+    let mut read_stream = ParquetRecordBatchStreamBuilder::new(local_file)
+        .await?
+        .build()?;
+    while let Some(record_batch) = read_stream.try_next().await? {
         data_file_writer.write(record_batch).await?;
     }
 
