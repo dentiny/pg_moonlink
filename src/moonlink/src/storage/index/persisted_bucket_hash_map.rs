@@ -59,7 +59,6 @@ pub(crate) struct IndexBlock {
     pub(crate) bucket_start_idx: u32,
     pub(crate) bucket_end_idx: u32,
     pub(crate) bucket_start_offset: u64,
-    // TODO(hjiang): Need to store fully-qualified filepat instead of filename.
     pub(crate) file_path: String,
     data: Option<Mmap>,
 }

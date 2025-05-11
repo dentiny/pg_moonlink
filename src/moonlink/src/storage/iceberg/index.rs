@@ -119,9 +119,9 @@ pub(crate) struct FileIndexBlob {
 
 impl FileIndexBlob {
     #[allow(dead_code)]
-    pub fn new(file_indices: &[MooncakeFileIndex]) -> Self {
+    pub fn new(file_indices: Vec<&MooncakeFileIndex>) -> Self {
         Self {
-            file_indices: file_indices.iter().map(FileIndex::new).collect(),
+            file_indices: file_indices.into_iter().map(FileIndex::new).collect(),
         }
     }
 
@@ -203,7 +203,7 @@ mod tests {
     fn test_hash_index_v1_serde() {
         // Fill in meaningless random bytes, mainly to verify the correctness of serde.
         let temp_file = NamedTempFile::new().unwrap();
-        let mooncake_file_indices = vec![MooncakeFileIndex {
+        let original_mooncake_file_index = MooncakeFileIndex {
             global_index_id: 0,
             num_rows: 10,
             hash_bits: 10,
@@ -219,10 +219,10 @@ mod tests {
                 /*bucket_start_offset=*/ 10,
                 /*filepath=*/ temp_file.path().to_str().unwrap().to_string(),
             )],
-        }];
+        };
 
         // Serialization.
-        let file_index_blob = FileIndexBlob::new(&mooncake_file_indices);
+        let file_index_blob = FileIndexBlob::new(vec![&original_mooncake_file_index]);
         let blob = file_index_blob.as_blob().unwrap();
 
         // Deserialization.
@@ -234,46 +234,49 @@ mod tests {
         // Check global index are equal before and after serde.
         assert_eq!(
             mooncake_file_index.num_rows,
-            mooncake_file_indices[0].num_rows
+            original_mooncake_file_index.num_rows
         );
-        assert_eq!(mooncake_file_index.files, mooncake_file_indices[0].files);
+        assert_eq!(
+            mooncake_file_index.files,
+            original_mooncake_file_index.files
+        );
         assert_eq!(
             mooncake_file_index.hash_bits,
-            mooncake_file_indices[0].hash_bits
+            original_mooncake_file_index.hash_bits
         );
         assert_eq!(
             mooncake_file_index.hash_upper_bits,
-            mooncake_file_indices[0].hash_upper_bits
+            original_mooncake_file_index.hash_upper_bits
         );
         assert_eq!(
             mooncake_file_index.hash_lower_bits,
-            mooncake_file_indices[0].hash_lower_bits
+            original_mooncake_file_index.hash_lower_bits
         );
         assert_eq!(
             mooncake_file_index.seg_id_bits,
-            mooncake_file_indices[0].seg_id_bits
+            original_mooncake_file_index.seg_id_bits
         );
         assert_eq!(
             mooncake_file_index.row_id_bits,
-            mooncake_file_indices[0].row_id_bits
+            original_mooncake_file_index.row_id_bits
         );
         assert_eq!(
             mooncake_file_index.bucket_bits,
-            mooncake_file_indices[0].bucket_bits
+            original_mooncake_file_index.bucket_bits
         );
 
         assert_eq!(mooncake_file_index.index_blocks.len(), 1);
         assert_eq!(
             mooncake_file_index.index_blocks[0].bucket_start_idx,
-            mooncake_file_indices[0].index_blocks[0].bucket_start_idx
+            original_mooncake_file_index.index_blocks[0].bucket_start_idx
         );
         assert_eq!(
             mooncake_file_index.index_blocks[0].bucket_end_idx,
-            mooncake_file_indices[0].index_blocks[0].bucket_end_idx
+            original_mooncake_file_index.index_blocks[0].bucket_end_idx
         );
         assert_eq!(
             mooncake_file_index.index_blocks[0].bucket_start_offset,
-            mooncake_file_indices[0].index_blocks[0].bucket_start_offset
+            original_mooncake_file_index.index_blocks[0].bucket_start_offset
         );
     }
 }

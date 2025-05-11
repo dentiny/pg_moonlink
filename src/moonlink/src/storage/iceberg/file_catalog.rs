@@ -357,8 +357,6 @@ impl PuffinWrite for FileCatalog {
         puffin_writer: PuffinWriter,
     ) -> IcebergResult<()> {
         let puffin_metadata = get_puffin_metadata_and_close(puffin_writer).await?;
-        println!("new puffin metadata = {:?}", puffin_metadata);
-
         self.puffin_blobs.insert(puffin_filepath, puffin_metadata);
         Ok(())
     }

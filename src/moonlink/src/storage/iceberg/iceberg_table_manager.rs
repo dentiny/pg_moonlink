@@ -18,7 +18,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::vec;
 
-use arrow_schema::Schema as ArrowSchema;
 use iceberg::io::FileIO;
 use iceberg::puffin::CompressionCodec;
 use iceberg::spec::DataFileFormat;
@@ -28,14 +27,11 @@ use iceberg::transaction::Transaction;
 use iceberg::writer::file_writer::location_generator::DefaultLocationGenerator;
 use iceberg::writer::file_writer::location_generator::LocationGenerator;
 use iceberg::Result as IcebergResult;
-use parquet::file;
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 #[cfg(test)]
 use mockall::*;
-
-use super::index::FileIndex;
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, TypedBuilder)]
@@ -374,6 +370,10 @@ impl IcebergTableManager {
     /// Dump file indexes into the iceberg table, only new file indexes will be persisted into the table.
     /// Return file index ids which should be added into iceberg table.
     ///
+    /// TODO(hjiang): Skip empty index files.
+    ///
+    /// TODO(hjiang): Upload index files to remote.
+    ///
     /// TODO(hjiang): Need to configure (1) the number of blobs in a puffin file; and (2) the number of file index in a puffin blob.
     /// For implementation simpicity, put everything in a single file and a single blob.
     async fn sync_file_indices(&mut self, file_indices: &[MooncakeFileIndex]) -> IcebergResult<()> {
@@ -388,12 +388,18 @@ impl IcebergTableManager {
         )
         .await?;
 
-        file_indices.iter().for_each(|mooncake_file_index| {
-            self.persisted_file_index_ids
-                .insert(mooncake_file_index.global_index_id);
-        });
+        let mut new_file_indices: Vec<&MooncakeFileIndex> =
+            Vec::with_capacity(file_indices.len() - self.persisted_file_index_ids.len());
+        for cur_file_index in file_indices.iter() {
+            if self
+                .persisted_file_index_ids
+                .insert(cur_file_index.global_index_id)
+            {
+                new_file_indices.push(cur_file_index);
+            }
+        }
 
-        let file_index_blob = FileIndexBlob::new(file_indices);
+        let file_index_blob = FileIndexBlob::new(new_file_indices);
         let puffin_blob = file_index_blob.as_blob()?;
         puffin_writer
             .add(puffin_blob, iceberg::puffin::CompressionCodec::None)
@@ -511,12 +517,12 @@ mod tests {
 
     use std::collections::HashMap;
     use std::fs::File;
-    use std::path::Path;
+
     use std::sync::Arc;
     use tempfile::tempdir;
 
+    use arrow::datatypes::Schema as ArrowSchema;
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use iceberg::io::FileRead;
     use iceberg::Error as IcebergError;
@@ -614,6 +620,37 @@ mod tests {
         let mut reader = builder.build()?;
         let batch = reader.next().transpose()?.expect("Should have one batch");
         Ok(batch)
+    }
+
+    /// Test util to get file indices filepaths and their corresponding data filepaths.
+    fn get_file_indices_filepath_and_data_filepaths(
+        mooncake_index: &MooncakeIndex,
+    ) -> (
+        Vec<String>, /*file indices filepath*/
+        Vec<String>, /*data filepaths*/
+    ) {
+        let file_indices = &mooncake_index.file_indices;
+
+        let mut data_files: Vec<String> = vec![];
+        let mut index_files: Vec<String> = vec![];
+        for cur_file_index in file_indices.iter() {
+            data_files.extend(
+                cur_file_index
+                    .files
+                    .iter()
+                    .map(|cur_file| cur_file.as_path().to_str().unwrap().to_string())
+                    .collect::<Vec<_>>(),
+            );
+            index_files.extend(
+                cur_file_index
+                    .index_blocks
+                    .iter()
+                    .map(|cur_index_block| cur_index_block.file_path.clone())
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        (data_files, index_files)
     }
 
     /// Test snapshot store and load for different types of catalogs based on the given warehouse.
@@ -737,7 +774,10 @@ mod tests {
         Ok(())
     }
 
+    // TODO(hjiang): Figure out a way to check file index content; for example, search for an item.
     async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergResult<()> {
+        // TODO(hjiang): use a unified schema creation function.
+        //
         // Create a schema for testing.
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
@@ -842,6 +882,12 @@ mod tests {
             "Persisted items for table manager is {:?}",
             snapshot.disk_files
         );
+        assert_eq!(
+            snapshot.indices.file_indices.len(),
+            1,
+            "Snapshot data files and file indices are {:?}",
+            get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
+        );
 
         // Check the loaded data file is of the expected format and content.
         let file_io = iceberg_table_manager
@@ -903,6 +949,13 @@ mod tests {
             "Persisted items for table manager is {:?}",
             snapshot.disk_files
         );
+        // TODO(hjiang): Now we persist empty index file, see https://github.com/Mooncake-Labs/moonlink/issues/145
+        assert_eq!(
+            snapshot.indices.file_indices.len(),
+            2,
+            "Snapshot data files and file indices are {:?}",
+            get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
+        );
 
         // Check the loaded data file is of the expected format and content.
         let file_io = iceberg_table_manager
@@ -952,6 +1005,13 @@ mod tests {
             1,
             "Persisted items for table manager is {:?}",
             snapshot.disk_files
+        );
+        // TODO(hjiang): Now we persist empty index file, see https://github.com/Mooncake-Labs/moonlink/issues/145
+        assert_eq!(
+            snapshot.indices.file_indices.len(),
+            3,
+            "Snapshot data files and file indices are {:?}",
+            get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
         );
 
         // Check the loaded data file is of the expected format and content.
@@ -1020,6 +1080,13 @@ mod tests {
             2,
             "Persisted items for table manager is {:?}",
             snapshot.disk_files
+        );
+        // TODO(hjiang): Now we persist empty index file, see https://github.com/Mooncake-Labs/moonlink/issues/145
+        assert_eq!(
+            snapshot.indices.file_indices.len(),
+            4,
+            "Snapshot data files and file indices are {:?}",
+            get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
         );
 
         // The old data file and deletion vector is unchanged.
