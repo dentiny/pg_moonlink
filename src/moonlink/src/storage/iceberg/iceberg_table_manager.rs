@@ -149,52 +149,8 @@ impl IcebergTableManager {
         Ok(())
     }
 
-    /// Write deletion vector to puffin file.
-    async fn write_deletion_vector(
-        &mut self,
-        data_file: String,
-        deletion_vector: BatchDeletionVector,
-    ) -> IcebergResult<()> {
-        let deleted_rows = deletion_vector.collect_deleted_rows();
-        if deleted_rows.is_empty() {
-            return Ok(());
-        }
-
-        if !deleted_rows.is_empty() {
-            // TODO(hjiang): Currently one deletion vector is stored in one puffin file, need to revisit later.
-            let deleted_row_count = deleted_rows.len();
-            let mut iceberg_deletion_vector = DeletionVector::new();
-            iceberg_deletion_vector.mark_rows_deleted(deleted_rows);
-            let blob_properties = HashMap::from([
-                (DELETION_VECTOR_REFERENCED_DATA_FILE.to_string(), data_file),
-                (
-                    DELETION_VECTOR_CADINALITY.to_string(),
-                    deleted_row_count.to_string(),
-                ),
-            ]);
-            let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
-            // TODO(hjiang): Fix sequence number and snapshot id, which should be -1.
-            let blob = iceberg_deletion_vector.serialize(
-                table_metadata.current_snapshot_id().unwrap_or(-1),
-                table_metadata.next_sequence_number(),
-                blob_properties,
-            );
-            let puffin_filepath = self.get_unique_puffin_filepath();
-            let mut puffin_writer = puffin_utils::create_puffin_writer(
-                self.iceberg_table.as_ref().unwrap().file_io(),
-                puffin_filepath.clone(),
-            )
-            .await?;
-            puffin_writer.add(blob, CompressionCodec::None).await?;
-
-            self.catalog
-                .record_puffin_metadata_and_close(puffin_filepath, puffin_writer)
-                .await?;
-        }
-
-        Ok(())
-    }
-
+    /// ---------- load snapshot ----------
+    ///
     /// Load index file into table manager from the current manifest entry.
     ///
     /// TODO(hjiang): Parallelize blob read and recovery.
@@ -284,8 +240,82 @@ impl IcebergTableManager {
         &self,
         persisted_file_indices: Vec<MooncakeFileIndex>,
     ) -> MooncakeSnapshot {
-        let mooncake_snapshot = MooncakeSnapshot::new(self.config.mooncake_table_metadata.clone());
+        let mut mooncake_snapshot =
+            MooncakeSnapshot::new(self.config.mooncake_table_metadata.clone());
+
+        // Assign snapshot version.
+        let iceberg_table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
+        mooncake_snapshot.snapshot_version =
+            if let Some(ver) = iceberg_table_metadata.current_snapshot_id() {
+                ver as u64
+            } else {
+                0
+            };
+
+        // Fill in disk files.
+        mooncake_snapshot.disk_files = HashMap::with_capacity(self.persisted_data_files.len());
+        for (data_filepath, data_file_entry) in self.persisted_data_files.iter() {
+            mooncake_snapshot.disk_files.insert(
+                data_filepath.clone(),
+                data_file_entry.deletion_vector.clone(),
+            );
+        }
+
+        // Fill in indices.
+        mooncake_snapshot.indices = MooncakeIndex {
+            in_memory_index: HashSet::new(),
+            file_indices: persisted_file_indices,
+        };
+
         mooncake_snapshot
+    }
+
+    /// ---------- store snapshot ----------
+    ///
+    /// Write deletion vector to puffin file.
+    async fn write_deletion_vector(
+        &mut self,
+        data_file: String,
+        deletion_vector: BatchDeletionVector,
+    ) -> IcebergResult<()> {
+        let deleted_rows = deletion_vector.collect_deleted_rows();
+        if deleted_rows.is_empty() {
+            return Ok(());
+        }
+
+        if !deleted_rows.is_empty() {
+            // TODO(hjiang): Currently one deletion vector is stored in one puffin file, need to revisit later.
+            let deleted_row_count = deleted_rows.len();
+            let mut iceberg_deletion_vector = DeletionVector::new();
+            iceberg_deletion_vector.mark_rows_deleted(deleted_rows);
+            let blob_properties = HashMap::from([
+                (DELETION_VECTOR_REFERENCED_DATA_FILE.to_string(), data_file),
+                (
+                    DELETION_VECTOR_CADINALITY.to_string(),
+                    deleted_row_count.to_string(),
+                ),
+            ]);
+            let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
+            // TODO(hjiang): Fix sequence number and snapshot id, which should be -1.
+            let blob = iceberg_deletion_vector.serialize(
+                table_metadata.current_snapshot_id().unwrap_or(-1),
+                table_metadata.next_sequence_number(),
+                blob_properties,
+            );
+            let puffin_filepath = self.get_unique_puffin_filepath();
+            let mut puffin_writer = puffin_utils::create_puffin_writer(
+                self.iceberg_table.as_ref().unwrap().file_io(),
+                puffin_filepath.clone(),
+            )
+            .await?;
+            puffin_writer.add(blob, CompressionCodec::None).await?;
+
+            self.catalog
+                .record_puffin_metadata_and_close(puffin_filepath, puffin_writer)
+                .await?;
+        }
+
+        Ok(())
     }
 
     /// Dump in-memory data files and their deletion vector into iceberg table,
@@ -805,12 +835,12 @@ mod tests {
 
         // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, whose construction is lazy and asynchronous by design.
         let mut iceberg_table_manager = IcebergTableManager::new(iceberg_table_config.clone());
-        iceberg_table_manager.load_snapshot_from_table().await?;
+        let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
         assert_eq!(
-            iceberg_table_manager.persisted_data_files.len(),
+            snapshot.disk_files.len(),
             1,
             "Persisted items for table manager is {:?}",
-            iceberg_table_manager.persisted_data_files
+            snapshot.disk_files
         );
 
         // Check the loaded data file is of the expected format and content.
@@ -819,11 +849,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .file_io();
-        let (loaded_path, data_entry) = iceberg_table_manager
-            .persisted_data_files
-            .iter()
-            .next()
-            .unwrap();
+        let (loaded_path, deletion_vector) = snapshot.disk_files.iter().next().unwrap();
         let loaded_arrow_batch = load_arrow_batch(file_io, loaded_path.to_str().unwrap()).await?;
         let expected_arrow_batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
@@ -841,7 +867,7 @@ mod tests {
             expected_arrow_batch, loaded_arrow_batch
         );
 
-        let deleted_rows = data_entry.deletion_vector.collect_deleted_rows();
+        let deleted_rows = deletion_vector.collect_deleted_rows();
         assert!(
             deleted_rows.is_empty(),
             "There should be no deletion vector in iceberg table."
@@ -870,12 +896,12 @@ mod tests {
 
         // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, whose construction is lazy and asynchronous by design.
         let mut iceberg_table_manager = IcebergTableManager::new(iceberg_table_config.clone());
-        iceberg_table_manager.load_snapshot_from_table().await?;
+        let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
         assert_eq!(
-            iceberg_table_manager.persisted_data_files.len(),
+            snapshot.disk_files.len(),
             1,
             "Persisted items for table manager is {:?}",
-            iceberg_table_manager.persisted_data_files
+            snapshot.disk_files
         );
 
         // Check the loaded data file is of the expected format and content.
@@ -884,11 +910,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .file_io();
-        let (loaded_path, data_entry) = iceberg_table_manager
-            .persisted_data_files
-            .iter()
-            .next()
-            .unwrap();
+        let (loaded_path, deletion_vector) = snapshot.disk_files.iter().next().unwrap();
         let loaded_arrow_batch = load_arrow_batch(file_io, loaded_path.to_str().unwrap()).await?;
         assert_eq!(
             loaded_arrow_batch, expected_arrow_batch,
@@ -896,7 +918,7 @@ mod tests {
             expected_arrow_batch, loaded_arrow_batch
         );
 
-        let deleted_rows = data_entry.deletion_vector.collect_deleted_rows();
+        let deleted_rows = deletion_vector.collect_deleted_rows();
         let expected_deleted_rows = vec![0_u64];
         assert_eq!(
             deleted_rows, expected_deleted_rows,
@@ -924,12 +946,12 @@ mod tests {
 
         // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, whose construction is lazy and asynchronous by design.
         let mut iceberg_table_manager = IcebergTableManager::new(iceberg_table_config.clone());
-        iceberg_table_manager.load_snapshot_from_table().await?;
+        let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
         assert_eq!(
-            iceberg_table_manager.persisted_data_files.len(),
+            snapshot.disk_files.len(),
             1,
             "Persisted items for table manager is {:?}",
-            iceberg_table_manager.persisted_data_files
+            snapshot.disk_files
         );
 
         // Check the loaded data file is of the expected format and content.
@@ -938,11 +960,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .file_io();
-        let (loaded_path, data_entry) = iceberg_table_manager
-            .persisted_data_files
-            .iter()
-            .next()
-            .unwrap();
+        let (loaded_path, deletion_vector) = snapshot.disk_files.iter().next().unwrap();
         let loaded_arrow_batch = load_arrow_batch(file_io, loaded_path.to_str().unwrap()).await?;
         assert_eq!(
             loaded_arrow_batch, expected_arrow_batch,
@@ -950,13 +968,18 @@ mod tests {
             expected_arrow_batch, loaded_arrow_batch
         );
 
-        let deleted_rows = data_entry.deletion_vector.collect_deleted_rows();
+        let deleted_rows = deletion_vector.collect_deleted_rows();
         let expected_deleted_rows = vec![0_u64, 1_u64];
         assert_eq!(
             deleted_rows, expected_deleted_rows,
             "Expected deletion vector {:?}, actual deletion vector {:?}",
             expected_deleted_rows, deleted_rows
         );
+        let (_, data_entry) = iceberg_table_manager
+            .persisted_data_files
+            .iter()
+            .next()
+            .unwrap();
 
         // --------------------------------------
         // Operation series 4: append a new row, and don't delete any rows.
@@ -991,12 +1014,12 @@ mod tests {
 
         // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, whose construction is lazy and asynchronous by design.
         let mut iceberg_table_manager = IcebergTableManager::new(iceberg_table_config.clone());
-        iceberg_table_manager.load_snapshot_from_table().await?;
+        let mut snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
         assert_eq!(
-            iceberg_table_manager.persisted_data_files.len(),
+            snapshot.disk_files.len(),
             2,
             "Persisted items for table manager is {:?}",
-            iceberg_table_manager.persisted_data_files
+            snapshot.disk_files
         );
 
         // The old data file and deletion vector is unchanged.
@@ -1012,13 +1035,10 @@ mod tests {
             data_entry,
             "Add new data file shouldn't change existing persisted items"
         );
+        snapshot.disk_files.remove(loaded_path);
 
         // Check new data file is correctly managed by iceberg table with no deletion vector.
-        let (loaded_path, data_entry) = iceberg_table_manager
-            .persisted_data_files
-            .iter()
-            .next()
-            .unwrap();
+        let (loaded_path, deletion_vector) = snapshot.disk_files.iter().next().unwrap();
         let loaded_arrow_batch = load_arrow_batch(file_io, loaded_path.to_str().unwrap()).await?;
 
         let expected_arrow_batch = RecordBatch::try_new(
@@ -1037,7 +1057,7 @@ mod tests {
             expected_arrow_batch, loaded_arrow_batch
         );
 
-        let deleted_rows = data_entry.deletion_vector.collect_deleted_rows();
+        let deleted_rows = deletion_vector.collect_deleted_rows();
         assert!(
             deleted_rows.is_empty(),
             "The new appended data file should have no deletion vector aside, but actually it contains deletion vector {:?}",

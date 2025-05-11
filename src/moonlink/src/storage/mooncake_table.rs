@@ -77,9 +77,10 @@ pub struct Snapshot {
     /// table metadata
     pub(crate) metadata: Arc<TableMetadata>,
     /// datafile and their deletion vectors
+    /// TODO(hjiang): Use `String` as key.
     pub(crate) disk_files: HashMap<PathBuf, BatchDeletionVector>,
     /// Current snapshot version
-    snapshot_version: u64,
+    pub(crate) snapshot_version: u64,
     /// indices
     pub(crate) indices: MooncakeIndex,
 }
