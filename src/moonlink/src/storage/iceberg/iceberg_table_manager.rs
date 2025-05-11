@@ -945,10 +945,9 @@ mod tests {
             "Persisted items for table manager is {:?}",
             snapshot.disk_files
         );
-        // TODO(hjiang): Now we persist empty index file, see https://github.com/Mooncake-Labs/moonlink/issues/145
         assert_eq!(
             snapshot.indices.file_indices.len(),
-            2,
+            1,
             "Snapshot data files and file indices are {:?}",
             get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
         );
@@ -1002,10 +1001,9 @@ mod tests {
             "Persisted items for table manager is {:?}",
             snapshot.disk_files
         );
-        // TODO(hjiang): Now we persist empty index file, see https://github.com/Mooncake-Labs/moonlink/issues/145
         assert_eq!(
             snapshot.indices.file_indices.len(),
-            3,
+            1,
             "Snapshot data files and file indices are {:?}",
             get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
         );
@@ -1077,10 +1075,9 @@ mod tests {
             "Persisted items for table manager is {:?}",
             snapshot.disk_files
         );
-        // TODO(hjiang): Now we persist empty index file, see https://github.com/Mooncake-Labs/moonlink/issues/145
         assert_eq!(
             snapshot.indices.file_indices.len(),
-            4,
+            2,
             "Snapshot data files and file indices are {:?}",
             get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
         );

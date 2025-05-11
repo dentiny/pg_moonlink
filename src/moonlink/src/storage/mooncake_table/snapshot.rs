@@ -169,9 +169,11 @@ impl SnapshotTableState {
                 .for_each(|d| slice.remap_deletion_if_needed(d));
 
             // swap indices and drop in-memory batches that were flushed
-            self.current_snapshot
-                .indices
-                .insert_file_index(slice.take_index().unwrap());
+            if let Some(on_disk_index) = slice.take_index() {
+                self.current_snapshot
+                    .indices
+                    .insert_file_index(on_disk_index);
+            }
             self.current_snapshot
                 .indices
                 .delete_memory_index(slice.old_index());

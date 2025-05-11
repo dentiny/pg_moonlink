@@ -156,6 +156,9 @@ impl DiskSliceWriter {
     }
 
     async fn remap_index(&mut self) -> Result<()> {
+        if self.old_index().is_empty() {
+            return Ok(());
+        }
         let list = self
             .old_index
             .iter()
