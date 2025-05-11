@@ -522,7 +522,7 @@ mod tests {
     use tempfile::tempdir;
 
     use arrow::datatypes::Schema as ArrowSchema;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field};
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use iceberg::io::FileRead;
     use iceberg::Error as IcebergError;
@@ -776,23 +776,6 @@ mod tests {
 
     // TODO(hjiang): Figure out a way to check file index content; for example, search for an item.
     async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergResult<()> {
-        // TODO(hjiang): use a unified schema creation function.
-        //
-        // Create a schema for testing.
-        let schema = Schema::new(vec![
-            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
-                "PARQUET:field_id".to_string(),
-                "1".to_string(),
-            )])),
-            Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
-                "PARQUET:field_id".to_string(),
-                "2".to_string(),
-            )])),
-            Field::new("age", DataType::Int32, false).with_metadata(HashMap::from([(
-                "PARQUET:field_id".to_string(),
-                "3".to_string(),
-            )])),
-        ]);
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().to_path_buf();
         let iceberg_table_config = IcebergTableManagerConfig {
@@ -801,8 +784,9 @@ mod tests {
             namespace: vec!["namespace".to_string()],
             table_name: "test_table".to_string(),
         };
+        let schema = create_test_arrow_schema();
         let mut table = MooncakeTable::new(
-            schema.clone(),
+            schema.as_ref().clone(),
             "test_table".to_string(),
             /*version=*/ 1,
             path,
@@ -898,7 +882,7 @@ mod tests {
         let (loaded_path, deletion_vector) = snapshot.disk_files.iter().next().unwrap();
         let loaded_arrow_batch = load_arrow_batch(file_io, loaded_path.to_str().unwrap()).await?;
         let expected_arrow_batch = RecordBatch::try_new(
-            Arc::new(schema.clone()),
+            schema.clone(),
             // row2 and row3
             vec![
                 Arc::new(Int32Array::from(vec![2, 3])),
@@ -1109,7 +1093,7 @@ mod tests {
         let loaded_arrow_batch = load_arrow_batch(file_io, loaded_path.to_str().unwrap()).await?;
 
         let expected_arrow_batch = RecordBatch::try_new(
-            Arc::new(schema.clone()),
+            schema.clone(),
             // row4
             vec![
                 Arc::new(Int32Array::from(vec![4])),
