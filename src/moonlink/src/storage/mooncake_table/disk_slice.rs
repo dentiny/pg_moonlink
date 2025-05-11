@@ -211,6 +211,7 @@ mod tests {
     use crate::storage::mooncake_table::mem_slice::MemSlice;
     use crate::storage::storage_utils::RawDeletionRecord;
     use arrow::datatypes::{DataType, Field};
+    use arrow_array::{Int32Array, StringArray};
     use arrow_schema::Schema;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use tempfile::tempdir;
@@ -257,13 +258,14 @@ mod tests {
         old_index.insert(2, RecordLocation::MemoryBatch(0, 1));
 
         let mut disk_slice = DiskSliceWriter::new(
-            schema,
+            schema.clone(),
             temp_dir.path().to_path_buf(),
             entries,
             Some(1),
             Arc::new(old_index),
         );
         disk_slice.write().await?;
+
         // Verify files were created
         assert!(!disk_slice.output_files().is_empty());
         println!("Files: {:?}", disk_slice.output_files());
@@ -276,7 +278,15 @@ mod tests {
 
             let mut reader = builder.build().unwrap();
             let record_batch = reader.next().unwrap().unwrap();
-            println!("{:?}", record_batch);
+            let expected_record_batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2])),
+                    Arc::new(StringArray::from(vec!["Alice", "Bob"])),
+                ],
+            )
+            .unwrap();
+            assert_eq!(record_batch, expected_record_batch);
         }
         // Clean up temporary directory
         temp_dir.close().map_err(Error::Io)?;
