@@ -3,6 +3,7 @@ use crate::storage::iceberg::moonlink_catalog::MoonlinkCatalog;
 #[cfg(feature = "storage-s3")]
 use crate::storage::iceberg::s3_test_utils;
 
+use futures::TryStreamExt;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use url::Url;
@@ -22,8 +23,9 @@ use iceberg::writer::IcebergWriterBuilder;
 use iceberg::{
     Error as IcebergError, NamespaceIdent, Result as IcebergResult, TableCreation, TableIdent,
 };
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 use parquet::file::properties::WriterProperties;
+use tokio::fs::File;
 
 /// Create a catelog based on the provided type.
 ///
@@ -138,9 +140,8 @@ pub(crate) async fn write_record_batch_to_iceberg(
         /*format=*/ DataFileFormat::Parquet,
     );
 
-    let file = std::fs::File::open(parquet_filepath)?;
-    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-    let mut arrow_reader = builder.build()?;
+    let file = File::open(parquet_filepath).await?;
+    let mut stream = ParquetRecordBatchStreamBuilder::new(file).await?.build()?;
 
     let parquet_writer_builder = ParquetWriterBuilder::new(
         /*props=*/ WriterProperties::default(),
@@ -157,7 +158,7 @@ pub(crate) async fn write_record_batch_to_iceberg(
         /*partition_spec_id=*/ 0,
     );
     let mut data_file_writer = data_file_writer_builder.build().await?;
-    while let Some(record_batch) = arrow_reader.next().transpose()? {
+    while let Some(record_batch) = stream.try_next().await? {
         data_file_writer.write(record_batch).await?;
     }
 
