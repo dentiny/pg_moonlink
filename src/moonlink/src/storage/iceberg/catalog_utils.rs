@@ -3,8 +3,9 @@ use crate::storage::iceberg::moonlink_catalog::MoonlinkCatalog;
 #[cfg(feature = "storage-s3")]
 use crate::storage::iceberg::s3_test_utils;
 
+use iceberg::io::FileIOBuilder;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use url::Url;
 use uuid::Uuid;
 
@@ -14,7 +15,7 @@ use iceberg::spec::{DataFile, DataFileFormat};
 use iceberg::table::Table as IcebergTable;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
-    DefaultFileNameGenerator, DefaultLocationGenerator,
+    DefaultFileNameGenerator, DefaultLocationGenerator, LocationGenerator,
 };
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::IcebergWriter;
@@ -138,6 +139,7 @@ pub(crate) async fn write_record_batch_to_iceberg(
         /*format=*/ DataFileFormat::Parquet,
     );
 
+    // TODO(hjiang): Fix synchronous parquet write.
     let file = std::fs::File::open(parquet_filepath)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let mut arrow_reader = builder.build()?;
@@ -169,4 +171,39 @@ pub(crate) async fn write_record_batch_to_iceberg(
     );
 
     Ok(data_files[0].clone())
+}
+
+/// Get URL scheme for the given path.
+fn get_url_scheme(url: &str) -> String {
+    let url = Url::parse(url)
+        .or_else(|_| Url::from_file_path(url))
+        .unwrap_or_else(|_| panic!("Cannot get URL scheme from {:?}", url));
+    url.scheme().to_string()
+}
+
+/// Copy the given local index file to iceberg table, and return filepath within iceberg table.
+pub(crate) async fn upload_index_file(
+    table: &IcebergTable,
+    local_index_filepath: &str,
+) -> IcebergResult<String> {
+    let filename = Path::new(local_index_filepath)
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    let remote_filepath = location_generator.generate_location(&filename);
+    let src = FileIOBuilder::new_fs_io()
+        .build()?
+        .new_input(local_index_filepath)?;
+    let dst = FileIOBuilder::new(get_url_scheme(&remote_filepath))
+        .build()?
+        .new_output(remote_filepath.clone())?;
+
+    // TODO(hjiang): Switch to chunk-based reading.
+    let bytes = src.read().await?;
+    dst.write(bytes).await?;
+
+    Ok(remote_filepath)
 }

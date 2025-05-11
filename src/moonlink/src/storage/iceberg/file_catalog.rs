@@ -136,7 +136,7 @@ impl FileCatalog {
     }
 
     /// Get IO operator from the catalog.
-    async fn get_operator(&self) -> IcebergResult<&Operator> {
+    pub(crate) async fn get_operator(&self) -> IcebergResult<&Operator> {
         let retry_layer = RetryLayer::new()
             .with_max_times(MAX_RETRY_COUNT)
             .with_jitter()

@@ -370,10 +370,6 @@ impl IcebergTableManager {
     /// Dump file indexes into the iceberg table, only new file indexes will be persisted into the table.
     /// Return file index ids which should be added into iceberg table.
     ///
-    /// TODO(hjiang): Skip empty index files.
-    ///
-    /// TODO(hjiang): Upload index files to remote.
-    ///
     /// TODO(hjiang): Need to configure (1) the number of blobs in a puffin file; and (2) the number of file index in a puffin blob.
     /// For implementation simpicity, put everything in a single file and a single blob.
     async fn sync_file_indices(&mut self, file_indices: &[MooncakeFileIndex]) -> IcebergResult<()> {
@@ -388,6 +384,12 @@ impl IcebergTableManager {
         )
         .await?;
 
+        // TODO(hjiang): Maps from local filepath to remote filepath.
+        // After sync, file index still stores local index file location.
+        // After cache design, we should be able to provide a "handle" abstraction, which could be either local or remote.
+        // The hash map here is merely a workaround to pass remote path to iceberg file index structure.
+        let mut local_index_file_to_remote = HashMap::new();
+
         let mut new_file_indices: Vec<&MooncakeFileIndex> =
             Vec::with_capacity(file_indices.len() - self.persisted_file_index_ids.len());
         for cur_file_index in file_indices.iter() {
@@ -395,11 +397,22 @@ impl IcebergTableManager {
                 .persisted_file_index_ids
                 .insert(cur_file_index.global_index_id)
             {
+                // Record new index file id.
                 new_file_indices.push(cur_file_index);
+                // Upload new index file to iceberg table.
+                for cur_index_block in cur_file_index.index_blocks.iter() {
+                    let remote_index_block = catalog_utils::upload_index_file(
+                        self.iceberg_table.as_ref().unwrap(),
+                        &cur_index_block.file_path,
+                    )
+                    .await?;
+                    local_index_file_to_remote
+                        .insert(cur_index_block.file_path.clone(), remote_index_block);
+                }
             }
         }
 
-        let file_index_blob = FileIndexBlob::new(new_file_indices);
+        let file_index_blob = FileIndexBlob::new(new_file_indices, local_index_file_to_remote);
         let puffin_blob = file_index_blob.as_blob()?;
         puffin_writer
             .add(puffin_blob, iceberg::puffin::CompressionCodec::None)
@@ -610,7 +623,7 @@ mod tests {
         Ok(())
     }
 
-    /// Test util function to load all arrow batch from the given parquert file.
+    /// Test util function to load all arrow batch from the given parquet file.
     async fn load_arrow_batch(file_io: &FileIO, filepath: &str) -> IcebergResult<RecordBatch> {
         let input_file = file_io.new_input(filepath)?;
         let input_file_metadata = input_file.metadata().await?;
