@@ -2,10 +2,8 @@ use crate::storage::iceberg::file_catalog::{CatalogConfig, FileCatalog};
 use crate::storage::iceberg::moonlink_catalog::MoonlinkCatalog;
 #[cfg(feature = "storage-s3")]
 use crate::storage::iceberg::s3_test_utils;
-/// Util functions related to iceberg.
-use iceberg::spec::{DataContentType, DataFileFormat, ManifestEntry};
 
-use iceberg::io::FileIOBuilder;
+use futures::TryStreamExt;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use url::Url;
@@ -13,7 +11,9 @@ use uuid::Uuid;
 
 use arrow_schema::Schema as ArrowSchema;
 use iceberg::arrow as IcebergArrow;
+use iceberg::io::FileIOBuilder;
 use iceberg::spec::DataFile;
+use iceberg::spec::{DataContentType, DataFileFormat, ManifestEntry};
 use iceberg::table::Table as IcebergTable;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
@@ -25,8 +25,9 @@ use iceberg::writer::IcebergWriterBuilder;
 use iceberg::{
     Error as IcebergError, NamespaceIdent, Result as IcebergResult, TableCreation, TableIdent,
 };
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 use parquet::file::properties::WriterProperties;
+use tokio::fs::File;
 
 /// Return whether the given manifest entry represents data files.
 pub fn is_data_file_entry(entry: &ManifestEntry) -> bool {
@@ -183,11 +184,6 @@ pub(crate) async fn write_record_batch_to_iceberg(
         /*format=*/ DataFileFormat::Parquet,
     );
 
-    // TODO(hjiang): Fix synchronous parquet write.
-    let file = std::fs::File::open(parquet_filepath)?;
-    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-    let mut arrow_reader = builder.build()?;
-
     let parquet_writer_builder = ParquetWriterBuilder::new(
         /*props=*/ WriterProperties::default(),
         /*schame=*/ table.metadata().current_schema().clone(),
@@ -195,15 +191,18 @@ pub(crate) async fn write_record_batch_to_iceberg(
         /*location_generator=*/ location_generator,
         /*file_name_generator=*/ file_name_generator,
     );
-
-    // TOOD(hjiang): Add support for partition values.
     let data_file_writer_builder = DataFileWriterBuilder::new(
         parquet_writer_builder,
         /*partition_value=*/ None,
         /*partition_spec_id=*/ 0,
     );
     let mut data_file_writer = data_file_writer_builder.build().await?;
-    while let Some(record_batch) = arrow_reader.next().transpose()? {
+
+    let local_file = File::open(parquet_filepath).await?;
+    let mut read_stream = ParquetRecordBatchStreamBuilder::new(local_file)
+        .await?
+        .build()?;
+    while let Some(record_batch) = read_stream.try_next().await? {
         data_file_writer.write(record_batch).await?;
     }
 
