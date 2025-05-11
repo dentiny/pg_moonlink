@@ -8,12 +8,15 @@ use crate::storage::iceberg::moonlink_catalog::MoonlinkCatalog;
 use crate::storage::iceberg::puffin_utils;
 use crate::storage::iceberg::utils;
 use crate::storage::iceberg::validation as IcebergValidation;
-use crate::storage::index::FileIndex as MooncakeFileIndex;
+use crate::storage::index::{FileIndex as MooncakeFileIndex, MooncakeIndex};
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
+use crate::storage::mooncake_table::Snapshot as MooncakeSnapshot;
+use crate::storage::mooncake_table::TableMetadata as MooncakeTableMetadata;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::vec;
 
 use arrow_schema::Schema as ArrowSchema;
 use iceberg::io::FileIO;
@@ -25,11 +28,14 @@ use iceberg::transaction::Transaction;
 use iceberg::writer::file_writer::location_generator::DefaultLocationGenerator;
 use iceberg::writer::file_writer::location_generator::LocationGenerator;
 use iceberg::Result as IcebergResult;
+use parquet::file;
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 #[cfg(test)]
 use mockall::*;
+
+use super::index::FileIndex;
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, TypedBuilder)]
@@ -38,7 +44,7 @@ pub struct IcebergTableManagerConfig {
     #[builder(default = "/tmp/moonlink_iceberg".to_string())]
     pub warehouse_uri: String,
     /// Mooncake table metadata.
-    pub mooncake_table_schema: Arc<ArrowSchema>,
+    pub mooncake_table_metadata: Arc<MooncakeTableMetadata>,
     /// Namespace for the iceberg table.
     #[builder(default = vec!["default".to_string()])]
     pub namespace: Vec<String>,
@@ -70,7 +76,7 @@ pub(crate) trait IcebergOperation {
     ) -> IcebergResult<()>;
 
     /// Load latest snapshot from iceberg table. Used for recovery and initialization.
-    async fn load_snapshot_from_table(&mut self) -> IcebergResult<()>
+    async fn load_snapshot_from_table(&mut self) -> IcebergResult<MooncakeSnapshot>
     where
         Self: Sized;
 }
@@ -103,7 +109,7 @@ pub struct IcebergTableManager {
     persisted_data_files: HashMap<PathBuf, DataFileEntry>,
 
     /// A set of file index id which has been managed by the iceberg table.
-    persisted_file_index_id: HashSet<u32>,
+    persisted_file_index_ids: HashSet<u32>,
 }
 
 impl IcebergTableManager {
@@ -115,7 +121,7 @@ impl IcebergTableManager {
             catalog,
             iceberg_table: None,
             persisted_data_files: HashMap::new(),
-            persisted_file_index_id: HashSet::new(),
+            persisted_file_index_ids: HashSet::new(),
         }
     }
 
@@ -135,7 +141,7 @@ impl IcebergTableManager {
                 &self.config.warehouse_uri,
                 &self.config.namespace,
                 &self.config.table_name.clone(),
-                self.config.mooncake_table_schema.as_ref(),
+                self.config.mooncake_table_metadata.schema.as_ref(),
             )
             .await?;
             self.iceberg_table = Some(table);
@@ -190,14 +196,31 @@ impl IcebergTableManager {
     }
 
     /// Load index file into table manager from the current manifest entry.
-    async fn load_file_index_from_manifest_entry(
+    ///
+    /// TODO(hjiang): Parallelize blob read and recovery.
+    async fn load_file_indices_from_manifest_entry(
         &mut self,
         entry: &ManifestEntry,
-    ) -> IcebergResult<()> {
-        if utils::is_file_index(entry) {
-            return Ok(());
+        file_io: &FileIO,
+    ) -> IcebergResult<Vec<MooncakeFileIndex>> {
+        if !utils::is_file_index(entry) {
+            return Ok(vec![]);
         }
-        Ok(())
+
+        let mut file_index_blob =
+            FileIndexBlob::load_from_index_blob(file_io.clone(), entry.data_file()).await?;
+        let mut file_indices = Vec::with_capacity(file_index_blob.file_indices.len());
+        file_index_blob
+            .file_indices
+            .iter_mut()
+            .for_each(|cur_file_index| {
+                let mooncake_file_index = cur_file_index.as_mooncake_file_index();
+                self.persisted_file_index_ids
+                    .insert(mooncake_file_index.global_index_id);
+                file_indices.push(mooncake_file_index);
+            });
+
+        Ok(file_indices)
     }
 
     /// Load data file into table manager from the current manifest entry.
@@ -205,11 +228,11 @@ impl IcebergTableManager {
         &mut self,
         entry: &ManifestEntry,
     ) -> IcebergResult<()> {
-        let data_file = entry.data_file();
         if !utils::is_data_file_entry(entry) {
             return Ok(());
         }
 
+        let data_file = entry.data_file();
         let file_path = PathBuf::from(data_file.file_path().to_string());
         assert_eq!(
             data_file.file_format(),
@@ -235,11 +258,11 @@ impl IcebergTableManager {
         file_io: &FileIO,
     ) -> IcebergResult<()> {
         // Skip data files and file indices.
-        let data_file = entry.data_file();
         if !utils::is_deletion_vector_entry(entry) {
             return Ok(());
         }
 
+        let data_file = entry.data_file();
         let referenced_path_buf: PathBuf = data_file.referenced_data_file().unwrap().into();
         let data_file_entry = self.persisted_data_files.get_mut(&referenced_path_buf);
         assert!(
@@ -254,6 +277,15 @@ impl IcebergTableManager {
         data_file_entry.unwrap().deletion_vector = batch_deletion_vector;
 
         Ok(())
+    }
+
+    /// Util function to transform iceberg table status to mooncake table snapshot.
+    fn transform_to_mooncake_snapshot(
+        &self,
+        persisted_file_indices: Vec<MooncakeFileIndex>,
+    ) -> MooncakeSnapshot {
+        let mooncake_snapshot = MooncakeSnapshot::new(self.config.mooncake_table_metadata.clone());
+        mooncake_snapshot
     }
 
     /// Dump in-memory data files and their deletion vector into iceberg table,
@@ -327,7 +359,7 @@ impl IcebergTableManager {
         .await?;
 
         file_indices.iter().for_each(|mooncake_file_index| {
-            self.persisted_file_index_id
+            self.persisted_file_index_ids
                 .insert(mooncake_file_index.global_index_id);
         });
 
@@ -382,17 +414,17 @@ impl IcebergOperation for IcebergTableManager {
         Ok(())
     }
 
-    // TODO(hjiang): Write a macro to avoid verbose error mapping.
-    async fn load_snapshot_from_table(&mut self) -> IcebergResult<()> {
-        if self.iceberg_table.is_some() {
-            return Ok(());
-        }
+    async fn load_snapshot_from_table(&mut self) -> IcebergResult<MooncakeSnapshot> {
+        assert!(self.persisted_file_index_ids.is_empty());
+
         self.get_or_create_table().await?;
         let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
 
         // There's nothing stored in iceberg table (aka, first time initialization).
         if table_metadata.current_snapshot().is_none() {
-            return Ok(());
+            return Ok(MooncakeSnapshot::new(
+                self.config.mooncake_table_metadata.clone(),
+            ));
         }
 
         // Load table state into iceberg table manager.
@@ -405,6 +437,7 @@ impl IcebergOperation for IcebergTableManager {
             .await?;
 
         let file_io = self.iceberg_table.as_ref().unwrap().file_io().clone();
+        let mut loaded_file_indices = vec![];
         for manifest_file in manifest_list.entries().iter() {
             // All files (i.e. data files, deletion vector, manifest files) under the same snapshot are assigned with the same sequence number.
             // Reference: https://iceberg.apache.org/spec/?h=content#sequence-numbers
@@ -415,8 +448,10 @@ impl IcebergOperation for IcebergTableManager {
             for entry in manifest_entries.iter() {
                 self.load_data_file_from_manifest_entry(entry.as_ref())
                     .await?;
-                self.load_file_index_from_manifest_entry(entry.as_ref())
+                let file_indices = self
+                    .load_file_indices_from_manifest_entry(entry.as_ref(), &file_io)
                     .await?;
+                loaded_file_indices.extend(file_indices);
             }
             for entry in manifest_entries.into_iter() {
                 self.load_deletion_vector_from_manifest_entry(entry.as_ref(), &file_io)
@@ -424,7 +459,8 @@ impl IcebergOperation for IcebergTableManager {
             }
         }
 
-        Ok(())
+        let mooncake_snapshot = self.transform_to_mooncake_snapshot(loaded_file_indices);
+        Ok(mooncake_snapshot)
     }
 }
 
@@ -432,15 +468,20 @@ impl IcebergOperation for IcebergTableManager {
 mod tests {
     use super::*;
 
+    use crate::row::Identity as RowIdentity;
     use crate::row::MoonlinkRow;
     use crate::row::{Identity, RowValue};
     use crate::storage::iceberg::iceberg_table_manager::IcebergTableManager;
     #[cfg(feature = "storage-s3")]
     use crate::storage::iceberg::s3_test_utils;
+    use crate::storage::mooncake_table::{
+        TableConfig as MooncakeTableConfig, TableMetadata as MooncakeTableMetadata,
+    };
     use crate::storage::MooncakeTable;
 
     use std::collections::HashMap;
     use std::fs::File;
+    use std::path::Path;
     use std::sync::Arc;
     use tempfile::tempdir;
 
@@ -469,13 +510,31 @@ mod tests {
     /// Test util function to create arrow schema.
     fn create_test_arrow_schema() -> Arc<ArrowSchema> {
         Arc::new(ArrowSchema::new(vec![
-            ArrowField::new("id", ArrowDataType::Int32, /*nullable=*/ false).with_metadata(
-                HashMap::from([("PARQUET:field_id".to_string(), "1".to_string())]),
-            ),
-            ArrowField::new("name", ArrowDataType::Utf8, /*nullable=*/ false).with_metadata(
-                HashMap::from([("PARQUET:field_id".to_string(), "2".to_string())]),
-            ),
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                "PARQUET:field_id".to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
+                "PARQUET:field_id".to_string(),
+                "2".to_string(),
+            )])),
+            Field::new("age", DataType::Int32, false).with_metadata(HashMap::from([(
+                "PARQUET:field_id".to_string(),
+                "3".to_string(),
+            )])),
         ]))
+    }
+
+    /// Test util function to create mooncake table metadata.
+    fn create_test_table_metadata(local_table_directory: String) -> Arc<MooncakeTableMetadata> {
+        Arc::new(MooncakeTableMetadata {
+            name: "test_table".to_string(),
+            id: 0,
+            schema: create_test_arrow_schema(),
+            config: MooncakeTableConfig::new(),
+            path: PathBuf::from(local_table_directory),
+            identity: RowIdentity::FullRow,
+        })
     }
 
     /// Test util function to create arrow record batch.
@@ -485,6 +544,7 @@ mod tests {
             vec![
                 Arc::new(Int32Array::from(vec![1, 2, 3])), // id column
                 Arc::new(StringArray::from(vec!["a", "b", "c"])), // name column
+                Arc::new(Int32Array::from(vec![10, 20, 30])), // age column
             ],
         )
         .unwrap()
@@ -495,6 +555,7 @@ mod tests {
             vec![
                 Arc::new(Int32Array::from(vec![4, 5, 6])), // id column
                 Arc::new(StringArray::from(vec!["d", "e", "f"])), // name column
+                Arc::new(Int32Array::from(vec![40, 50, 60])), // age column
             ],
         )
         .unwrap()
@@ -632,11 +693,12 @@ mod tests {
     #[tokio::test]
     async fn test_sync_snapshots() -> IcebergResult<()> {
         // Create arrow schema and table.
-        let arrow_schema = create_test_arrow_schema();
         let tmp_dir = tempdir()?;
+        let mooncake_table_metadata =
+            create_test_table_metadata(tmp_dir.path().to_str().unwrap().to_string());
         let config = IcebergTableManagerConfig {
             warehouse_uri: tmp_dir.path().to_str().unwrap().to_string(),
-            mooncake_table_schema: arrow_schema,
+            mooncake_table_metadata,
             namespace: vec!["namespace".to_string()],
             table_name: "test_table".to_string(),
         };
@@ -665,7 +727,7 @@ mod tests {
         let path = temp_dir.path().to_path_buf();
         let iceberg_table_config = IcebergTableManagerConfig {
             warehouse_uri,
-            mooncake_table_schema: Arc::new(schema.clone()),
+            mooncake_table_metadata: create_test_table_metadata(path.to_str().unwrap().to_string()),
             namespace: vec!["namespace".to_string()],
             table_name: "test_table".to_string(),
         };

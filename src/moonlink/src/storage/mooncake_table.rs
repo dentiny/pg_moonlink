@@ -81,7 +81,7 @@ pub struct Snapshot {
     /// Current snapshot version
     snapshot_version: u64,
     /// indices
-    indices: MooncakeIndex,
+    pub(crate) indices: MooncakeIndex,
 }
 
 impl Snapshot {
