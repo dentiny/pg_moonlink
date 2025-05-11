@@ -17,6 +17,8 @@ use std::sync::Arc;
 
 pub(crate) struct SnapshotTableState {
     /// Current snapshot
+    ///
+    /// TODO(hjiang): Current snapshot should be loaded from iceberg table manager.
     current_snapshot: Snapshot,
 
     /// In memory RecordBatches, maps from batch to in-memory batch.
