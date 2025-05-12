@@ -23,7 +23,6 @@ use delete_vector::BatchDeletionVector;
 pub(crate) use disk_slice::DiskSliceWriter;
 use mem_slice::MemSlice;
 pub(crate) use snapshot::SnapshotTableState;
-use tokio::spawn;
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 
@@ -491,7 +490,7 @@ impl MooncakeTable {
         }
         self.next_snapshot_task.new_rows = Some(self.mem_slice.get_latest_rows());
         let next_snapshot_task = take(&mut self.next_snapshot_task);
-        Some(spawn(Self::create_snapshot_async(
+        Some(tokio::task::spawn(Self::create_snapshot_async(
             self.snapshot.clone(),
             next_snapshot_task,
         )))

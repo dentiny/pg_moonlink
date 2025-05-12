@@ -74,7 +74,10 @@ impl MoonlinkPostgresSource {
         let batch_config = BatchConfig::new(1000, Duration::from_secs(1));
         let mut pipeline =
             BatchDataPipeline::new(source, sink, PipelineAction::CdcOnly, batch_config);
-        self.handle = Some(tokio::spawn(async move { pipeline.start().await }));
+        let pipeline_handle = tokio::task::spawn_blocking(move || {
+            tokio::runtime::Handle::current().block_on(async move { pipeline.start().await })
+        });
+        self.handle = Some(pipeline_handle);
 
         let res = reader_notifier_receiver.recv().await;
         Ok(res.unwrap())

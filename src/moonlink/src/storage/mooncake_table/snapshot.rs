@@ -10,6 +10,7 @@ use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 use crate::storage::mooncake_table::MoonlinkRow;
 use crate::storage::storage_utils::RawDeletionRecord;
 use crate::storage::storage_utils::{ProcessedDeletionRecord, RecordLocation};
+use futures::executor::block_on;
 use parquet::arrow::ArrowWriter;
 use std::collections::BTreeMap;
 use std::mem::take;
@@ -59,12 +60,15 @@ impl SnapshotTableState {
         batches.insert(0, InMemoryBatch::new(metadata.config.batch_size));
 
         let mut iceberg_table_manager = None;
+        let mut snapshot = Snapshot::new(metadata.clone());
         if iceberg_table_config.is_some() {
-            iceberg_table_manager = Some(IcebergTableManager::new(iceberg_table_config.unwrap()));
+            let mut table_manager = IcebergTableManager::new(iceberg_table_config.unwrap());
+            snapshot = block_on(table_manager.load_snapshot_from_table()).unwrap();
+            iceberg_table_manager = Some(table_manager);
         }
 
         Self {
-            current_snapshot: Snapshot::new(metadata),
+            current_snapshot: snapshot,
             batches,
             rows: None,
             last_commit: RecordLocation::MemoryBatch(0, 0),
