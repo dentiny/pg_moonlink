@@ -17,9 +17,7 @@ chrono = { version = "0.4", default-features = false }
 crc32fast = "1"
 futures = { version = "0.3", default-features = false }
 hashbrown = "0.15.3"
-# TODO(hjiang): Restrict dependency to include only fs by default, after upstream the fix for iceberg-rust.
-iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "513376cb04b899edf457918c3852a786a292071c", default-features = false, features = [
-  "storage-s3",
+iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "a84532734fc76469e878bc46a29b1ae854fb7a0a", default-features = false, features = [
   "storage-fs",
 ] }
 multimap = { version = "0.10", default-features = false }
@@ -34,7 +32,7 @@ serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
 thiserror = "2"
-tokio = { version = "1.38", default-features = false, features = [
+tokio = { version = "1.45", default-features = false, features = [
   "rt-multi-thread",
   "macros",
   "sync",
