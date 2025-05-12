@@ -5,6 +5,7 @@ use crate::storage::iceberg::deletion_vector::{
 use crate::storage::iceberg::index::FileIndexBlob;
 use crate::storage::iceberg::moonlink_catalog::MoonlinkCatalog;
 use crate::storage::iceberg::puffin_utils;
+use crate::storage::iceberg::recovery_utils::DataFileEntry;
 use crate::storage::iceberg::utils;
 use crate::storage::iceberg::validation as IcebergValidation;
 use crate::storage::index::{FileIndex as MooncakeFileIndex, MooncakeIndex};
@@ -31,6 +32,8 @@ use uuid::Uuid;
 
 #[cfg(test)]
 use mockall::*;
+
+use super::recovery_utils;
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, TypedBuilder)]
@@ -70,19 +73,10 @@ pub(crate) trait IcebergOperation {
         file_indices: &[MooncakeFileIndex],
     ) -> IcebergResult<()>;
 
-    /// Load latest snapshot from iceberg table. Used for recovery and initialization.
-    async fn load_snapshot_from_table(&mut self) -> IcebergResult<MooncakeSnapshot>
-    where
-        Self: Sized;
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct DataFileEntry {
-    /// Iceberg data file, used to decide what to persist at new commit requests.
-    data_file: DataFile,
-    /// In-memory deletion vector.
-    deletion_vector: BatchDeletionVector,
+    // /// Load latest snapshot from iceberg table. Used for recovery and initialization.
+    // async fn load_snapshot_from_table(&mut self) -> IcebergResult<MooncakeSnapshot>
+    // where
+    //     Self: Sized;
 }
 
 /// TODO(hjiang):
@@ -109,15 +103,33 @@ pub struct IcebergTableManager {
 
 impl IcebergTableManager {
     #[allow(dead_code)]
-    pub fn new(config: IcebergTableManagerConfig) -> IcebergTableManager {
+    pub async fn new(config: IcebergTableManagerConfig) -> (IcebergTableManager, MooncakeSnapshot) {
         let catalog = utils::create_catalog(&config.warehouse_uri).unwrap();
-        Self {
+        let mut iceberg_table = utils::get_or_create_iceberg_table(
+            &*catalog,
+            &config.warehouse_uri,
+            &config.namespace,
+            &config.table_name.clone(),
+            config.mooncake_table_metadata.schema.as_ref(),
+        )
+        .await
+        .unwrap();
+        let recovered_items = recovery_utils::load_snapshot_from_table(
+            &mut iceberg_table,
+            config.mooncake_table_metadata.clone(),
+        )
+        .await
+        .unwrap();
+
+        let manager = Self {
             config,
             catalog,
             iceberg_table: None,
-            persisted_data_files: HashMap::new(),
-            persisted_file_index_ids: HashSet::new(),
-        }
+            persisted_data_files: recovered_items.persisted_data_files,
+            persisted_file_index_ids: recovered_items.persisted_file_index_ids,
+        };
+
+        (manager, recovered_items.snapshot)
     }
 
     /// Get a unique puffin filepath under table warehouse uri.
@@ -126,143 +138,6 @@ impl IcebergTableManager {
             DefaultLocationGenerator::new(self.iceberg_table.as_ref().unwrap().metadata().clone())
                 .unwrap();
         location_generator.generate_location(&format!("{}-puffin.bin", Uuid::new_v4()))
-    }
-
-    /// Get or create an iceberg table, and load full table status into table manager.
-    async fn get_or_create_table(&mut self) -> IcebergResult<()> {
-        if self.iceberg_table.is_none() {
-            let table = utils::get_or_create_iceberg_table(
-                &*self.catalog,
-                &self.config.warehouse_uri,
-                &self.config.namespace,
-                &self.config.table_name.clone(),
-                self.config.mooncake_table_metadata.schema.as_ref(),
-            )
-            .await?;
-            self.iceberg_table = Some(table);
-        }
-        Ok(())
-    }
-
-    /// ---------- load snapshot ----------
-    ///
-    /// Load index file into table manager from the current manifest entry.
-    ///
-    /// TODO(hjiang): Parallelize blob read and recovery.
-    async fn load_file_indices_from_manifest_entry(
-        &mut self,
-        entry: &ManifestEntry,
-        file_io: &FileIO,
-    ) -> IcebergResult<Vec<MooncakeFileIndex>> {
-        if !utils::is_file_index(entry) {
-            return Ok(vec![]);
-        }
-
-        let mut file_index_blob =
-            FileIndexBlob::load_from_index_blob(file_io.clone(), entry.data_file()).await?;
-        let mut file_indices = Vec::with_capacity(file_index_blob.file_indices.len());
-        file_index_blob
-            .file_indices
-            .iter_mut()
-            .for_each(|cur_file_index| {
-                let mooncake_file_index = cur_file_index.as_mooncake_file_index();
-                self.persisted_file_index_ids
-                    .insert(mooncake_file_index.global_index_id);
-                file_indices.push(mooncake_file_index);
-            });
-
-        Ok(file_indices)
-    }
-
-    /// Load data file into table manager from the current manifest entry.
-    async fn load_data_file_from_manifest_entry(
-        &mut self,
-        entry: &ManifestEntry,
-    ) -> IcebergResult<()> {
-        if !utils::is_data_file_entry(entry) {
-            return Ok(());
-        }
-
-        let data_file = entry.data_file();
-        let file_path = PathBuf::from(data_file.file_path().to_string());
-        assert_eq!(
-            data_file.file_format(),
-            DataFileFormat::Parquet,
-            "Data file is of file format parquet for entry {:?}.",
-            entry,
-        );
-        let new_data_file_entry = DataFileEntry {
-            data_file: data_file.clone(),
-            deletion_vector: BatchDeletionVector::new(/*max_rows=*/ 0),
-        };
-        let old_entry = self
-            .persisted_data_files
-            .insert(file_path, new_data_file_entry);
-        assert!(old_entry.is_none());
-        Ok(())
-    }
-
-    /// Load deletion vector into table manager from the current manifest entry.
-    async fn load_deletion_vector_from_manifest_entry(
-        &mut self,
-        entry: &ManifestEntry,
-        file_io: &FileIO,
-    ) -> IcebergResult<()> {
-        // Skip data files and file indices.
-        if !utils::is_deletion_vector_entry(entry) {
-            return Ok(());
-        }
-
-        let data_file = entry.data_file();
-        let referenced_path_buf: PathBuf = data_file.referenced_data_file().unwrap().into();
-        let data_file_entry = self.persisted_data_files.get_mut(&referenced_path_buf);
-        assert!(
-            data_file_entry.is_some(),
-            "At recovery, the data file path for {:?} doesn't exist",
-            referenced_path_buf
-        );
-
-        IcebergValidation::validate_puffin_manifest_entry(entry)?;
-        let deletion_vector = DeletionVector::load_from_dv_blob(file_io.clone(), data_file).await?;
-        let batch_deletion_vector = deletion_vector.take_as_batch_delete_vector();
-        data_file_entry.unwrap().deletion_vector = batch_deletion_vector;
-
-        Ok(())
-    }
-
-    /// Util function to transform iceberg table status to mooncake table snapshot.
-    fn transform_to_mooncake_snapshot(
-        &self,
-        persisted_file_indices: Vec<MooncakeFileIndex>,
-    ) -> MooncakeSnapshot {
-        let mut mooncake_snapshot =
-            MooncakeSnapshot::new(self.config.mooncake_table_metadata.clone());
-
-        // Assign snapshot version.
-        let iceberg_table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
-        mooncake_snapshot.snapshot_version =
-            if let Some(ver) = iceberg_table_metadata.current_snapshot_id() {
-                ver as u64
-            } else {
-                0
-            };
-
-        // Fill in disk files.
-        mooncake_snapshot.disk_files = HashMap::with_capacity(self.persisted_data_files.len());
-        for (data_filepath, data_file_entry) in self.persisted_data_files.iter() {
-            mooncake_snapshot.disk_files.insert(
-                data_filepath.clone(),
-                data_file_entry.deletion_vector.clone(),
-            );
-        }
-
-        // Fill in indices.
-        mooncake_snapshot.indices = MooncakeIndex {
-            in_memory_index: HashSet::new(),
-            file_indices: persisted_file_indices,
-        };
-
-        mooncake_snapshot
     }
 
     /// ---------- store snapshot ----------
@@ -431,9 +306,6 @@ impl IcebergOperation for IcebergTableManager {
         disk_files: HashMap<PathBuf, BatchDeletionVector>,
         file_indices: &[MooncakeFileIndex],
     ) -> IcebergResult<()> {
-        // Initialize iceberg table on access.
-        self.get_or_create_table().await?;
-
         // Persist data files and deletion vector changes.
         let (new_data_files, new_persisted_data_files) =
             self.sync_data_files_and_deletion_vector(disk_files).await?;
@@ -461,56 +333,10 @@ impl IcebergOperation for IcebergTableManager {
 
         Ok(())
     }
-
-    async fn load_snapshot_from_table(&mut self) -> IcebergResult<MooncakeSnapshot> {
-        assert!(self.persisted_file_index_ids.is_empty());
-
-        self.get_or_create_table().await?;
-        let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
-
-        // There's nothing stored in iceberg table (aka, first time initialization).
-        if table_metadata.current_snapshot().is_none() {
-            return Ok(MooncakeSnapshot::new(
-                self.config.mooncake_table_metadata.clone(),
-            ));
-        }
-
-        // Load table state into iceberg table manager.
-        let snapshot_meta = table_metadata.current_snapshot().unwrap();
-        let manifest_list = snapshot_meta
-            .load_manifest_list(
-                self.iceberg_table.as_ref().unwrap().file_io(),
-                table_metadata,
-            )
-            .await?;
-
-        let file_io = self.iceberg_table.as_ref().unwrap().file_io().clone();
-        let mut loaded_file_indices = vec![];
-        for manifest_file in manifest_list.entries().iter() {
-            // All files (i.e. data files, deletion vector, manifest files) under the same snapshot are assigned with the same sequence number.
-            // Reference: https://iceberg.apache.org/spec/?h=content#sequence-numbers
-            let manifest = manifest_file.load_manifest(&file_io).await?;
-            let (manifest_entries, _) = manifest.into_parts();
-
-            // On load, we do two pass on all entries, to check whether all deletion vector has a corresponding data file.
-            for entry in manifest_entries.iter() {
-                self.load_data_file_from_manifest_entry(entry.as_ref())
-                    .await?;
-                let file_indices = self
-                    .load_file_indices_from_manifest_entry(entry.as_ref(), &file_io)
-                    .await?;
-                loaded_file_indices.extend(file_indices);
-            }
-            for entry in manifest_entries.into_iter() {
-                self.load_deletion_vector_from_manifest_entry(entry.as_ref(), &file_io)
-                    .await?;
-            }
-        }
-
-        let mooncake_snapshot = self.transform_to_mooncake_snapshot(loaded_file_indices);
-        Ok(mooncake_snapshot)
-    }
 }
+
+unsafe impl Send for IcebergTableManager {}
+unsafe impl Sync for IcebergTableManager {}
 
 #[cfg(test)]
 mod tests {

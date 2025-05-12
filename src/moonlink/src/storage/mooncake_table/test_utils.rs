@@ -55,14 +55,14 @@ pub fn test_row(id: i32, name: &str, age: i32) -> MoonlinkRow {
 }
 
 pub fn test_table(context: &TestContext, table_name: &str, identity: Identity) -> MooncakeTable {
-    MooncakeTable::new(
+    futures::executor::block_on(MooncakeTable::new(
         test_schema(),
         table_name.to_string(),
         1,
         context.path(),
         identity,
         /*iceberg_table_config=*/ None,
-    )
+    ))
 }
 
 pub fn read_batch(reader: ParquetRecordBatchReader) -> Option<RecordBatch> {

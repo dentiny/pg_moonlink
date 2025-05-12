@@ -43,14 +43,14 @@ impl TestEnvironment {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().to_path_buf();
 
-        let mooncake_table = MooncakeTable::new(
+        let mooncake_table = futures::executor::block_on(MooncakeTable::new(
             schema,
             "test_table".to_string(),
             1,
             path,
             Identity::Keys(vec![0]),
             /*iceberg_table_config=*/ None,
-        );
+        ));
 
         let (replication_tx, replication_rx) = watch::channel(0u64);
         let (table_commit_tx, table_commit_rx) = watch::channel(0u64);

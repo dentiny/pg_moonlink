@@ -33,14 +33,14 @@ fn bench_write_mooncake_table(c: &mut Criterion) {
         Field::new("age", DataType::Int32, false),
     ]);
 
-    let mut table = MooncakeTable::new(
+    let mut table = futures::executor::block_on(MooncakeTable::new(
         schema,
         "test_table".to_string(),
         1,
         temp_dir.path().to_path_buf(),
         Identity::SinglePrimitiveKey(0),
         None,
-    );
+    ));
 
     let mut total_appended = 0;
 
