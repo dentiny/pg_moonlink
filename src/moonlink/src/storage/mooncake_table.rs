@@ -5,7 +5,9 @@ mod mem_slice;
 mod shared_array;
 mod snapshot;
 
-use super::iceberg::iceberg_table_manager::IcebergTableManagerConfig;
+use super::iceberg::iceberg_table_manager::{
+    IcebergOperation, IcebergTableManager, IcebergTableManagerConfig,
+};
 use super::index::{FileIndex, MemIndex, MooncakeIndex};
 use super::storage_utils::{RawDeletionRecord, RecordLocation};
 use crate::error::{Error, Result};
@@ -24,6 +26,7 @@ pub(crate) use disk_slice::DiskSliceWriter;
 use mem_slice::MemSlice;
 pub(crate) use snapshot::SnapshotTableState;
 use tokio::spawn;
+use tokio::sync::Mutex;
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 
@@ -193,7 +196,7 @@ pub struct MooncakeTable {
 impl MooncakeTable {
     /// foreground functions
     ///
-    pub fn new(
+    pub async fn new(
         schema: Schema,
         name: String,
         version: u64,
@@ -212,13 +215,13 @@ impl MooncakeTable {
             identity,
         });
         let (table_snapshot_watch_sender, table_snapshot_watch_receiver) = watch::channel(0);
+
         Self {
             mem_slice: MemSlice::new(metadata.schema.clone(), metadata.config.batch_size),
             metadata: metadata.clone(),
-            snapshot: Arc::new(RwLock::new(SnapshotTableState::new(
-                metadata,
-                iceberg_table_config,
-            ))),
+            snapshot: Arc::new(RwLock::new(
+                SnapshotTableState::new(metadata, iceberg_table_config).await,
+            )),
             next_snapshot_task: SnapshotTask::new(),
             transaction_stream_states: HashMap::new(),
             table_snapshot_watch_sender,

@@ -3,7 +3,7 @@ use super::delete_vector::BatchDeletionVector;
 use super::{Snapshot, SnapshotTask, TableMetadata};
 use crate::error::Result;
 use crate::storage::iceberg::iceberg_table_manager::{
-    IcebergOperation, IcebergTableManager, IcebergTableManagerConfig,
+    self, IcebergOperation, IcebergTableManager, IcebergTableManagerConfig,
 };
 use crate::storage::index::Index;
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
@@ -14,6 +14,7 @@ use parquet::arrow::ArrowWriter;
 use std::collections::BTreeMap;
 use std::mem::take;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub(crate) struct SnapshotTableState {
     /// Current snapshot
@@ -51,20 +52,24 @@ pub struct ReadOutput {
 }
 
 impl SnapshotTableState {
-    pub(super) fn new(
+    pub(super) async fn new(
         metadata: Arc<TableMetadata>,
         iceberg_table_config: Option<IcebergTableManagerConfig>,
     ) -> Self {
         let mut batches = BTreeMap::new();
         batches.insert(0, InMemoryBatch::new(metadata.config.batch_size));
 
-        let mut iceberg_table_manager = None;
-        if iceberg_table_config.is_some() {
-            iceberg_table_manager = Some(IcebergTableManager::new(iceberg_table_config.unwrap()));
+        let mut snapshot = Snapshot::new(metadata);
+        let mut iceberg_table_manager: Option<IcebergTableManager> = None;
+
+        if let Some(config) = iceberg_table_config {
+            let (tmp_mgr, tmp_snapshot) = IcebergTableManager::new(config).await;
+            snapshot = tmp_snapshot;
+            iceberg_table_manager = Some(tmp_mgr);
         }
 
         Self {
-            current_snapshot: Snapshot::new(metadata),
+            current_snapshot: snapshot,
             batches,
             rows: None,
             last_commit: RecordLocation::MemoryBatch(0, 0),
@@ -91,10 +96,8 @@ impl SnapshotTableState {
 
         // Sync the latest change to iceberg.
         // TODO(hjiang): Error handling for snapshot sync-up.
-        if self.iceberg_table_manager.is_some() {
-            self.iceberg_table_manager
-                .as_mut()
-                .unwrap()
+        if let Some(manager) = &mut self.iceberg_table_manager {
+            manager
                 .sync_snapshot(
                     self.current_snapshot.disk_files.clone(),
                     self.current_snapshot.get_file_indices(),

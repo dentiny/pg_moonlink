@@ -82,7 +82,8 @@ impl BatchSink for Sink {
                 table_path,
                 identity,
                 /*iceberg_table_config=*/ None,
-            );
+            )
+            .await;
             let (table_commit_tx, table_commit_rx) = watch::channel(0u64);
             self.last_committed_lsn_per_table
                 .insert(table_id, table_commit_tx);
