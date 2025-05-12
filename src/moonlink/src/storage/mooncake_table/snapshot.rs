@@ -60,7 +60,7 @@ impl SnapshotTableState {
         batches.insert(0, InMemoryBatch::new(metadata.config.batch_size));
 
         let mut iceberg_table_manager = None;
-        let mut snapshot = Snapshot::new(metadata.clone());
+        let mut snapshot = Snapshot::new(metadata);
         if iceberg_table_config.is_some() {
             let mut table_manager = IcebergTableManager::new(iceberg_table_config.unwrap());
             snapshot = block_on(table_manager.load_snapshot_from_table()).unwrap();
