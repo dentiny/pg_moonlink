@@ -12,7 +12,6 @@ use async_trait::async_trait;
 use moonlink::ReadStateManager;
 use moonlink::{MooncakeTable, TableEvent, TableHandler};
 use std::collections::{HashMap, HashSet};
-use std::fs::create_dir_all;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
@@ -74,7 +73,7 @@ impl BatchSink for Sink {
         for (table_id, table_schema) in table_schemas {
             let table_path =
                 PathBuf::from(&self.base_path).join(table_schema.table_name.to_string());
-            create_dir_all(&table_path).unwrap();
+            tokio::fs::create_dir_all(&table_path).await.unwrap();
             let (arrow_schema, identity) = postgres_schema_to_moonlink_schema(&table_schema);
             let table = MooncakeTable::new(
                 arrow_schema,
