@@ -41,7 +41,7 @@ pub(crate) struct SnapshotTableState {
     /// Iceberg table manager, used to sync snapshot to the corresponding iceberg table.
     ///
     /// TODO(hjiang): Figure out a way to store dynamic trait for mock-based unit test.
-    iceberg_table_manager: Option<IcebergTableManager>,
+    iceberg_table_manager: IcebergTableManager,
 }
 
 pub struct ReadOutput {
@@ -53,18 +53,17 @@ pub struct ReadOutput {
 impl SnapshotTableState {
     pub(super) async fn new(
         metadata: Arc<TableMetadata>,
-        iceberg_table_config: Option<IcebergTableManagerConfig>,
+        iceberg_table_config: IcebergTableManagerConfig,
     ) -> Self {
         let mut batches = BTreeMap::new();
         batches.insert(0, InMemoryBatch::new(metadata.config.batch_size));
 
-        let mut iceberg_table_manager = None;
-        let mut snapshot = Snapshot::new(metadata);
-        if iceberg_table_config.is_some() {
-            let mut table_manager = IcebergTableManager::new(iceberg_table_config.unwrap());
-            snapshot = table_manager.load_snapshot_from_table().await.unwrap();
-            iceberg_table_manager = Some(table_manager);
-        }
+        let mut iceberg_table_manager =
+            IcebergTableManager::new(metadata.clone(), iceberg_table_config);
+        let snapshot = iceberg_table_manager
+            .load_snapshot_from_table()
+            .await
+            .unwrap();
 
         Self {
             current_snapshot: snapshot,
@@ -94,17 +93,13 @@ impl SnapshotTableState {
 
         // Sync the latest change to iceberg.
         // TODO(hjiang): Error handling for snapshot sync-up.
-        if self.iceberg_table_manager.is_some() {
-            self.iceberg_table_manager
-                .as_mut()
-                .unwrap()
-                .sync_snapshot(
-                    self.current_snapshot.disk_files.clone(),
-                    self.current_snapshot.get_file_indices(),
-                )
-                .await
-                .unwrap();
-        }
+        self.iceberg_table_manager
+            .sync_snapshot(
+                self.current_snapshot.disk_files.clone(),
+                self.current_snapshot.get_file_indices(),
+            )
+            .await
+            .unwrap();
 
         self.current_snapshot.snapshot_version
     }

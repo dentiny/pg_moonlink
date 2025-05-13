@@ -2,7 +2,9 @@ use arrow::datatypes::{DataType, Field, Schema};
 use criterion::{criterion_group, criterion_main, Criterion};
 use futures::executor::block_on;
 use moonlink::row::{IdentityProp, MoonlinkRow, RowValue};
+use moonlink::IcebergTableManagerConfig;
 use moonlink::MooncakeTable;
+use std::collections::HashMap;
 use std::time::Duration;
 use tempfile::tempdir;
 
@@ -29,18 +31,34 @@ fn bench_write_mooncake_table(c: &mut Criterion) {
 
     let temp_dir = tempdir().unwrap();
     let schema = Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("name", DataType::Utf8, true),
-        Field::new("age", DataType::Int32, false),
+        Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "1".to_string(),
+        )])),
+        Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "2".to_string(),
+        )])),
+        Field::new("age", DataType::Int32, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "3".to_string(),
+        )])),
     ]);
 
+    let base_path = temp_dir.path().to_path_buf();
+    let table_name = "test_table";
+    let iceberg_table_config = IcebergTableManagerConfig {
+        warehouse_uri: base_path.to_str().unwrap().to_string(),
+        namespace: vec!["default".to_string()],
+        table_name: table_name.to_string(),
+    };
     let mut table = block_on(MooncakeTable::new(
         schema,
-        "test_table".to_string(),
+        table_name.to_string(),
         1,
-        temp_dir.path().to_path_buf(),
+        base_path,
         IdentityProp::SinglePrimitiveKey(0),
-        None,
+        iceberg_table_config,
     ));
 
     let mut total_appended = 0;

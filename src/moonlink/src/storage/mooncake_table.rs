@@ -198,7 +198,7 @@ impl MooncakeTable {
         version: u64,
         base_path: PathBuf,
         identity: IdentityProp,
-        iceberg_table_config: Option<IcebergTableManagerConfig>,
+        iceberg_table_config: IcebergTableManagerConfig,
     ) -> Self {
         let table_config = TableConfig::new();
         let schema = Arc::new(schema);

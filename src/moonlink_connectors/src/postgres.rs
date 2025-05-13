@@ -70,7 +70,8 @@ impl MoonlinkPostgresSource {
         .await?;
         let (reader_notifier, mut reader_notifier_receiver) = mpsc::channel(1);
 
-        let sink = Sink::new(reader_notifier, PathBuf::from("./mooncake_test/"));
+        let base_path = std::fs::canonicalize(&PathBuf::from("./mooncake_test/")).unwrap();
+        let sink = Sink::new(reader_notifier, base_path);
         let batch_config = BatchConfig::new(1000, Duration::from_secs(1));
         let mut pipeline =
             BatchDataPipeline::new(source, sink, PipelineAction::CdcOnly, batch_config);

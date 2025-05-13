@@ -9,6 +9,7 @@ use crate::pg_replicate::{
 use crate::postgres::util::postgres_schema_to_moonlink_schema;
 use crate::postgres::util::PostgresTableRow;
 use async_trait::async_trait;
+use moonlink::IcebergTableManagerConfig;
 use moonlink::ReadStateManager;
 use moonlink::{MooncakeTable, TableEvent, TableHandler};
 use std::collections::{HashMap, HashSet};
@@ -75,13 +76,18 @@ impl BatchSink for Sink {
                 PathBuf::from(&self.base_path).join(table_schema.table_name.to_string());
             tokio::fs::create_dir_all(&table_path).await.unwrap();
             let (arrow_schema, identity) = postgres_schema_to_moonlink_schema(&table_schema);
+            let iceberg_table_config = IcebergTableManagerConfig {
+                warehouse_uri: table_path.to_str().unwrap().to_string(),
+                namespace: vec!["default".to_string()],
+                table_name: table_schema.table_name.to_string(),
+            };
             let table = MooncakeTable::new(
                 arrow_schema,
                 table_schema.table_name.to_string(),
                 table_id as u64,
                 table_path,
                 identity,
-                /*iceberg_table_config=*/ None,
+                iceberg_table_config,
             )
             .await;
             let (table_commit_tx, table_commit_rx) = watch::channel(0u64);

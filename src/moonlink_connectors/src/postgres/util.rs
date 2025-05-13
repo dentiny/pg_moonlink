@@ -12,6 +12,9 @@ use tokio_postgres::types::Type;
 
 /// Convert a PostgreSQL TableSchema to an Arrow Schema
 pub fn postgres_schema_to_moonlink_schema(table_schema: &TableSchema) -> (Schema, IdentityProp) {
+    // Record field id as metadata for each field, necessary for arrow schema to iceberg schema conversion.
+    let mut field_id = 0;
+
     let fields: Vec<Field> = table_schema
         .column_schemas
         .iter()
@@ -56,11 +59,13 @@ pub fn postgres_schema_to_moonlink_schema(table_schema: &TableSchema) -> (Schema
             let mut field = Field::new(&col.name, data_type, col.nullable);
 
             // Apply extension type if specified
+            let mut metadata = HashMap::new();
             if let Some(ext_name) = extension_name {
-                let mut metadata = HashMap::new();
                 metadata.insert("ARROW:extension:name".to_string(), ext_name);
-                field = field.with_metadata(metadata);
             }
+            field_id += 1;
+            metadata.insert("PARQUET:field_id".to_string(), field_id.to_string());
+            field = field.with_metadata(metadata);
 
             field
         })
