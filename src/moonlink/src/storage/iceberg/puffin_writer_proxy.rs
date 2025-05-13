@@ -10,7 +10,7 @@
 // puffin blob spec: https://iceberg.apache.org/puffin-spec/?h=deletion#deletion-vector-v1-blob-type
 
 use crate::storage::iceberg::deletion_vector::{
-    DELETION_VECTOR_BLOB_TYPE, DELETION_VECTOR_CADINALITY, DELETION_VECTOR_REFERENCED_DATA_FILE,
+    DELETION_VECTOR_CADINALITY, DELETION_VECTOR_REFERENCED_DATA_FILE,
 };
 use crate::storage::iceberg::index::{MOONCAKE_HASH_INDEX_V1, MOONCAKE_HASH_INDEX_V1_CARDINALITY};
 
@@ -18,13 +18,10 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use iceberg::io::FileIO;
-use iceberg::puffin::CompressionCodec;
-use iceberg::puffin::PuffinWriter;
-use iceberg::spec::FormatVersion;
-use iceberg::spec::TableMetadata;
+use iceberg::puffin::{CompressionCodec, PuffinWriter, DELETION_VECTOR_V1};
 use iceberg::spec::{
-    DataContentType, DataFile, DataFileFormat, Datum, ManifestContentType, ManifestListWriter,
-    ManifestWriterBuilder, Struct,
+    DataContentType, DataFile, DataFileFormat, Datum, FormatVersion, ManifestContentType,
+    ManifestListWriter, ManifestWriterBuilder, Struct, TableMetadata,
 };
 use iceberg::Result as IcebergResult;
 
@@ -249,7 +246,7 @@ fn get_data_file_for_deletion_vector(
     puffin_filepath: &str,
     blob_metadata: &PuffinBlobMetadataProxy,
 ) -> (String /*referenced_data_filepath*/, DataFileProxy) {
-    assert_eq!(blob_metadata.r#type, DELETION_VECTOR_BLOB_TYPE);
+    assert_eq!(blob_metadata.r#type, DELETION_VECTOR_V1);
     let referenced_data_filepath = blob_metadata
         .properties
         .get(DELETION_VECTOR_REFERENCED_DATA_FILE)

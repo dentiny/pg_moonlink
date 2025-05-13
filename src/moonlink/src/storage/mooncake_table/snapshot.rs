@@ -3,7 +3,7 @@ use super::delete_vector::BatchDeletionVector;
 use super::{Snapshot, SnapshotTask, TableMetadata};
 use crate::error::Result;
 use crate::storage::iceberg::iceberg_table_manager::{
-    IcebergOperation, IcebergTableManager, IcebergTableConfig,
+    IcebergOperation, IcebergTableConfig, IcebergTableManager,
 };
 use crate::storage::index::Index;
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
