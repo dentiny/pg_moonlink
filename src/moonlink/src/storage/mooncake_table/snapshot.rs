@@ -45,8 +45,12 @@ pub(crate) struct SnapshotTableState {
 }
 
 pub struct ReadOutput {
+    /// Contains two parts:
+    /// 1. Committed and persisted data files.
+    /// 2. Associated files, which include committed but un-persisted records.
     pub file_paths: Vec<String>,
     pub deletions: Vec<(u32, u32)>,
+    /// Contains committed but non-persisted record batches.
     pub associated_files: Vec<String>,
 }
 
@@ -92,7 +96,7 @@ impl SnapshotTableState {
             self.last_commit = cp;
         }
 
-        // Sync the latest change to iceberg.
+        // Till this point, committed changes have been reflected to current snapshot; sync the latest change to iceberg.
         // TODO(hjiang): Error handling for snapshot sync-up.
         if self.iceberg_table_manager.is_some() {
             self.iceberg_table_manager
@@ -281,7 +285,6 @@ impl SnapshotTableState {
             RecordLocation::MemoryBatch(batch_id, row_id) => {
                 if self.batches.contains_key(batch_id) {
                     // Possible we deleted an in memory row that was flushed
-
                     let res = self
                         .batches
                         .get_mut(batch_id)
@@ -315,9 +318,8 @@ impl SnapshotTableState {
 
         for mut entry in take(&mut self.uncommitted_deletion_log) {
             let deletion = entry.take().unwrap();
-
             if deletion.lsn <= task.new_lsn {
-                Self::commit_deletion(self, deletion);
+                self.commit_deletion(deletion);
             } else {
                 still_uncommitted.push(Some(deletion));
             }
@@ -330,9 +332,9 @@ impl SnapshotTableState {
     /// them or defer until their LSN becomes visible.
     fn apply_new_deletions(&mut self, task: &mut SnapshotTask) {
         for raw in take(&mut task.new_deletions) {
-            let processed = Self::process_delete_record(self, raw);
+            let processed = self.process_delete_record(raw);
             if processed.lsn <= task.new_lsn {
-                Self::commit_deletion(self, processed);
+                self.commit_deletion(processed);
             } else {
                 self.uncommitted_deletion_log.push(Some(processed));
             }
@@ -361,7 +363,8 @@ impl SnapshotTableState {
     }
 
     pub(crate) fn request_read(&self) -> Result<ReadOutput> {
-        let mut file_paths: Vec<String> = Vec::new();
+        let mut file_paths: Vec<String> =
+            Vec::with_capacity(self.current_snapshot.disk_files.len());
         let mut associated_files = Vec::new();
         let deletions = self.get_deletion_records();
         file_paths.extend(
@@ -370,6 +373,8 @@ impl SnapshotTableState {
                 .keys()
                 .map(|path| path.to_string_lossy().to_string()),
         );
+
+        // For committed but not persisted records, we create a temporary file for them, which gets deleted after query completion.
         let file_path = self.current_snapshot.get_name_for_inmemory_file();
         if file_path.exists() {
             file_paths.push(file_path.to_string_lossy().to_string());
@@ -380,6 +385,7 @@ impl SnapshotTableState {
                 associated_files,
             });
         }
+
         assert!(matches!(
             self.last_commit,
             RecordLocation::MemoryBatch(_, _)

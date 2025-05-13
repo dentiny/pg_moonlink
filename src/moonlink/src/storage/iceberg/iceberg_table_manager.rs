@@ -786,7 +786,6 @@ mod tests {
         Ok(())
     }
 
-    // TODO(hjiang): Figure out a way to check file index content; for example, search for an item.
     async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergResult<()> {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().to_path_buf();
