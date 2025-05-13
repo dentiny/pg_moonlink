@@ -18,6 +18,7 @@ use tokio_postgres::{connect, Client, NoTls};
 
 pub struct MoonlinkPostgresSource {
     uri: String,
+    table_base_path: String,
     postgres_client: Client,
     handle: Option<
         JoinHandle<
@@ -27,7 +28,7 @@ pub struct MoonlinkPostgresSource {
 }
 
 impl MoonlinkPostgresSource {
-    pub async fn new(uri: String) -> Result<Self, PostgresSourceError> {
+    pub async fn new(uri: String, table_base_path: String) -> Result<Self, PostgresSourceError> {
         let (postgres_client, connection) = connect(&uri, NoTls).await.unwrap();
         tokio::spawn(async move {
             if let Err(e) = connection.await {
@@ -42,6 +43,7 @@ impl MoonlinkPostgresSource {
             .unwrap();
         Ok(Self {
             uri,
+            table_base_path,
             postgres_client,
             handle: None,
         })
@@ -50,7 +52,6 @@ impl MoonlinkPostgresSource {
     pub async fn add_table(
         &mut self,
         table_name: &str,
-        table_location: &str,
     ) -> Result<ReadStateManager, PostgresSourceError> {
         self.postgres_client
             .simple_query(&format!(
@@ -73,7 +74,7 @@ impl MoonlinkPostgresSource {
         )
         .await?;
         let (reader_notifier, mut reader_notifier_receiver) = mpsc::channel(1);
-        let sink = Sink::new(reader_notifier, PathBuf::from(table_location));
+        let sink = Sink::new(reader_notifier, PathBuf::from(self.table_base_path.clone()));
         let batch_config = BatchConfig::new(1000, Duration::from_secs(1));
         let mut pipeline =
             BatchDataPipeline::new(source, sink, PipelineAction::CdcOnly, batch_config);
