@@ -2,7 +2,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use criterion::{criterion_group, criterion_main, Criterion};
 use futures::executor::block_on;
 use moonlink::row::{IdentityProp, MoonlinkRow, RowValue};
-use moonlink::IcebergTableManagerConfig;
+use moonlink::IcebergTableConfig;
 use moonlink::MooncakeTable;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -47,7 +47,7 @@ fn bench_write_mooncake_table(c: &mut Criterion) {
 
     let base_path = temp_dir.path().to_path_buf();
     let table_name = "test_table";
-    let iceberg_table_config = IcebergTableManagerConfig {
+    let iceberg_table_config = IcebergTableConfig {
         warehouse_uri: base_path.to_str().unwrap().to_string(),
         namespace: vec!["default".to_string()],
         table_name: table_name.to_string(),

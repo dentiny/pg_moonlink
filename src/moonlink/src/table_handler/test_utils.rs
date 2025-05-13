@@ -1,5 +1,5 @@
 use crate::row::{IdentityProp, MoonlinkRow, RowValue};
-use crate::storage::IcebergTableManagerConfig;
+use crate::storage::IcebergTableConfig;
 use crate::storage::{verify_files_and_deletions, MooncakeTable};
 use crate::table_handler::{TableEvent, TableHandler}; // Ensure this path is correct
 use crate::union_read::{decode_read_state_for_testing, ReadStateManager};
@@ -57,7 +57,7 @@ impl TestEnvironment {
 
         // TODO(hjiang): Hard-code iceberg table namespace and table name.
         let table_name = "table_name";
-        let iceberg_table_config = IcebergTableManagerConfig {
+        let iceberg_table_config = IcebergTableConfig {
             warehouse_uri: path.to_str().unwrap().to_string(),
             namespace: vec!["default".to_string()],
             table_name: table_name.to_string(),

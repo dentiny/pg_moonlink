@@ -3,7 +3,7 @@ use super::delete_vector::BatchDeletionVector;
 use super::{Snapshot, SnapshotTask, TableMetadata};
 use crate::error::Result;
 use crate::storage::iceberg::iceberg_table_manager::{
-    IcebergOperation, IcebergTableManager, IcebergTableManagerConfig,
+    IcebergOperation, IcebergTableManager, IcebergTableConfig,
 };
 use crate::storage::index::Index;
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
@@ -53,7 +53,7 @@ pub struct ReadOutput {
 impl SnapshotTableState {
     pub(super) async fn new(
         metadata: Arc<TableMetadata>,
-        iceberg_table_config: IcebergTableManagerConfig,
+        iceberg_table_config: IcebergTableConfig,
     ) -> Self {
         let mut batches = BTreeMap::new();
         batches.insert(0, InMemoryBatch::new(metadata.config.batch_size));

@@ -32,9 +32,8 @@ use uuid::Uuid;
 #[cfg(test)]
 use mockall::*;
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, TypedBuilder)]
-pub struct IcebergTableManagerConfig {
+pub struct IcebergTableConfig {
     /// Table warehouse location.
     #[builder(default = "/tmp/moonlink_iceberg".to_string())]
     pub warehouse_uri: String,
@@ -75,7 +74,6 @@ pub(crate) trait IcebergOperation {
         Self: Sized;
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DataFileEntry {
     /// Iceberg data file, used to decide what to persist at new commit requests.
@@ -87,11 +85,10 @@ struct DataFileEntry {
 /// TODO(hjiang):
 /// 1. Support a data file handle, which is a remote file path, plus an optional local cache filepath.
 /// 2. Support a deletion vector handle, which is a remote file path, with an optional in-memory buffer and a local cache filepath.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct IcebergTableManager {
     /// Iceberg table configuration.
-    config: IcebergTableManagerConfig,
+    config: IcebergTableConfig,
 
     /// Mooncake table metadata.
     mooncake_table_metadata: Arc<MooncakeTableMetadata>,
@@ -112,7 +109,7 @@ pub struct IcebergTableManager {
 impl IcebergTableManager {
     pub fn new(
         mooncake_table_metadata: Arc<MooncakeTableMetadata>,
-        config: IcebergTableManagerConfig,
+        config: IcebergTableConfig,
     ) -> IcebergTableManager {
         let catalog = utils::create_catalog(&config.warehouse_uri).unwrap();
         Self {
@@ -777,7 +774,7 @@ mod tests {
         let tmp_dir = tempdir()?;
         let mooncake_table_metadata =
             create_test_table_metadata(tmp_dir.path().to_str().unwrap().to_string());
-        let config = IcebergTableManagerConfig {
+        let config = IcebergTableConfig {
             warehouse_uri: tmp_dir.path().to_str().unwrap().to_string(),
             namespace: vec!["namespace".to_string()],
             table_name: "test_table".to_string(),
@@ -793,7 +790,7 @@ mod tests {
         let path = temp_dir.path().to_path_buf();
         let mooncake_table_metadata =
             create_test_table_metadata(temp_dir.path().to_str().unwrap().to_string());
-        let iceberg_table_config = IcebergTableManagerConfig {
+        let iceberg_table_config = IcebergTableConfig {
             warehouse_uri,
             namespace: vec!["namespace".to_string()],
             table_name: "test_table".to_string(),

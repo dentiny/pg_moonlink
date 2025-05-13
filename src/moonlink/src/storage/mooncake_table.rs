@@ -5,7 +5,7 @@ mod mem_slice;
 mod shared_array;
 mod snapshot;
 
-use super::iceberg::iceberg_table_manager::IcebergTableManagerConfig;
+use super::iceberg::iceberg_table_manager::IcebergTableConfig;
 use super::index::{FileIndex, MemIndex, MooncakeIndex};
 use super::storage_utils::{RawDeletionRecord, RecordLocation};
 use crate::error::{Error, Result};
@@ -198,7 +198,7 @@ impl MooncakeTable {
         version: u64,
         base_path: PathBuf,
         identity: IdentityProp,
-        iceberg_table_config: IcebergTableManagerConfig,
+        iceberg_table_config: IcebergTableConfig,
     ) -> Self {
         let table_config = TableConfig::new();
         let schema = Arc::new(schema);

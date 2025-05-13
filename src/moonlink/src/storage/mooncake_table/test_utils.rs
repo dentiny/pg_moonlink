@@ -1,6 +1,6 @@
 use super::*;
 use crate::row::{IdentityProp, RowValue};
-use crate::storage::iceberg::iceberg_table_manager::IcebergTableManagerConfig;
+use crate::storage::iceberg::iceberg_table_manager::IcebergTableConfig;
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field};
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
@@ -61,7 +61,7 @@ pub async fn test_table(
     identity: IdentityProp,
 ) -> MooncakeTable {
     // TODO(hjiang): Hard-code iceberg table namespace and table name.
-    let iceberg_table_config = IcebergTableManagerConfig {
+    let iceberg_table_config = IcebergTableConfig {
         warehouse_uri: context.path().to_str().unwrap().to_string(),
         namespace: vec!["default".to_string()],
         table_name: table_name.to_string(),
