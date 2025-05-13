@@ -30,8 +30,12 @@ pub(crate) struct SnapshotTableState {
     // UNDONE(BATCH_INSERT):
     // Track uncommitted disk files/ batches from big batch insert
 
-    // Track a log of position deletions on disk_files,
-    // since last iceberg snapshot
+    // There're three types of deletion records:
+    // 1. Uncommitted deletion logs
+    // 2. Committed and persisted deletion logs, which are reflected at `snapshot::disk_files` along with the corresponding data files
+    // 3. Committed but not yet persisted deletion logs
+    //
+    // Type-3, committed but not yet persisted deletion logs
     committed_deletion_log: Vec<ProcessedDeletionRecord>,
     uncommitted_deletion_log: Vec<Option<ProcessedDeletionRecord>>,
 
@@ -293,6 +297,7 @@ impl SnapshotTableState {
                         .delete_row(*row_id);
                     assert!(res);
                 }
+                self.committed_deletion_log.push(deletion);
             }
             RecordLocation::DiskFile(file_name, row_id) => {
                 let res = self
@@ -304,7 +309,6 @@ impl SnapshotTableState {
                 assert!(res);
             }
         }
-        self.committed_deletion_log.push(deletion);
     }
 
     fn process_deletion_log(&mut self, task: &mut SnapshotTask) {
