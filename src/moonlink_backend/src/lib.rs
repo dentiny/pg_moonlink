@@ -25,9 +25,13 @@ impl<T: Eq + Hash> Default for MoonlinkBackend<T> {
 }
 
 impl<T: Eq + Hash> MoonlinkBackend<T> {
-    pub fn new(moonlink_table_base_path: String) -> Self {
+    pub fn new(base_path: String) -> Self {
         Self {
-            moonlink_table_base_path,
+            moonlink_table_base_path: std::fs::canonicalize(&base_path)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string(),
             ingest_sources: RwLock::new(Vec::new()),
             table_readers: RwLock::new(HashMap::new()),
         }
