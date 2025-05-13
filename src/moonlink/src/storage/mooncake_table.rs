@@ -192,7 +192,7 @@ pub struct MooncakeTable {
 impl MooncakeTable {
     /// foreground functions
     ///
-    pub fn new(
+    pub async fn new(
         schema: Schema,
         name: String,
         version: u64,
@@ -218,10 +218,9 @@ impl MooncakeTable {
                 metadata.identity.clone(),
             ),
             metadata: metadata.clone(),
-            snapshot: Arc::new(RwLock::new(SnapshotTableState::new(
-                metadata,
-                iceberg_table_config,
-            ))),
+            snapshot: Arc::new(RwLock::new(
+                SnapshotTableState::new(metadata, iceberg_table_config).await,
+            )),
             next_snapshot_task: SnapshotTask::new(),
             transaction_stream_states: HashMap::new(),
             table_snapshot_watch_sender,

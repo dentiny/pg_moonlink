@@ -38,7 +38,7 @@ pub struct TestEnvironment {
 
 impl TestEnvironment {
     /// Creates a new test environment with default settings.
-    pub fn new() -> Self {
+    pub async fn new() -> Self {
         let schema = default_schema();
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().to_path_buf();
@@ -50,7 +50,8 @@ impl TestEnvironment {
             path,
             IdentityProp::Keys(vec![0]),
             /*iceberg_table_config=*/ None,
-        );
+        )
+        .await;
 
         let (replication_tx, replication_rx) = watch::channel(0u64);
         let (table_commit_tx, table_commit_rx) = watch::channel(0u64);

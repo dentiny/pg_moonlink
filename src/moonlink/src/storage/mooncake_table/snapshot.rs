@@ -52,7 +52,7 @@ pub struct ReadOutput {
 }
 
 impl SnapshotTableState {
-    pub(super) fn new(
+    pub(super) async fn new(
         metadata: Arc<TableMetadata>,
         iceberg_table_config: Option<IcebergTableManagerConfig>,
     ) -> Self {
@@ -63,7 +63,7 @@ impl SnapshotTableState {
         let mut snapshot = Snapshot::new(metadata);
         if iceberg_table_config.is_some() {
             let mut table_manager = IcebergTableManager::new(iceberg_table_config.unwrap());
-            snapshot = block_on(table_manager.load_snapshot_from_table()).unwrap();
+            snapshot = table_manager.load_snapshot_from_table().await.unwrap();
             iceberg_table_manager = Some(table_manager);
         }
 
@@ -84,7 +84,7 @@ impl SnapshotTableState {
         self.integrate_disk_slices(&mut task);
 
         self.rows = take(&mut task.new_rows);
-        Self::process_deletion_log(self, &mut task);
+        self.process_deletion_log(&mut task);
 
         if task.new_lsn != 0 {
             self.current_snapshot.snapshot_version = task.new_lsn;

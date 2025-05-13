@@ -7,9 +7,9 @@ version = "0.0.1"
 edition = "2021"
 
 [workspace.dependencies]
-arrow = { version = "54", default-features = false }
-arrow-array = "54"
-arrow-schema = "54"
+arrow = { version = "55", default-features = false}
+arrow-array = "55"
+arrow-schema = "55"
 async-trait = "0.1"
 bincode = "2"
 bitstream-io = "4"
@@ -17,7 +17,7 @@ chrono = { version = "0.4", default-features = false }
 crc32fast = "1"
 futures = { version = "0.3", default-features = false }
 hashbrown = "0.15.3"
-iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "a84532734fc76469e878bc46a29b1ae854fb7a0a", default-features = false, features = [
+iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "1373d7f13ed5581ce64e3dc27f26c6f0f4eac9f8", default-features = false, features = [
   "storage-fs",
 ] }
 multimap = { version = "0.10", default-features = false }
@@ -25,7 +25,7 @@ num-traits = "0.2"
 opendal = { version = "0.53", default-features = false, features = [
   "services-s3",
 ] }
-parquet = { version = "54", default-features = false, features = ["arrow"] }
+parquet = { version = "55", default-features = false, features = ["arrow", "async"] }
 postgres-replication = { git = "https://github.com/Mooncake-labs/rust-postgres.git" }
 roaring = "0.10"
 serde = { version = "1.0", default-features = false, features = ["derive"] }

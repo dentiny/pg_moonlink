@@ -54,7 +54,7 @@ pub fn test_row(id: i32, name: &str, age: i32) -> MoonlinkRow {
     ])
 }
 
-pub fn test_table(
+pub async fn test_table(
     context: &TestContext,
     table_name: &str,
     identity: IdentityProp,
@@ -67,6 +67,7 @@ pub fn test_table(
         identity,
         /*iceberg_table_config=*/ None,
     )
+    .await
 }
 
 pub fn read_batch(reader: ParquetRecordBatchReader) -> Option<RecordBatch> {

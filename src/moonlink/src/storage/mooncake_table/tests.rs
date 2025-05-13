@@ -16,7 +16,7 @@ fn shared_cases(#[case] identity: IdentityProp) {}
 #[tokio::test]
 async fn test_append_commit_snapshot(#[case] identity: IdentityProp) -> Result<()> {
     let context = TestContext::new("append_commit");
-    let mut table = test_table(&context, "append_table", identity);
+    let mut table = test_table(&context, "append_table", identity).await;
     append_rows(&mut table, vec![test_row(1, "A", 20), test_row(2, "B", 21)])?;
     table.commit(1);
     snapshot(&mut table).await;
@@ -30,7 +30,7 @@ async fn test_append_commit_snapshot(#[case] identity: IdentityProp) -> Result<(
 #[tokio::test]
 async fn test_flush_basic(#[case] identity: IdentityProp) -> Result<()> {
     let context = TestContext::new("flush_basic");
-    let mut table = test_table(&context, "flush_table", identity);
+    let mut table = test_table(&context, "flush_table", identity).await;
     let rows = vec![test_row(1, "Alice", 30), test_row(2, "Bob", 25)];
     append_commit_flush_snapshot(&mut table, rows, 1).await?;
     let snapshot = table.snapshot.read().await;
@@ -43,7 +43,7 @@ async fn test_flush_basic(#[case] identity: IdentityProp) -> Result<()> {
 #[tokio::test]
 async fn test_delete_and_append(#[case] identity: IdentityProp) -> Result<()> {
     let context = TestContext::new("delete_append");
-    let mut table = test_table(&context, "del_table", identity);
+    let mut table = test_table(&context, "del_table", identity).await;
     let initial_rows = vec![
         test_row(1, "Row 1", 31),
         test_row(2, "Row 2", 32),
@@ -73,7 +73,7 @@ async fn test_delete_and_append(#[case] identity: IdentityProp) -> Result<()> {
 #[tokio::test]
 async fn test_deletion_before_flush(#[case] identity: IdentityProp) -> Result<()> {
     let context = TestContext::new("delete_pre_flush");
-    let mut table = test_table(&context, "table", identity);
+    let mut table = test_table(&context, "table", identity).await;
     append_rows(&mut table, batch_rows(1, 4))?;
     table.commit(1);
     snapshot(&mut table).await;
@@ -93,7 +93,7 @@ async fn test_deletion_before_flush(#[case] identity: IdentityProp) -> Result<()
 #[tokio::test]
 async fn test_deletion_after_flush(#[case] identity: IdentityProp) -> Result<()> {
     let context = TestContext::new("delete_post_flush");
-    let mut table = test_table(&context, "table", identity);
+    let mut table = test_table(&context, "table", identity).await;
     append_commit_flush_snapshot(&mut table, batch_rows(1, 4), 1).await?;
 
     table.delete(test_row(2, "Row 2", 32), 2);
@@ -147,7 +147,8 @@ async fn test_full_row_with_duplication_and_identical() -> Result<()> {
         &context,
         "full_row_with_duplication_and_identical",
         IdentityProp::FullRow,
-    );
+    )
+    .await;
 
     // Insert duplicate rows (same identity, different values)
     let row1 = test_row(1, "A", 20);

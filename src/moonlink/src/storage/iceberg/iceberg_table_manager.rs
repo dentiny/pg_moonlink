@@ -804,7 +804,8 @@ mod tests {
             path,
             IdentityProp::Keys(vec![0]),
             Some(iceberg_table_config.clone()),
-        );
+        )
+        .await;
 
         // Perform a few table write operations.
         //

@@ -42,7 +42,8 @@ fn bench_write(c: &mut Criterion) {
                     temp_dir.path().to_path_buf(),
                     IdentityProp::SinglePrimitiveKey(0),
                     None,
-                );
+                )
+                .await;
                 for row in batches.iter() {
                     let _ = table.append(MoonlinkRow {
                         values: row.values.clone(),
@@ -64,7 +65,8 @@ fn bench_write(c: &mut Criterion) {
                     temp_dir.path().to_path_buf(),
                     IdentityProp::SinglePrimitiveKey(0),
                     None,
-                );
+                )
+                .await;
                 for row in batches.iter() {
                     let _ = table.append_in_stream_batch(
                         MoonlinkRow {
@@ -82,23 +84,24 @@ fn bench_write(c: &mut Criterion) {
     group.bench_function("stream_delete_1m_rows", |b| {
         b.iter_batched(
             || {
-                let mut table = MooncakeTable::new(
-                    schema.clone(),
-                    "test_table".to_string(),
-                    1,
-                    temp_dir.path().to_path_buf(),
-                    IdentityProp::SinglePrimitiveKey(0),
-                    None,
-                );
-                for row in batches.iter() {
-                    let _ = table.append_in_stream_batch(
-                        MoonlinkRow {
-                            values: row.values.clone(),
-                        },
-                        1,
-                    );
-                }
                 rt.block_on(async {
+                    let mut table = MooncakeTable::new(
+                        schema.clone(),
+                        "test_table".to_string(),
+                        1,
+                        temp_dir.path().to_path_buf(),
+                        IdentityProp::SinglePrimitiveKey(0),
+                        None,
+                    )
+                    .await;
+                    for row in batches.iter() {
+                        let _ = table.append_in_stream_batch(
+                            MoonlinkRow {
+                                values: row.values.clone(),
+                            },
+                            1,
+                        );
+                    }
                     let handle = table.flush_transaction_stream(1);
                     let _ = handle.await.unwrap();
                 });
