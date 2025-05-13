@@ -10,7 +10,6 @@ use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 use crate::storage::mooncake_table::MoonlinkRow;
 use crate::storage::storage_utils::RawDeletionRecord;
 use crate::storage::storage_utils::{ProcessedDeletionRecord, RecordLocation};
-use futures::executor::block_on;
 use parquet::arrow::ArrowWriter;
 use std::collections::BTreeMap;
 use std::mem::take;

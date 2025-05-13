@@ -1,5 +1,6 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use criterion::{criterion_group, criterion_main, Criterion};
+use futures::executor::block_on;
 use moonlink::row::{IdentityProp, MoonlinkRow, RowValue};
 use moonlink::MooncakeTable;
 use std::time::Duration;
@@ -33,14 +34,14 @@ fn bench_write_mooncake_table(c: &mut Criterion) {
         Field::new("age", DataType::Int32, false),
     ]);
 
-    let mut table = MooncakeTable::new(
+    let mut table = block_on(MooncakeTable::new(
         schema,
         "test_table".to_string(),
         1,
         temp_dir.path().to_path_buf(),
         IdentityProp::SinglePrimitiveKey(0),
         None,
-    );
+    ));
 
     let mut total_appended = 0;
 
