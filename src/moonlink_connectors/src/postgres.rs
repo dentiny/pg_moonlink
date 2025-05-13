@@ -49,17 +49,21 @@ impl MoonlinkPostgresSource {
 
     pub async fn add_table(
         &mut self,
-        table: &str,
+        table_name: &str,
+        table_location: &str,
     ) -> Result<ReadStateManager, PostgresSourceError> {
         self.postgres_client
             .simple_query(&format!(
                 "ALTER PUBLICATION moonlink_pub ADD TABLE {};",
-                table
+                table_name
             ))
             .await
             .unwrap();
         self.postgres_client
-            .simple_query(&format!("ALTER TABLE {} REPLICA IDENTITY FULL;", table))
+            .simple_query(&format!(
+                "ALTER TABLE {} REPLICA IDENTITY FULL;",
+                table_name
+            ))
             .await
             .unwrap();
         let source = PostgresSource::new(
@@ -69,9 +73,7 @@ impl MoonlinkPostgresSource {
         )
         .await?;
         let (reader_notifier, mut reader_notifier_receiver) = mpsc::channel(1);
-
-        let base_path = std::fs::canonicalize(&PathBuf::from("./mooncake_test/")).unwrap();
-        let sink = Sink::new(reader_notifier, base_path);
+        let sink = Sink::new(reader_notifier, PathBuf::from(table_location));
         let batch_config = BatchConfig::new(1000, Duration::from_secs(1));
         let mut pipeline =
             BatchDataPipeline::new(source, sink, PipelineAction::CdcOnly, batch_config);

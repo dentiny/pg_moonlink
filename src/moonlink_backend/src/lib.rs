@@ -28,11 +28,18 @@ impl<T: Eq + Hash> MoonlinkBackend<T> {
         }
     }
 
-    pub async fn create_table(&self, table_id: T, table: &str, uri: &str) -> Result<()> {
+    pub async fn create_table(
+        &self,
+        table_id: T,
+        table_name: &str,
+        table_location: &str,
+        uri: &str,
+    ) -> Result<()> {
         let mut ingest_sources = self.ingest_sources.write().await;
         for ingest_source in ingest_sources.iter_mut() {
             if ingest_source.check_table_belongs_to_source(uri) {
-                let reader_state_manager = ingest_source.add_table(table).await?;
+                let reader_state_manager =
+                    ingest_source.add_table(table_name, table_location).await?;
                 self.table_readers
                     .write()
                     .await
@@ -41,7 +48,7 @@ impl<T: Eq + Hash> MoonlinkBackend<T> {
             }
         }
         let mut ingest_source = MoonlinkPostgresSource::new(uri.to_owned()).await?;
-        let reader_state_manager = ingest_source.add_table(table).await?;
+        let reader_state_manager = ingest_source.add_table(table_name, table_location).await?;
         ingest_sources.push(ingest_source);
         self.table_readers
             .write()
@@ -67,9 +74,12 @@ impl<T: Eq + Hash> MoonlinkBackend<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
     use tokio_postgres::{connect, NoTls};
+
     #[tokio::test]
     async fn test_moonlink_service() {
+        let temp_dir = TempDir::new().expect("tempdir failed");
         let uri = "postgresql://postgres:postgres@postgres:5432/postgres";
         let service = MoonlinkBackend::<&'static str>::new();
         // connect to postgres and create a table
@@ -81,9 +91,13 @@ mod tests {
         });
 
         client.simple_query("DROP TABLE IF EXISTS test; CREATE TABLE test (id bigint PRIMARY KEY, name VARCHAR(255));").await.unwrap();
-        println!("created table");
         service
-            .create_table("test", "public.test", uri)
+            .create_table(
+                "test",
+                "public.test",
+                temp_dir.path().to_str().unwrap(),
+                uri,
+            )
             .await
             .unwrap();
         client
