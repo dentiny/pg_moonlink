@@ -1,19 +1,31 @@
 use crate::row::{IdentityProp, MoonlinkRow, RowValue};
+use crate::storage::IcebergTableConfig;
 use crate::storage::{verify_files_and_deletions, MooncakeTable};
 use crate::table_handler::{TableEvent, TableHandler}; // Ensure this path is correct
 use crate::union_read::{decode_read_state_for_testing, ReadStateManager};
 
-use arrow::datatypes::{DataType, Field, Schema};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
+
+use arrow::datatypes::{DataType, Field, Schema};
 use tokio::sync::{mpsc, watch};
 
 /// Creates a default schema for testing.
 pub fn default_schema() -> Schema {
     Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("name", DataType::Utf8, true),
-        Field::new("age", DataType::Int32, false),
+        Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "1".to_string(),
+        )])),
+        Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "2".to_string(),
+        )])),
+        Field::new("age", DataType::Int32, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "3".to_string(),
+        )])),
     ])
 }
 
@@ -43,13 +55,20 @@ impl TestEnvironment {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().to_path_buf();
 
+        // TODO(hjiang): Hard-code iceberg table namespace and table name.
+        let table_name = "table_name";
+        let iceberg_table_config = IcebergTableConfig {
+            warehouse_uri: path.to_str().unwrap().to_string(),
+            namespace: vec!["default".to_string()],
+            table_name: table_name.to_string(),
+        };
         let mooncake_table = MooncakeTable::new(
             schema,
-            "test_table".to_string(),
+            table_name.to_string(),
             1,
             path,
             IdentityProp::Keys(vec![0]),
-            /*iceberg_table_config=*/ None,
+            iceberg_table_config,
         )
         .await;
 

@@ -50,7 +50,6 @@ impl FileIndex {
     /// # Arguments
     ///
     /// * local_index_file_to_remote: hash map from local index filepath to remote filepath, which is to be managed by iceberg.
-    #[allow(dead_code)]
     pub(crate) fn new(
         mooncake_index: &MooncakeFileIndex,
         local_index_file_to_remote: &mut HashMap<String, String>,
@@ -85,7 +84,6 @@ impl FileIndex {
 
     /// Transfer the ownership and convert into [storage::index::FileIndex].
     /// The file index id is generated on-the-fly.
-    #[allow(dead_code)]
     pub(crate) fn as_mooncake_file_index(&mut self) -> MooncakeFileIndex {
         MooncakeFileIndex {
             global_index_id: get_next_file_index_id(),
@@ -127,7 +125,6 @@ pub(crate) struct FileIndexBlob {
 }
 
 impl FileIndexBlob {
-    #[allow(dead_code)]
     pub fn new(
         file_indices: Vec<&MooncakeFileIndex>,
         mut local_index_file_to_remote: HashMap<String, String>,
@@ -141,7 +138,6 @@ impl FileIndexBlob {
     }
 
     /// Serialize the file index into iceberg puffin blob.
-    #[allow(dead_code)]
     pub(crate) fn as_blob(&self) -> IcebergResult<Blob> {
         let blob_bytes = serde_json::to_vec(self).map_err(|e| {
             IcebergError::new(
@@ -176,7 +172,6 @@ impl FileIndexBlob {
     /// Load file index from puffin file blob.
     ///
     /// TODO(hjiang): Add unit test for load blob from local filesystem.
-    #[allow(dead_code)]
     pub async fn load_from_index_blob(
         file_io: FileIO,
         puffin_file: &DataFile,
@@ -186,7 +181,6 @@ impl FileIndexBlob {
     }
 
     /// Deserialize from iceberg puffin blob.
-    #[allow(dead_code)]
     pub(crate) fn from_blob(blob: Blob) -> IcebergResult<Self> {
         // Check blob type.
         let blob_proxy = unsafe { std::mem::transmute::<Blob, IcebergBlobProxy>(blob) };

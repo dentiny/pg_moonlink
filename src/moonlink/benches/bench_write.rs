@@ -6,9 +6,18 @@ use tempfile::tempdir;
 use tokio::runtime::Runtime;
 fn create_test_row(id: i32) -> MoonlinkRow {
     MoonlinkRow::new(vec![
-        RowValue::Int32(id),
-        RowValue::ByteArray(format!("Row {}", id).into_bytes()),
-        RowValue::Int32(30 + id),
+        RowValue::Int32(id).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "1".to_string(),
+        )])),
+        RowValue::ByteArray(format!("Row {}", id).into_bytes()).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "2".to_string(),
+        )])),
+        RowValue::Int32(30 + id).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "3".to_string(),
+        )])),
     ])
 }
 
@@ -23,9 +32,18 @@ fn bench_write(c: &mut Criterion) {
 
     let temp_dir = tempdir().unwrap();
     let schema = Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("name", DataType::Utf8, true),
-        Field::new("age", DataType::Int32, false),
+        Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "1".to_string(),
+        )])),
+        Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "2".to_string(),
+        )])),
+        Field::new("age", DataType::Int32, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "3".to_string(),
+        )])),
     ]);
 
     let batches = generate_batches(1000000);

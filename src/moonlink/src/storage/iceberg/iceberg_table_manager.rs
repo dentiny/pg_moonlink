@@ -32,14 +32,11 @@ use uuid::Uuid;
 #[cfg(test)]
 use mockall::*;
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, TypedBuilder)]
-pub struct IcebergTableManagerConfig {
+pub struct IcebergTableConfig {
     /// Table warehouse location.
     #[builder(default = "/tmp/moonlink_iceberg".to_string())]
     pub warehouse_uri: String,
-    /// Mooncake table metadata.
-    pub mooncake_table_metadata: Arc<MooncakeTableMetadata>,
     /// Namespace for the iceberg table.
     #[builder(default = vec!["default".to_string()])]
     pub namespace: Vec<String>,
@@ -71,12 +68,12 @@ pub(crate) trait IcebergOperation {
     ) -> IcebergResult<()>;
 
     /// Load latest snapshot from iceberg table. Used for recovery and initialization.
+    /// Notice this function is supposed to call **only once**.
     async fn load_snapshot_from_table(&mut self) -> IcebergResult<MooncakeSnapshot>
     where
         Self: Sized;
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DataFileEntry {
     /// Iceberg data file, used to decide what to persist at new commit requests.
@@ -88,11 +85,13 @@ struct DataFileEntry {
 /// TODO(hjiang):
 /// 1. Support a data file handle, which is a remote file path, plus an optional local cache filepath.
 /// 2. Support a deletion vector handle, which is a remote file path, with an optional in-memory buffer and a local cache filepath.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct IcebergTableManager {
     /// Iceberg table configuration.
-    config: IcebergTableManagerConfig,
+    config: IcebergTableConfig,
+
+    /// Mooncake table metadata.
+    mooncake_table_metadata: Arc<MooncakeTableMetadata>,
 
     /// Iceberg catalog, which interacts with the iceberg table.
     catalog: Box<dyn MoonlinkCatalog>,
@@ -108,11 +107,14 @@ pub struct IcebergTableManager {
 }
 
 impl IcebergTableManager {
-    #[allow(dead_code)]
-    pub fn new(config: IcebergTableManagerConfig) -> IcebergTableManager {
+    pub fn new(
+        mooncake_table_metadata: Arc<MooncakeTableMetadata>,
+        config: IcebergTableConfig,
+    ) -> IcebergTableManager {
         let catalog = utils::create_catalog(&config.warehouse_uri).unwrap();
         Self {
             config,
+            mooncake_table_metadata,
             catalog,
             iceberg_table: None,
             persisted_data_files: HashMap::new(),
@@ -136,7 +138,7 @@ impl IcebergTableManager {
                 &self.config.warehouse_uri,
                 &self.config.namespace,
                 &self.config.table_name.clone(),
-                self.config.mooncake_table_metadata.schema.as_ref(),
+                self.mooncake_table_metadata.schema.as_ref(),
             )
             .await?;
             self.iceberg_table = Some(table);
@@ -235,8 +237,7 @@ impl IcebergTableManager {
         &self,
         persisted_file_indices: Vec<MooncakeFileIndex>,
     ) -> MooncakeSnapshot {
-        let mut mooncake_snapshot =
-            MooncakeSnapshot::new(self.config.mooncake_table_metadata.clone());
+        let mut mooncake_snapshot = MooncakeSnapshot::new(self.mooncake_table_metadata.clone());
 
         // Assign snapshot version.
         let iceberg_table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
@@ -470,9 +471,7 @@ impl IcebergOperation for IcebergTableManager {
 
         // There's nothing stored in iceberg table (aka, first time initialization).
         if table_metadata.current_snapshot().is_none() {
-            return Ok(MooncakeSnapshot::new(
-                self.config.mooncake_table_metadata.clone(),
-            ));
+            return Ok(MooncakeSnapshot::new(self.mooncake_table_metadata.clone()));
         }
 
         // Load table state into iceberg table manager.
@@ -775,13 +774,12 @@ mod tests {
         let tmp_dir = tempdir()?;
         let mooncake_table_metadata =
             create_test_table_metadata(tmp_dir.path().to_str().unwrap().to_string());
-        let config = IcebergTableManagerConfig {
+        let config = IcebergTableConfig {
             warehouse_uri: tmp_dir.path().to_str().unwrap().to_string(),
-            mooncake_table_metadata,
             namespace: vec!["namespace".to_string()],
             table_name: "test_table".to_string(),
         };
-        let mut iceberg_table_manager = IcebergTableManager::new(config);
+        let mut iceberg_table_manager = IcebergTableManager::new(mooncake_table_metadata, config);
         test_store_and_load_snapshot_impl(&mut iceberg_table_manager).await?;
         Ok(())
     }
@@ -789,9 +787,10 @@ mod tests {
     async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergResult<()> {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().to_path_buf();
-        let iceberg_table_config = IcebergTableManagerConfig {
+        let mooncake_table_metadata =
+            create_test_table_metadata(temp_dir.path().to_str().unwrap().to_string());
+        let iceberg_table_config = IcebergTableConfig {
             warehouse_uri,
-            mooncake_table_metadata: create_test_table_metadata(path.to_str().unwrap().to_string()),
             namespace: vec!["namespace".to_string()],
             table_name: "test_table".to_string(),
         };
@@ -802,7 +801,7 @@ mod tests {
             /*version=*/ 1,
             path,
             IdentityProp::Keys(vec![0]),
-            Some(iceberg_table_config.clone()),
+            iceberg_table_config.clone(),
         )
         .await;
 
@@ -870,7 +869,10 @@ mod tests {
         })?;
 
         // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, whose construction is lazy and asynchronous by design.
-        let mut iceberg_table_manager = IcebergTableManager::new(iceberg_table_config.clone());
+        let mut iceberg_table_manager = IcebergTableManager::new(
+            mooncake_table_metadata.clone(),
+            iceberg_table_config.clone(),
+        );
         let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
         assert_eq!(
             snapshot.disk_files.len(),
@@ -937,7 +939,10 @@ mod tests {
         })?;
 
         // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, whose construction is lazy and asynchronous by design.
-        let mut iceberg_table_manager = IcebergTableManager::new(iceberg_table_config.clone());
+        let mut iceberg_table_manager = IcebergTableManager::new(
+            mooncake_table_metadata.clone(),
+            iceberg_table_config.clone(),
+        );
         let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
         assert_eq!(
             snapshot.disk_files.len(),
@@ -993,7 +998,10 @@ mod tests {
         })?;
 
         // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, whose construction is lazy and asynchronous by design.
-        let mut iceberg_table_manager = IcebergTableManager::new(iceberg_table_config.clone());
+        let mut iceberg_table_manager = IcebergTableManager::new(
+            mooncake_table_metadata.clone(),
+            iceberg_table_config.clone(),
+        );
         let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
         assert_eq!(
             snapshot.disk_files.len(),
@@ -1067,7 +1075,10 @@ mod tests {
         })?;
 
         // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, whose construction is lazy and asynchronous by design.
-        let mut iceberg_table_manager = IcebergTableManager::new(iceberg_table_config.clone());
+        let mut iceberg_table_manager = IcebergTableManager::new(
+            mooncake_table_metadata.clone(),
+            iceberg_table_config.clone(),
+        );
         let mut snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
         assert_eq!(
             snapshot.disk_files.len(),

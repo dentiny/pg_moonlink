@@ -4,17 +4,36 @@ use arrow::record_batch::RecordBatch;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use moonlink::row::{IdentityProp, MoonlinkRow, RowValue};
 use parquet::arrow::ArrowWriter;
+use std::collections::HashMap;
 use std::fs::File;
 use std::sync::Arc;
 
 fn create_test_batch() -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int64, false),
-        Field::new("name", DataType::Utf8, false),
-        Field::new("age", DataType::Int64, false),
-        Field::new("score", DataType::Float64, false),
-        Field::new("is_active", DataType::Boolean, false),
-        Field::new("description", DataType::Utf8, false),
+        Field::new("id", DataType::Int64, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "1".to_string(),
+        )])),
+        Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "2".to_string(),
+        )])),
+        Field::new("age", DataType::Int64, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "3".to_string(),
+        )])),
+        Field::new("score", DataType::Float64, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "4".to_string(),
+        )])),
+        Field::new("is_active", DataType::Boolean, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "5".to_string(),
+        )])),
+        Field::new("description", DataType::Utf8, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "6".to_string(),
+        )])),
     ]));
 
     // Create 1000 rows of test data

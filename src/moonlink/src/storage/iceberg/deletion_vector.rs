@@ -5,7 +5,7 @@ use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 use std::collections::HashMap;
 
 use iceberg::io::FileIO;
-use iceberg::puffin::Blob;
+use iceberg::puffin::{Blob, DELETION_VECTOR_V1};
 use iceberg::spec::DataFile;
 use iceberg::{Error as IcebergError, Result as IcebergResult};
 use roaring::RoaringTreemap;
@@ -15,9 +15,6 @@ const DELETION_VECTOR_MAGIC_BYTES: [u8; 4] = [0xD1, 0xD3, 0x39, 0x64];
 
 // Min length for serialized blob for deletion vector.
 const MIN_SERIALIZED_DELETION_VECTOR_BLOB: usize = 12;
-
-// Blob type for deletion vector.
-pub(crate) const DELETION_VECTOR_BLOB_TYPE: &str = "deletion-vector-v1";
 
 // Deletion vector puffin blob properties which must be contained.
 pub(crate) const DELETION_VECTOR_CADINALITY: &str = "cardinality";
@@ -142,7 +139,7 @@ impl DeletionVector {
         }
 
         let blob_proxy = IcebergBlobProxy {
-            r#type: DELETION_VECTOR_BLOB_TYPE.to_string(),
+            r#type: DELETION_VECTOR_V1.to_string(),
             fields: vec![],
             snapshot_id,
             sequence_number: seqno,

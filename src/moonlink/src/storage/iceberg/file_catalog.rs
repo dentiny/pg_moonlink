@@ -123,7 +123,6 @@ pub struct FileCatalog {
 }
 
 impl FileCatalog {
-    #[allow(dead_code)]
     pub fn new(warehouse_location: String, config: CatalogConfig) -> Self {
         let file_io = create_file_io(&config);
         Self {
