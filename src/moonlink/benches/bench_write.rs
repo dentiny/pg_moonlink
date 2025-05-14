@@ -1,23 +1,17 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use moonlink::row::{IdentityProp, MoonlinkRow, RowValue};
+use moonlink::IcebergTableConfig;
 use moonlink::MooncakeTable;
+use std::collections::HashMap;
 use tempfile::tempdir;
 use tokio::runtime::Runtime;
+
 fn create_test_row(id: i32) -> MoonlinkRow {
     MoonlinkRow::new(vec![
-        RowValue::Int32(id).with_metadata(HashMap::from([(
-            "PARQUET:field_id".to_string(),
-            "1".to_string(),
-        )])),
-        RowValue::ByteArray(format!("Row {}", id).into_bytes()).with_metadata(HashMap::from([(
-            "PARQUET:field_id".to_string(),
-            "2".to_string(),
-        )])),
-        RowValue::Int32(30 + id).with_metadata(HashMap::from([(
-            "PARQUET:field_id".to_string(),
-            "3".to_string(),
-        )])),
+        RowValue::Int32(id),
+        RowValue::ByteArray(format!("Row {}", id).into_bytes()),
+        RowValue::Int32(30 + id),
     ])
 }
 
@@ -53,13 +47,19 @@ fn bench_write(c: &mut Criterion) {
     group.bench_function("write_1m_rows", |b| {
         b.iter(|| {
             rt.block_on(async {
+                // Create a temporary warehouse location for each benchmark suite, otherwise iceberg table manager loads previous states.
+                let temp_warehouse_dir = tempdir().unwrap();
+                let temp_warehouse_uri = temp_warehouse_dir.path().to_str().unwrap().to_string();
+                let iceberg_table_config = IcebergTableConfig::builder()
+                    .warehouse_uri(temp_warehouse_uri)
+                    .build();
                 let mut table = MooncakeTable::new(
                     schema.clone(),
                     "test_table".to_string(),
                     1,
                     temp_dir.path().to_path_buf(),
                     IdentityProp::SinglePrimitiveKey(0),
-                    None,
+                    iceberg_table_config,
                 )
                 .await;
                 for row in batches.iter() {
@@ -76,13 +76,19 @@ fn bench_write(c: &mut Criterion) {
     group.bench_function("stream_write_1m_rows", |b| {
         b.iter(|| {
             rt.block_on(async {
+                // Create a temporary warehouse location for each benchmark suite, otherwise iceberg table manager loads previous states.
+                let temp_warehouse_dir = tempdir().unwrap();
+                let temp_warehouse_uri = temp_warehouse_dir.path().to_str().unwrap().to_string();
+                let iceberg_table_config = IcebergTableConfig::builder()
+                    .warehouse_uri(temp_warehouse_uri)
+                    .build();
                 let mut table = MooncakeTable::new(
                     schema.clone(),
                     "test_table".to_string(),
                     1,
                     temp_dir.path().to_path_buf(),
                     IdentityProp::SinglePrimitiveKey(0),
-                    None,
+                    iceberg_table_config,
                 )
                 .await;
                 for row in batches.iter() {
@@ -102,16 +108,21 @@ fn bench_write(c: &mut Criterion) {
     group.bench_function("stream_delete_1m_rows", |b| {
         b.iter_batched(
             || {
+                // Create a temporary warehouse location for each benchmark suite, otherwise iceberg table manager loads previous states.
+                let temp_warehouse_dir = tempdir().unwrap();
+                let temp_warehouse_uri = temp_warehouse_dir.path().to_str().unwrap().to_string();
+                let iceberg_table_config = IcebergTableConfig::builder()
+                    .warehouse_uri(temp_warehouse_uri)
+                    .build();
+                let mut table = rt.block_on(MooncakeTable::new(
+                    schema.clone(),
+                    "test_table".to_string(),
+                    1,
+                    temp_dir.path().to_path_buf(),
+                    IdentityProp::SinglePrimitiveKey(0),
+                    iceberg_table_config,
+                ));
                 rt.block_on(async {
-                    let mut table = MooncakeTable::new(
-                        schema.clone(),
-                        "test_table".to_string(),
-                        1,
-                        temp_dir.path().to_path_buf(),
-                        IdentityProp::SinglePrimitiveKey(0),
-                        None,
-                    )
-                    .await;
                     for row in batches.iter() {
                         let _ = table.append_in_stream_batch(
                             MoonlinkRow {
