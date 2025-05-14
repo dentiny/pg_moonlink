@@ -101,6 +101,36 @@ impl SnapshotTableState {
             .await
             .unwrap();
 
+        /// At this point, all committed deletion logs should be at disk_files.
+        /// Sanity check 1: all committed on-disk deletion logs have been persisted.
+
+        /// Sanity check 2: deletion record number is the same.
+        let mut on_disk_committed_deletion_log_count = 0;
+        for cur_record in self.committed_deletion_log.iter() {
+            if let RecordLocation::DiskFile(file_id, row_id) = cur_record.pos.clone() {
+                let data_filepath = file_id.0.as_ref();
+                let batch_deletion_vector = self
+                    .current_snapshot
+                    .disk_files
+                    .get(data_filepath)
+                    .unwrap()
+                    .clone();
+                assert!(batch_deletion_vector.is_deleted(row_id));
+                on_disk_committed_deletion_log_count += 1;
+            }
+            // It's legal to be in-memory batch.
+        }
+
+        let mut on_disk_persisted_deletion_log_count = 0;
+        for (_, batch_deletion_vector) in self.current_snapshot.disk_files.iter() {
+            on_disk_persisted_deletion_log_count +=
+                batch_deletion_vector.collect_deleted_rows().len();
+        }
+        assert_eq!(
+            on_disk_committed_deletion_log_count,
+            on_disk_persisted_deletion_log_count
+        );
+
         self.current_snapshot.snapshot_version
     }
 
