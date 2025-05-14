@@ -66,7 +66,7 @@ pub(crate) trait IcebergOperation {
         &mut self,
         lsn: u64,
         disk_files: Vec<PathBuf>,
-        committed_deletion_log: &Vec<ProcessedDeletionRecord>,
+        committed_deletion_log: &[ProcessedDeletionRecord],
         file_indices: &[MooncakeFileIndex],
     ) -> IcebergResult<()>;
 
@@ -445,7 +445,7 @@ impl IcebergOperation for IcebergTableManager {
         &mut self,
         lsn: u64,
         new_disk_files: Vec<PathBuf>,
-        committed_deletion_log: &Vec<ProcessedDeletionRecord>,
+        committed_deletion_log: &[ProcessedDeletionRecord],
         file_indices: &[MooncakeFileIndex],
     ) -> IcebergResult<()> {
         // Initialize iceberg table on access.

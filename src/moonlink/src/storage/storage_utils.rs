@@ -52,7 +52,7 @@ impl From<(u64, usize)> for RecordLocation {
 /// TODO(hjiang): Need to pass down mem slice size.
 /// Aggregate all committed deletion logs into <data file, batch deletion vector>, whose LSN is less or equal to [`lsn`].
 pub(crate) fn aggregate_committed_deletion_logs(
-    committed_deletion_logs: &Vec<ProcessedDeletionRecord>,
+    committed_deletion_logs: &[ProcessedDeletionRecord],
     lsn: u64,
 ) -> std::collections::HashMap<PathBuf, BatchDeletionVector> {
     let mut aggregated_deletion_logs = std::collections::HashMap::new();
