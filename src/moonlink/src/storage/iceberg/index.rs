@@ -189,7 +189,7 @@ impl FileIndexBlob {
             blob.blob_type()
         );
 
-        serde_json::from_slice(&blob.data()).map_err(|e| {
+        serde_json::from_slice(blob.data()).map_err(|e| {
             IcebergError::new(
                 iceberg::ErrorKind::DataInvalid,
                 format!("Failed to deserialize blob from json string: {:?}", e),
