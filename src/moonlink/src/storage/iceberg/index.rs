@@ -1,6 +1,5 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use crate::storage::iceberg::blob_proxy::IcebergBlobProxy;
 use crate::storage::iceberg::puffin_utils;
 use crate::storage::index::file_index_id::get_next_file_index_id;
 use crate::storage::index::persisted_bucket_hash_map::IndexBlock as MooncakeIndexBlock;
@@ -158,15 +157,14 @@ impl FileIndexBlob {
 
         // Snapshot ID and sequence number are not known at the time the Puffin file is created.
         // `snapshot-id` and `sequence-number` must be set to -1 in blob metadata for Puffin v1.
-        let blob_proxy = IcebergBlobProxy {
-            r#type: MOONCAKE_HASH_INDEX_V1.to_string(),
-            fields: vec![],
-            snapshot_id: -1,
-            sequence_number: -1,
-            data: blob_bytes,
-            properties,
-        };
-        Ok(unsafe { std::mem::transmute::<IcebergBlobProxy, Blob>(blob_proxy) })
+        Ok(Blob::builder()
+            .r#type(MOONCAKE_HASH_INDEX_V1.to_string())
+            .fields(vec![])
+            .snapshot_id(-1)
+            .sequence_number(-1)
+            .data(blob_bytes)
+            .properties(properties)
+            .build())
     }
 
     /// Load file index from puffin file blob.
@@ -183,14 +181,15 @@ impl FileIndexBlob {
     /// Deserialize from iceberg puffin blob.
     pub(crate) fn from_blob(blob: Blob) -> IcebergResult<Self> {
         // Check blob type.
-        let blob_proxy = unsafe { std::mem::transmute::<Blob, IcebergBlobProxy>(blob) };
         assert_eq!(
-            &blob_proxy.r#type, MOONCAKE_HASH_INDEX_V1,
+            blob.blob_type(),
+            MOONCAKE_HASH_INDEX_V1,
             "Expected hash index v1 blob type is {:?}, actual type is {:?}",
-            MOONCAKE_HASH_INDEX_V1, blob_proxy.r#type
+            MOONCAKE_HASH_INDEX_V1,
+            blob.blob_type()
         );
 
-        serde_json::from_slice(&blob_proxy.data).map_err(|e| {
+        serde_json::from_slice(blob.data()).map_err(|e| {
             IcebergError::new(
                 iceberg::ErrorKind::DataInvalid,
                 format!("Failed to deserialize blob from json string: {:?}", e),
