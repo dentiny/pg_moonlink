@@ -7,6 +7,17 @@ use iceberg::puffin::{Blob, PuffinReader};
 use iceberg::spec::DataFile;
 use iceberg::{Error as IcebergError, Result as IcebergResult};
 
+/// Reference to puffin blob.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PuffinBlobRef {
+    /// Path for the puffin file.
+    pub(crate) puffin_filepath: String,
+    /// Start offset for the blob.
+    pub(crate) start_offset: u32,
+    /// Blob size.
+    pub(crate) blob_size: u32,
+}
+
 /// Get puffin writer with the given file io.
 pub(crate) async fn create_puffin_writer(
     file_io: &FileIO,

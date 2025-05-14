@@ -5,11 +5,10 @@ use crate::error::Result;
 use crate::storage::iceberg::iceberg_table_manager::{
     IcebergOperation, IcebergTableConfig, IcebergTableManager,
 };
-use crate::storage::iceberg::deletion_vector::DeletionVectorMetadata;
 use crate::storage::index::Index;
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 use crate::storage::mooncake_table::MoonlinkRow;
-use crate::storage::storage_utils::{ProcessedDeletionRecord, RecordLocation, RawDeletionRecord};
+use crate::storage::storage_utils::{ProcessedDeletionRecord, RawDeletionRecord, RecordLocation};
 use parquet::arrow::ArrowWriter;
 use std::collections::BTreeMap;
 use std::mem::take;
@@ -292,7 +291,6 @@ impl SnapshotTableState {
                         .delete_row(*row_id);
                     assert!(res);
                 }
-                self.committed_deletion_log.push(deletion);
             }
             RecordLocation::DiskFile(file_name, row_id) => {
                 let res = self
@@ -304,6 +302,7 @@ impl SnapshotTableState {
                 assert!(res);
             }
         }
+        self.committed_deletion_log.push(deletion);
     }
 
     fn process_deletion_log(&mut self, task: &mut SnapshotTask) {

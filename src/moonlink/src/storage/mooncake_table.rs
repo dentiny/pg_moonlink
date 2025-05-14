@@ -75,7 +75,7 @@ pub struct TableMetadata {
 pub struct Snapshot {
     /// table metadata
     pub(crate) metadata: Arc<TableMetadata>,
-    /// datafile and their deletion vectors
+    /// datafile and their deletion vector.
     /// TODO(hjiang): Use `String` as key.
     pub(crate) disk_files: HashMap<PathBuf, BatchDeletionVector>,
     /// Current snapshot version

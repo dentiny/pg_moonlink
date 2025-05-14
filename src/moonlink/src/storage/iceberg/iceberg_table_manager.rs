@@ -5,6 +5,7 @@ use crate::storage::iceberg::deletion_vector::{
 use crate::storage::iceberg::index::FileIndexBlob;
 use crate::storage::iceberg::moonlink_catalog::MoonlinkCatalog;
 use crate::storage::iceberg::puffin_utils;
+use crate::storage::iceberg::puffin_utils::PuffinBlobRef;
 use crate::storage::iceberg::utils;
 use crate::storage::iceberg::validation as IcebergValidation;
 use crate::storage::index::{FileIndex as MooncakeFileIndex, MooncakeIndex};
@@ -75,11 +76,13 @@ pub(crate) trait IcebergOperation {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct DataFileEntry {
+pub(crate) struct DataFileEntry {
     /// Iceberg data file, used to decide what to persist at new commit requests.
     data_file: DataFile,
     /// In-memory deletion vector.
     deletion_vector: BatchDeletionVector,
+    /// Puffin blob for its deletion vector.
+    persisted_deletion_vector: Option<PuffinBlobRef>,
 }
 
 /// TODO(hjiang):
@@ -196,6 +199,7 @@ impl IcebergTableManager {
         let new_data_file_entry = DataFileEntry {
             data_file: data_file.clone(),
             deletion_vector: BatchDeletionVector::new(/*max_rows=*/ 0),
+            persisted_deletion_vector: None,
         };
         let old_entry = self
             .persisted_data_files
@@ -269,49 +273,56 @@ impl IcebergTableManager {
     /// ---------- store snapshot ----------
     ///
     /// Write deletion vector to puffin file.
+    ///
+    /// Puffin blob write condition:
+    /// 1. No compression is performed, otherwise it's hard to get blob size without another read operation.
+    /// 2. We put one deletion vector within one puffin file.
     async fn write_deletion_vector(
         &mut self,
         data_file: String,
         deletion_vector: BatchDeletionVector,
-    ) -> IcebergResult<()> {
+    ) -> IcebergResult<Option<PuffinBlobRef>> {
         let deleted_rows = deletion_vector.collect_deleted_rows();
         if deleted_rows.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
 
-        if !deleted_rows.is_empty() {
-            // TODO(hjiang): Currently one deletion vector is stored in one puffin file, need to revisit later.
-            let deleted_row_count = deleted_rows.len();
-            let mut iceberg_deletion_vector = DeletionVector::new();
-            iceberg_deletion_vector.mark_rows_deleted(deleted_rows);
-            let blob_properties = HashMap::from([
-                (DELETION_VECTOR_REFERENCED_DATA_FILE.to_string(), data_file),
-                (
-                    DELETION_VECTOR_CADINALITY.to_string(),
-                    deleted_row_count.to_string(),
-                ),
-            ]);
-            let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
-            // TODO(hjiang): Fix sequence number and snapshot id, which should be -1.
-            let blob = iceberg_deletion_vector.serialize(
-                table_metadata.current_snapshot_id().unwrap_or(-1),
-                table_metadata.next_sequence_number(),
-                blob_properties,
-            );
-            let puffin_filepath = self.get_unique_puffin_filepath();
-            let mut puffin_writer = puffin_utils::create_puffin_writer(
-                self.iceberg_table.as_ref().unwrap().file_io(),
-                puffin_filepath.clone(),
-            )
+        // TODO(hjiang): Currently one deletion vector is stored in one puffin file, need to revisit later.
+        let deleted_row_count = deleted_rows.len();
+        let mut iceberg_deletion_vector = DeletionVector::new();
+        iceberg_deletion_vector.mark_rows_deleted(deleted_rows);
+        let blob_properties = HashMap::from([
+            (DELETION_VECTOR_REFERENCED_DATA_FILE.to_string(), data_file),
+            (
+                DELETION_VECTOR_CADINALITY.to_string(),
+                deleted_row_count.to_string(),
+            ),
+        ]);
+        let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
+        // TODO(hjiang): Fix sequence number and snapshot id, which should be -1.
+        let blob = iceberg_deletion_vector.serialize(
+            table_metadata.current_snapshot_id().unwrap_or(-1),
+            table_metadata.next_sequence_number(),
+            blob_properties,
+        );
+        let blob_size = blob.data().len();
+        let puffin_filepath = self.get_unique_puffin_filepath();
+        let mut puffin_writer = puffin_utils::create_puffin_writer(
+            self.iceberg_table.as_ref().unwrap().file_io(),
+            puffin_filepath.clone(),
+        )
+        .await?;
+        puffin_writer.add(blob, CompressionCodec::None).await?;
+
+        self.catalog
+            .record_puffin_metadata_and_close(puffin_filepath.clone(), puffin_writer)
             .await?;
-            puffin_writer.add(blob, CompressionCodec::None).await?;
 
-            self.catalog
-                .record_puffin_metadata_and_close(puffin_filepath, puffin_writer)
-                .await?;
-        }
-
-        Ok(())
+        Ok(Some(PuffinBlobRef {
+            puffin_filepath,
+            start_offset: 4_u32, // Puffin file starts with 4 magic bytes.
+            blob_size: blob_size as u32,
+        }))
     }
 
     /// Dump in-memory data files and their deletion vector into iceberg table,
@@ -331,18 +342,23 @@ impl IcebergTableManager {
             match old_persisted_data_files.get(&local_path) {
                 Some(entry) => {
                     if entry.deletion_vector == deletion_vector {
-                        let mut new_data_file_entry: DataFileEntry = entry.clone();
-                        new_data_file_entry.deletion_vector = deletion_vector;
-                        new_persisted_data_files.insert(local_path, new_data_file_entry);
+                        new_persisted_data_files.insert(local_path, entry.clone());
                         continue;
                     }
-                    let path_str = entry.data_file.file_path().to_string();
-                    self.write_deletion_vector(path_str, deletion_vector.clone())
-                        .await?;
 
-                    let mut new_data_file_entry: DataFileEntry = entry.clone();
-                    new_data_file_entry.deletion_vector = deletion_vector;
-                    new_persisted_data_files.insert(local_path, new_data_file_entry);
+                    // Deletion vector for the current data file has been updated.
+                    let path_str = entry.data_file.file_path().to_string();
+                    let blob_ref = self
+                        .write_deletion_vector(path_str, deletion_vector.clone())
+                        .await?;
+                    new_persisted_data_files.insert(
+                        local_path,
+                        DataFileEntry {
+                            data_file: entry.data_file.clone(),
+                            deletion_vector,
+                            persisted_deletion_vector: blob_ref,
+                        },
+                    );
                 }
                 None => {
                     let data_file = utils::write_record_batch_to_iceberg(
@@ -352,13 +368,15 @@ impl IcebergTableManager {
                     .await?;
                     let data_filepath = data_file.file_path().to_string();
                     new_data_files.push(data_file.clone());
-                    self.write_deletion_vector(data_filepath, deletion_vector.clone())
+                    let blob_ref = self
+                        .write_deletion_vector(data_filepath, deletion_vector.clone())
                         .await?;
                     new_persisted_data_files.insert(
                         local_path,
                         DataFileEntry {
                             data_file,
                             deletion_vector,
+                            persisted_deletion_vector: blob_ref,
                         },
                     );
                 }
