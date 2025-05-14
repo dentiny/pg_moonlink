@@ -46,6 +46,5 @@ criterion_group!(
     bench_delete_row,
     bench_is_deleted,
     bench_collect_active_rows,
-    bench_collect_deleted_rows
 );
 criterion_main!(benches);
