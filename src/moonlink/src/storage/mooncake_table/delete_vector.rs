@@ -96,7 +96,7 @@ impl BatchDeletionVector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, Int32Array, StringArray};
+    use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -181,5 +181,69 @@ mod tests {
         assert_eq!(active_rows, vec![0, 2, 4, 5, 6, 7, 9]);
         let deleted_rows: Vec<u64> = buffer.collect_deleted_rows();
         assert_eq!(deleted_rows, vec![1, 3, 8]);
+    }
+
+    #[test]
+    fn test_apply_to_batch_with_deletions() {
+        // Create a sample RecordBatch with 5 rows
+        let values = Int32Array::from(vec![10, 20, 30, 40, 50]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(values)]).unwrap();
+
+        // Create a BatchDeletionVector for 5 rows
+        let mut del_vec = BatchDeletionVector::new(5);
+
+        // Mark rows 1 and 3 (values 20 and 40) as deleted
+        del_vec.delete_row(1);
+        del_vec.delete_row(3);
+
+        // Apply the deletion vector
+        let filtered = del_vec.apply_to_batch(&batch).unwrap();
+
+        // Extract the resulting array
+        let filtered_values = filtered
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+
+        // Should contain values: 10, 30, 50
+        assert_eq!(filtered.num_rows(), 3);
+        assert_eq!(filtered_values.value(0), 10);
+        assert_eq!(filtered_values.value(1), 30);
+        assert_eq!(filtered_values.value(2), 50);
+    }
+
+    #[test]
+    fn test_apply_to_batch_without_deletions() {
+        // Create a RecordBatch of 3 rows
+        let values = Int32Array::from(vec![100, 200, 300]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(values)]).unwrap();
+
+        // No deletions
+        let del_vec = BatchDeletionVector::new(3);
+
+        let filtered = del_vec.apply_to_batch(&batch).unwrap();
+
+        let filtered_values = filtered
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+
+        // Expect original values
+        assert_eq!(filtered.num_rows(), 3);
+        assert_eq!(filtered_values.value(0), 100);
+        assert_eq!(filtered_values.value(1), 200);
+        assert_eq!(filtered_values.value(2), 300);
     }
 }

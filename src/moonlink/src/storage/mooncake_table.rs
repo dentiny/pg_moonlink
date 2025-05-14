@@ -2,6 +2,7 @@ mod data_batches;
 pub mod delete_vector;
 mod disk_slice;
 mod mem_slice;
+pub mod roaring_bitmap;
 mod shared_array;
 mod snapshot;
 

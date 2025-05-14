@@ -14,3 +14,5 @@ pub(crate) use mooncake_table::test_utils::*;
 pub use index::persisted_bucket_hash_map::GlobalIndexBuilder;
 #[cfg(feature = "bench")]
 pub use mooncake_table::delete_vector::BatchDeletionVector;
+#[cfg(feature = "bench")]
+pub use mooncake_table::roaring_bitmap::RoaringBitmapDV;
