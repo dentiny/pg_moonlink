@@ -98,16 +98,16 @@ impl SnapshotTableState {
         // TODO(hjiang): Should also trigger when there're large number of new deletions.
         // TODO(hjiang): Error handling for snapshot sync-up.
         // if !new_data_files.is_empty() {
-            // TODO(hjiang): Need to prune committed deletion logs, will finish in the next PR.
-            self.iceberg_table_manager
-                .sync_snapshot(
-                    /*lsn=*/self.current_snapshot.snapshot_version,
-                    new_data_files,     
-                    &self.committed_deletion_log,
-                    self.current_snapshot.get_file_indices(),
-                )
-                .await
-                .unwrap();
+        // TODO(hjiang): Need to prune committed deletion logs, will finish in the next PR.
+        self.iceberg_table_manager
+            .sync_snapshot(
+                /*lsn=*/ self.current_snapshot.snapshot_version,
+                new_data_files,
+                &self.committed_deletion_log,
+                self.current_snapshot.get_file_indices(),
+            )
+            .await
+            .unwrap();
         // }
 
         self.current_snapshot.snapshot_version

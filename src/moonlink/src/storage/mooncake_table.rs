@@ -45,11 +45,14 @@ impl TableConfig {
     #[cfg(not(debug_assertions))]
     const DEFAULT_BATCH_SIZE: usize = 2048;
 
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             mem_slice_size: Self::DEFAULT_MEM_SLICE_SIZE,
             batch_size: Self::DEFAULT_BATCH_SIZE,
         }
+    }
+    pub(crate) fn batch_size(&self) -> usize {
+        self.batch_size
     }
 }
 
@@ -146,7 +149,13 @@ impl SnapshotTask {
     pub(crate) fn get_new_data_files(&self) -> Vec<PathBuf> {
         let mut new_files = vec![];
         for cur_disk_slice in self.new_disk_slices.iter() {
-            new_files.extend(cur_disk_slice.output_files().iter().map(|(p, _)| p.clone()).collect::<Vec<_>>());
+            new_files.extend(
+                cur_disk_slice
+                    .output_files()
+                    .iter()
+                    .map(|(p, _)| p.clone())
+                    .collect::<Vec<_>>(),
+            );
         }
         new_files
     }
