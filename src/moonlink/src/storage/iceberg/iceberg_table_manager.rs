@@ -326,9 +326,6 @@ impl IcebergTableManager {
     /// Dump local data files into iceberg table.
     /// Return new iceberg data files for append transaction.
     async fn sync_data_files(&mut self, new_data_files: Vec<PathBuf>) -> IcebergResult<Vec<DataFile>> {
-
-        println!("sync new data files = {:?}", new_data_files);
-
         let mut new_iceberg_data_files = Vec::with_capacity(new_data_files.len());
         for local_data_file in new_data_files.into_iter() {
             let iceberg_data_file = utils::write_record_batch_to_iceberg(
@@ -352,7 +349,9 @@ impl IcebergTableManager {
             if entry.deletion_vector == desired_deletion_vector {
                 continue;
             }
-            self.write_deletion_vector(data_filepath.to_str().unwrap().to_string(), desired_deletion_vector.clone())
+            // Data filepath in iceberg table.
+            let iceberg_data_file = entry.data_file.file_path();
+            self.write_deletion_vector(iceberg_data_file.to_string(), desired_deletion_vector.clone())
                         .await?;
             entry.deletion_vector = desired_deletion_vector;
             self.persisted_data_files.insert(data_filepath, entry);
@@ -428,9 +427,6 @@ impl IcebergOperation for IcebergTableManager {
         committed_deletion_log: &Vec<ProcessedDeletionRecord>,
         file_indices: &[MooncakeFileIndex],
     ) -> IcebergResult<()> {
-
-        println!("\n\n sync snapshot, lsn = {}, new_disk_files = {:?}, committed_deletion_log = {:?}\n\n", lsn, new_disk_files, committed_deletion_log);
-
         // Initialize iceberg table on access.
         self.get_or_create_table().await?;
 
@@ -439,7 +435,6 @@ impl IcebergOperation for IcebergTableManager {
 
         // Persist committed deletion logs.
         let desired_deletion_vector = storage_utils::aggregate_committed_deletion_logs(committed_deletion_log, lsn);
-        println!("\n\ndesired deletion vector = {:?}", desired_deletion_vector);
         self.sync_deletion_vector(desired_deletion_vector).await?;
 
         // Persist file index changes.
@@ -456,11 +451,6 @@ impl IcebergOperation for IcebergTableManager {
 
         self.iceberg_table = Some(txn.commit(&*self.catalog).await?);
         self.catalog.clear_puffin_metadata();
-
-        println!("after sync, ======\n\n");
-        for (data_file, data_entry) in self.persisted_data_files.iter() {
-            println!("data file = {:?}, deletion vector = {:?}\n\n", data_file, data_entry.deletion_vector.collect_deleted_rows());
-        }
 
         Ok(())
     }
@@ -497,10 +487,6 @@ impl IcebergOperation for IcebergTableManager {
                 "Shouldn't have empty manifest file"
             );
 
-
-            println!("\n\nmanifest entries = {:?}", manifest_entries);
-
-
             // On load, we do two pass on all entries, to check whether all deletion vector has a corresponding data file.
             for entry in manifest_entries.iter() {
                 self.load_data_file_from_manifest_entry(entry.as_ref())
@@ -514,11 +500,6 @@ impl IcebergOperation for IcebergTableManager {
                 self.load_deletion_vector_from_manifest_entry(entry.as_ref(), &file_io)
                     .await?;
             }
-        }
-
-        println!("\nafter load\n");
-        for (data_file, data_entry) in self.persisted_data_files.iter() {
-            println!("data file = {:?}, deletion vector = {:?}\n", data_file, data_entry.deletion_vector.collect_deleted_rows());
         }
 
         let mooncake_snapshot = self.transform_to_mooncake_snapshot(loaded_file_indices);
@@ -944,8 +925,6 @@ mod tests {
             "There should be no deletion vector in iceberg table."
         );
 
-        println!("========== start store & load 2 ===========\n\n");
-
         // --------------------------------------
         // Operation series 2: no more additional rows appended, only to delete the first row in the table.
         // Expects to see a new deletion vector, because its corresponding data file has been persisted.
@@ -1007,14 +986,6 @@ mod tests {
             "Expected deletion vector {:?}, actual deletion vector {:?}",
             expected_deleted_rows, deleted_rows
         );
-
-
-
-        //////// early exit
-        return Ok(());
-
-
-        println!("========== start store & load 3 ===========\n\n");
 
         // --------------------------------------
         // Operation series 3: no more additional rows appended, only to delete the last row in the table.
