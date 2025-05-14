@@ -1,4 +1,3 @@
-use crate::storage::iceberg::blob_proxy::IcebergBlobProxy;
 use crate::storage::iceberg::puffin_utils;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 
@@ -78,7 +77,7 @@ impl DeletionVector {
         );
     }
 
-    /// Serialize the deletion vector into `IcebergBlobProxy` to write to puffin files.
+    /// Serialize the deletion vector into `Blob` to write to puffin files.
     ///
     /// Serialization storage format:
     /// | len for magic and vector | magic | vector | crc32c |
@@ -148,21 +147,19 @@ impl DeletionVector {
             std::ptr::copy_nonoverlapping(crc_bytes.as_ptr(), ptr.add(offset), crc_bytes.len());
         }
 
-        let blob_proxy = IcebergBlobProxy {
-            r#type: DELETION_VECTOR_V1.to_string(),
-            fields: vec![],
-            snapshot_id,
-            sequence_number: seqno,
-            data,
-            properties,
-        };
-        unsafe { std::mem::transmute::<IcebergBlobProxy, Blob>(blob_proxy) }
+        Blob::builder()
+            .r#type(DELETION_VECTOR_V1.to_string())
+            .fields(vec![])
+            .snapshot_id(snapshot_id)
+            .sequence_number(seqno)
+            .data(data)
+            .properties(properties)
+            .build()
     }
 
-    /// Deserialize from `IcebergBlobProxy` to deletion vector.
+    /// Deserialize from `Blob` to deletion vector.
     pub fn deserialize(blob: Blob) -> IcebergResult<Self> {
-        let blob_proxy = unsafe { std::mem::transmute::<Blob, IcebergBlobProxy>(blob) };
-        let data = &blob_proxy.data;
+        let data = blob.data();
 
         // Minimum length for serialized blob is 12 bytes (4 length + 4 magic + 4 crc).
         if data.len() < MIN_SERIALIZED_DELETION_VECTOR_BLOB {

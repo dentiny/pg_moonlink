@@ -17,7 +17,7 @@ chrono = { version = "0.4", default-features = false }
 crc32fast = "1"
 futures = { version = "0.3", default-features = false }
 hashbrown = "0.15.3"
-iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "1373d7f13ed5581ce64e3dc27f26c6f0f4eac9f8", default-features = false, features = [
+iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "111d0f3da525aad30335e211b5f29edd94c3ccf7", default-features = false, features = [
   "storage-fs",
 ] }
 multimap = { version = "0.10", default-features = false }
