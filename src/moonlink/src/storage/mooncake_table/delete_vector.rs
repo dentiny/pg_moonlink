@@ -5,7 +5,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct BatchDeletionVector {
+pub struct BatchDeletionVector {
     /// Boolean array tracking deletions (false = deleted, true = active)
     deletion_vector: Option<Vec<u8>>,
 
@@ -15,7 +15,7 @@ pub(crate) struct BatchDeletionVector {
 
 impl BatchDeletionVector {
     /// Create a new delete buffer with the specified capacity
-    pub(crate) fn new(max_rows: usize) -> Self {
+    pub fn new(max_rows: usize) -> Self {
         Self {
             deletion_vector: None,
             max_rows,
@@ -23,7 +23,7 @@ impl BatchDeletionVector {
     }
 
     /// Mark a row as deleted
-    pub(crate) fn delete_row(&mut self, row_idx: usize) -> bool {
+    pub fn delete_row(&mut self, row_idx: usize) -> bool {
         // Set the bit at row_idx to 1 (deleted)
         if self.deletion_vector.is_none() {
             self.deletion_vector = Some(vec![0xFF; self.max_rows / 8 + 1]);
@@ -39,7 +39,7 @@ impl BatchDeletionVector {
     }
 
     /// Apply the deletion vector to filter a record batch
-    pub(super) fn apply_to_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+    pub fn apply_to_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         if self.deletion_vector.is_none() {
             return Ok(batch.clone());
         }
@@ -50,7 +50,7 @@ impl BatchDeletionVector {
         Ok(filtered_batch)
     }
 
-    pub(crate) fn is_deleted(&self, row_idx: usize) -> bool {
+    pub fn is_deleted(&self, row_idx: usize) -> bool {
         if self.deletion_vector.is_none() {
             false
         } else {
@@ -58,7 +58,7 @@ impl BatchDeletionVector {
         }
     }
 
-    pub(crate) fn collect_active_rows(&self, total_rows: usize) -> Vec<usize> {
+    pub fn collect_active_rows(&self, total_rows: usize) -> Vec<usize> {
         let Some(bitmap) = &self.deletion_vector else {
             return (0..total_rows).collect();
         };
@@ -67,7 +67,7 @@ impl BatchDeletionVector {
             .collect()
     }
 
-    pub(crate) fn collect_deleted_rows(&self) -> Vec<u64> {
+    pub fn collect_deleted_rows(&self) -> Vec<u64> {
         let Some(bitmap) = &self.deletion_vector else {
             return Vec::new();
         };

@@ -1,5 +1,5 @@
 mod data_batches;
-pub(crate) mod delete_vector;
+pub mod delete_vector;
 mod disk_slice;
 mod mem_slice;
 mod shared_array;
