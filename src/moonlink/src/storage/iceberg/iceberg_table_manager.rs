@@ -320,13 +320,16 @@ impl IcebergTableManager {
     /// Dump local data files into iceberg table.
     /// Return new iceberg data files for append transaction.
     async fn sync_data_files(&mut self, new_data_files: Vec<PathBuf>) -> IcebergResult<Vec<DataFile>> {
+
+        println!("sync new data files = {:?}", new_data_files);
+
         let mut new_iceberg_data_files = Vec::with_capacity(new_data_files.len());
-        for cur_mooncake_data_file in new_data_files.into_iter() {
+        for local_data_file in new_data_files.into_iter() {
             let iceberg_data_file = utils::write_record_batch_to_iceberg(
                 self.iceberg_table.as_ref().unwrap(),
-                &cur_mooncake_data_file,
+                &local_data_file,
             ).await?;
-            let old_entry = self.persisted_data_files.insert(cur_mooncake_data_file.clone(), DataFileEntry {
+            let old_entry = self.persisted_data_files.insert(local_data_file.clone(), DataFileEntry {
                 data_file: iceberg_data_file.clone(),
                 deletion_vector: BatchDeletionVector::new(1000), // TODO(hjiang): Hard-code, need to fix before PR.
             });
@@ -340,8 +343,7 @@ impl IcebergTableManager {
     async fn sync_deletion_vector(&mut self, deletion_logs: HashMap<PathBuf, BatchDeletionVector>) -> IcebergResult<()> {
         for (data_filepath, desired_deletion_vector) in deletion_logs.into_iter() {
             let mut entry = self.persisted_data_files.get(&data_filepath).unwrap().clone();
-            let current_deletion_vector = &entry.deletion_vector;
-            if *current_deletion_vector == desired_deletion_vector {
+            if entry.deletion_vector == desired_deletion_vector {
                 continue;
             }
             self.write_deletion_vector(data_filepath.to_str().unwrap().to_string(), desired_deletion_vector.clone())
@@ -431,7 +433,7 @@ impl IcebergOperation for IcebergTableManager {
 
         // Persist committed deletion logs.
         let desired_deletion_vector = storage_utils::aggregate_committed_deletion_logs(committed_deletion_log, lsn);
-        println!("desired deletion vector = {:?}", desired_deletion_vector);
+        println!("\n\ndesired deletion vector = {:?}", desired_deletion_vector);
         self.sync_deletion_vector(desired_deletion_vector).await?;
 
         // Persist file index changes.

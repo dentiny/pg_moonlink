@@ -321,7 +321,9 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
     };
 
     // Rewrite the deletion vector manifest files.
-    // TODO(hjiang): Double confirm for deletion vector manifest filename.
+    // TODO(hjiang):
+    // 1. Double confirm for deletion vector manifest filename.
+    // 2. If no 
     let mut deletion_vector_manifest_writer = ManifestWriterBuilder::new(
         file_io.new_output(format!(
             "{}/metadata/{}-m0.avro",
@@ -352,7 +354,7 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
     // Map from referenced data file to deletion vector manifest entry.
     let mut existing_deletion_vector_entries = HashMap::new();
 
-    // Iterate through all manifest files, keep data files and merge all deletion vectors.
+    // Iterate through all manifest files, keep data manifest files (including data files and hash index files) and merge all deletion vectors.
     for cur_manifest_file in manifest_list.entries() {
         if cur_manifest_file.content == ManifestContentType::Data {
             manifest_list_writer.add_manifests([cur_manifest_file.clone()].into_iter())?;
@@ -383,6 +385,8 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
     }
 
     // Append puffin blobs into existing manifest entries.
+    let mut need_to_flush_index_manifest = false;
+    let mut need_to_flush_deletion_vector_manifest = false;
     for cur_blob_metadata in blob_metadata.iter() {
         // Handle mooncake hash index v1.
         if cur_blob_metadata.r#type == MOONCAKE_HASH_INDEX_V1 {
@@ -391,6 +395,7 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
                 unsafe { std::mem::transmute::<DataFileProxy, DataFile>(new_data_file) };
             new_file_index_manifest_writer
                 .add_file(data_file, cur_blob_metadata.sequence_number)?;
+            need_to_flush_index_manifest = true;
             continue;
         }
 
@@ -400,6 +405,7 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
         existing_deletion_vector_entries.remove(&referenced_data_filepath);
         let data_file = unsafe { std::mem::transmute::<DataFileProxy, DataFile>(new_data_file) };
         deletion_vector_manifest_writer.add_file(data_file, cur_blob_metadata.sequence_number)?;
+        need_to_flush_deletion_vector_manifest = true;
     }
 
     // Add old deletion vector entries which doesn't get overwritten.
@@ -408,17 +414,22 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
             cur_manifest_entry.data_file().clone(),
             cur_manifest_entry.sequence_number().unwrap(),
         )?;
+        need_to_flush_deletion_vector_manifest = true;
     }
 
     // Flush manifest file.
-    let deletion_vector_manifest = deletion_vector_manifest_writer
-        .write_manifest_file()
-        .await?;
-    let index_file_manifest = new_file_index_manifest_writer.write_manifest_file().await?;
-
+    if need_to_flush_index_manifest {
+        let index_file_manifest = new_file_index_manifest_writer.write_manifest_file().await?;
+        manifest_list_writer.add_manifests(std::iter::once(index_file_manifest))?;
+    }
+    if need_to_flush_deletion_vector_manifest {
+        let deletion_vector_manifest = deletion_vector_manifest_writer
+            .write_manifest_file()
+            .await?;
+        manifest_list_writer.add_manifests(std::iter::once(deletion_vector_manifest))?;
+    }
+    
     // Flush the manifest list, there's no need to rewrite metadata.
-    manifest_list_writer.add_manifests(std::iter::once(deletion_vector_manifest))?;
-    manifest_list_writer.add_manifests(std::iter::once(index_file_manifest))?;
     manifest_list_writer.close().await?;
 
     Ok(())
