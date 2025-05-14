@@ -126,11 +126,17 @@ impl IcebergTableManager {
     }
 
     /// Get a unique puffin filepath under table warehouse uri.
-    fn get_unique_puffin_filepath(&self) -> String {
+    fn get_unique_deletion_vector_filepath(&self) -> String {
         let location_generator =
             DefaultLocationGenerator::new(self.iceberg_table.as_ref().unwrap().metadata().clone())
                 .unwrap();
-        location_generator.generate_location(&format!("{}-puffin.bin", Uuid::new_v4()))
+        location_generator.generate_location(&format!("{}-deletion-vector-v1-puffin.bin", Uuid::new_v4()))
+    }
+    fn get_unique_hash_index_v1_filepath(&self) -> String {
+        let location_generator =
+            DefaultLocationGenerator::new(self.iceberg_table.as_ref().unwrap().metadata().clone())
+                .unwrap();
+        location_generator.generate_location(&format!("{}-hash-index-v1-puffin.bin", Uuid::new_v4()))
     }
 
     /// Get or create an iceberg table, and load full table status into table manager.
@@ -301,7 +307,7 @@ impl IcebergTableManager {
                 table_metadata.next_sequence_number(),
                 blob_properties,
             );
-            let puffin_filepath = self.get_unique_puffin_filepath();
+            let puffin_filepath = self.get_unique_deletion_vector_filepath();
             let mut puffin_writer = puffin_utils::create_puffin_writer(
                 self.iceberg_table.as_ref().unwrap().file_io(),
                 puffin_filepath.clone(),
@@ -360,11 +366,11 @@ impl IcebergTableManager {
     /// TODO(hjiang): Need to configure (1) the number of blobs in a puffin file; and (2) the number of file index in a puffin blob.
     /// For implementation simpicity, put everything in a single file and a single blob.
     async fn sync_file_indices(&mut self, file_indices: &[MooncakeFileIndex]) -> IcebergResult<()> {
-        if file_indices.is_empty() {
+        if file_indices.len() == self.persisted_file_index_ids.len() {
             return Ok(());
         }
 
-        let puffin_filepath = self.get_unique_puffin_filepath();
+        let puffin_filepath = self.get_unique_hash_index_v1_filepath();
         let mut puffin_writer = puffin_utils::create_puffin_writer(
             self.iceberg_table.as_ref().unwrap().file_io(),
             puffin_filepath.clone(),
