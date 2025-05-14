@@ -21,7 +21,7 @@ use iceberg::io::FileIO;
 use iceberg::puffin::{CompressionCodec, PuffinWriter, DELETION_VECTOR_V1};
 use iceberg::spec::{
     DataContentType, DataFile, DataFileFormat, Datum, FormatVersion, ManifestContentType,
-    ManifestListWriter, ManifestWriterBuilder, Struct, TableMetadata,
+    ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Struct, TableMetadata,
 };
 use iceberg::Result as IcebergResult;
 
@@ -321,38 +321,58 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
     };
 
     // Rewrite the deletion vector manifest files.
-    // TODO(hjiang): Double confirm for deletion vector manifest filename.
-    let mut deletion_vector_manifest_writer = ManifestWriterBuilder::new(
-        file_io.new_output(format!(
-            "{}/metadata/{}-m0.avro",
-            table_metadata.location(),
-            Uuid::new_v4()
-        ))?,
-        table_metadata.current_snapshot_id(),
-        /*key_metadata=*/ vec![],
-        table_metadata.current_schema().clone(),
-        table_metadata.default_partition_spec().as_ref().clone(),
-    )
-    .build_v2_deletes();
+    // TODO(hjiang):
+    // 1. Double confirm for deletion vector manifest filename.
+    // 2. If no
+    let mut deletion_vector_manifest_writer: Option<ManifestWriter> = None;
+    let mut file_index_manifest_writer: Option<ManifestWriter> = None;
+    let init_deletion_vector_manifest_writer_for_once =
+        |writer: &mut Option<ManifestWriter>| -> IcebergResult<()> {
+            if writer.is_some() {
+                return Ok(());
+            }
+            let new_writer = ManifestWriterBuilder::new(
+                file_io.new_output(format!(
+                    "{}/metadata/{}-m0.avro",
+                    table_metadata.location(),
+                    Uuid::new_v4()
+                ))?,
+                table_metadata.current_snapshot_id(),
+                /*key_metadata=*/ vec![],
+                table_metadata.current_schema().clone(),
+                table_metadata.default_partition_spec().as_ref().clone(),
+            )
+            .build_v2_deletes();
+            *writer = Some(new_writer);
+            Ok(())
+        };
 
     // Write new file index manifest files.
-    let mut new_file_index_manifest_writer = ManifestWriterBuilder::new(
-        file_io.new_output(format!(
-            "{}/metadata/{}-m0.avro",
-            table_metadata.location(),
-            Uuid::new_v4()
-        ))?,
-        table_metadata.current_snapshot_id(),
-        /*key_metadata=*/ vec![],
-        table_metadata.current_schema().clone(),
-        table_metadata.default_partition_spec().as_ref().clone(),
-    )
-    .build_v2_data();
+    let init_file_index_manifest_writer =
+        |writer: &mut Option<ManifestWriter>| -> IcebergResult<()> {
+            if writer.is_some() {
+                return Ok(());
+            }
+            let new_writer = ManifestWriterBuilder::new(
+                file_io.new_output(format!(
+                    "{}/metadata/{}-m0.avro",
+                    table_metadata.location(),
+                    Uuid::new_v4()
+                ))?,
+                table_metadata.current_snapshot_id(),
+                /*key_metadata=*/ vec![],
+                table_metadata.current_schema().clone(),
+                table_metadata.default_partition_spec().as_ref().clone(),
+            )
+            .build_v2_data();
+            *writer = Some(new_writer);
+            Ok(())
+        };
 
     // Map from referenced data file to deletion vector manifest entry.
     let mut existing_deletion_vector_entries = HashMap::new();
 
-    // Iterate through all manifest files, keep data files and merge all deletion vectors.
+    // Iterate through all manifest files, keep data manifest files (including data files and hash index files) and merge all deletion vectors.
     for cur_manifest_file in manifest_list.entries() {
         if cur_manifest_file.content == ManifestContentType::Data {
             manifest_list_writer.add_manifests([cur_manifest_file.clone()].into_iter())?;
@@ -389,7 +409,10 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
             let new_data_file = get_data_file_for_file_index(puffin_filepath, cur_blob_metadata);
             let data_file =
                 unsafe { std::mem::transmute::<DataFileProxy, DataFile>(new_data_file) };
-            new_file_index_manifest_writer
+            init_file_index_manifest_writer(&mut file_index_manifest_writer)?;
+            file_index_manifest_writer
+                .as_mut()
+                .unwrap()
                 .add_file(data_file, cur_blob_metadata.sequence_number)?;
             continue;
         }
@@ -399,26 +422,41 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
             get_data_file_for_deletion_vector(puffin_filepath, cur_blob_metadata);
         existing_deletion_vector_entries.remove(&referenced_data_filepath);
         let data_file = unsafe { std::mem::transmute::<DataFileProxy, DataFile>(new_data_file) };
-        deletion_vector_manifest_writer.add_file(data_file, cur_blob_metadata.sequence_number)?;
+        init_deletion_vector_manifest_writer_for_once(&mut deletion_vector_manifest_writer)?;
+        deletion_vector_manifest_writer
+            .as_mut()
+            .unwrap()
+            .add_file(data_file, cur_blob_metadata.sequence_number)?;
     }
 
     // Add old deletion vector entries which doesn't get overwritten.
     for (_, cur_manifest_entry) in existing_deletion_vector_entries.drain() {
-        deletion_vector_manifest_writer.add_file(
+        init_deletion_vector_manifest_writer_for_once(&mut deletion_vector_manifest_writer)?;
+        deletion_vector_manifest_writer.as_mut().unwrap().add_file(
             cur_manifest_entry.data_file().clone(),
             cur_manifest_entry.sequence_number().unwrap(),
         )?;
     }
 
     // Flush manifest file.
-    let deletion_vector_manifest = deletion_vector_manifest_writer
-        .write_manifest_file()
-        .await?;
-    let index_file_manifest = new_file_index_manifest_writer.write_manifest_file().await?;
+    if file_index_manifest_writer.is_some() {
+        let index_file_manifest = file_index_manifest_writer
+            .take()
+            .unwrap()
+            .write_manifest_file()
+            .await?;
+        manifest_list_writer.add_manifests(std::iter::once(index_file_manifest))?;
+    }
+    if deletion_vector_manifest_writer.is_some() {
+        let deletion_vector_manifest = deletion_vector_manifest_writer
+            .take()
+            .unwrap()
+            .write_manifest_file()
+            .await?;
+        manifest_list_writer.add_manifests(std::iter::once(deletion_vector_manifest))?;
+    }
 
     // Flush the manifest list, there's no need to rewrite metadata.
-    manifest_list_writer.add_manifests(std::iter::once(deletion_vector_manifest))?;
-    manifest_list_writer.add_manifests(std::iter::once(index_file_manifest))?;
     manifest_list_writer.close().await?;
 
     Ok(())
