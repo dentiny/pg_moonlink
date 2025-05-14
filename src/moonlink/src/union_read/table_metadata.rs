@@ -1,9 +1,12 @@
 use bincode::enc::{write::Writer, Encode, Encoder};
 use bincode::error::EncodeError;
 
+
+
 #[derive(Debug)]
 pub(super) struct TableMetadata {
     pub(super) data_files: Vec<String>,
+    pub(super) deletion_vector: Vec<PuffinDeletionBlob>,
     pub(super) position_deletes: Vec<(u32, u32)>,
 }
 

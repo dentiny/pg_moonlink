@@ -47,13 +47,25 @@ pub(crate) struct SnapshotTableState {
     iceberg_table_manager: IcebergTableManager,
 }
 
+#[derive(Debug)]
+pub struct PuffinDeletionBlob {
+    /// Index of data files.
+    pub data_file_index: u32,
+    pub puffin_filepath: String,
+    pub start_offset: u32,
+    pub blob_size: u32,
+}
+
 pub struct ReadOutput {
     /// Contains two parts:
     /// 1. Committed and persisted data files.
     /// 2. Associated files, which include committed but un-persisted records.
     pub file_paths: Vec<String>,
-    pub deletions: Vec<(u32, u32)>,
-    /// Contains committed but non-persisted record batches.
+    /// Deletion vectors.
+    pub deletion_vectors: Vec<PuffinDeletionBlob>,
+    /// Committed but un-persisted positional deletion records.
+    pub positional_deletions: Vec<(u32 /*file_index*/, u32 /*row_index*/)>,
+    /// Contains committed but non-persisted record batches, which are persisted as temporary data files on local filesystem.
     pub associated_files: Vec<String>,
 }
 
@@ -107,6 +119,9 @@ impl SnapshotTableState {
             )
             .await
             .unwrap();
+
+        // TODO(hjiang): Committed deletion logs should be pruned.
+        self.committed_deletion_log.clear();
 
         self.current_snapshot.snapshot_version
     }
