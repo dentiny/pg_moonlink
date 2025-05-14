@@ -445,6 +445,8 @@ impl IcebergOperation for IcebergTableManager {
         }
         self.persisted_data_files = new_persisted_data_files;
 
+        // TODO(hjiang): Prune in-memory committed deletion logs: only keep un-persisted ones.
+
         // Persist file index changes.
         self.sync_file_indices(file_indices).await?;
 

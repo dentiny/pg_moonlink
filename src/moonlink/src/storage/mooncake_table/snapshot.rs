@@ -5,11 +5,11 @@ use crate::error::Result;
 use crate::storage::iceberg::iceberg_table_manager::{
     IcebergOperation, IcebergTableConfig, IcebergTableManager,
 };
+use crate::storage::iceberg::deletion_vector::DeletionVectorMetadata;
 use crate::storage::index::Index;
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 use crate::storage::mooncake_table::MoonlinkRow;
-use crate::storage::storage_utils::RawDeletionRecord;
-use crate::storage::storage_utils::{ProcessedDeletionRecord, RecordLocation};
+use crate::storage::storage_utils::{ProcessedDeletionRecord, RecordLocation, RawDeletionRecord};
 use parquet::arrow::ArrowWriter;
 use std::collections::BTreeMap;
 use std::mem::take;
@@ -35,7 +35,7 @@ pub(crate) struct SnapshotTableState {
     // 2. Committed and persisted deletion logs, which are reflected at `snapshot::disk_files` along with the corresponding data files
     // 3. Committed but not yet persisted deletion logs
     //
-    // Type-3, committed but not yet persisted deletion logs
+    // Type-3, committed but not yet persisted deletion logs.
     committed_deletion_log: Vec<ProcessedDeletionRecord>,
     uncommitted_deletion_log: Vec<Option<ProcessedDeletionRecord>>,
 

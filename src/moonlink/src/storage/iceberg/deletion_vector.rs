@@ -24,6 +24,16 @@ pub(crate) const DELETION_VECTOR_REFERENCED_DATA_FILE: &str = "referenced-data-f
 // TODO(hjiang): Confirm max batch size when integrate iceberg system with moonlink.
 const HARD_CODE_DELETE_VECTOR_MAX_ROW: usize = 4096;
 
+/// Metadata for deletion vector blob inside of puffin files.
+pub(crate) struct DeletionVectorMetadata {
+    /// Filepath for puffin blob.
+    pub(crate) puffin_filepath: String,
+    /// Start offset for deletion vector blob inside of puffin file.
+    pub(crate) start_offset: u32,
+    /// Blob size for deletion vector blob.
+    pub(crate) blob_size: u32,
+}
+
 pub(crate) struct DeletionVector {
     /// Roaring bitmap representing deleted rows.
     pub(crate) bitmap: RoaringTreemap,
