@@ -1,4 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use futures::executor::block_on;
 use moonlink::GlobalIndexBuilder;
 use rand::Rng;
 use std::path::PathBuf;
@@ -14,7 +15,7 @@ fn bench_index_stress(c: &mut Criterion) {
     builder
         .set_files(files)
         .set_directory(tempfile::tempdir().unwrap().into_path());
-    let index = builder.build_from_flush(vec);
+    let index = block_on(builder.build_from_flush(vec));
 
     group.bench_function("search_10m_entries", |b| {
         b.iter(|| {
