@@ -1,4 +1,3 @@
-pub(crate) mod blob_proxy;
 pub(crate) mod deletion_vector;
 pub(crate) mod file_catalog;
 pub(crate) mod iceberg_table_manager;
