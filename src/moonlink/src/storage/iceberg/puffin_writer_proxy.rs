@@ -321,9 +321,7 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
     };
 
     // Rewrite the deletion vector manifest files.
-    // TODO(hjiang):
-    // 1. Double confirm for deletion vector manifest filename.
-    // 2. If no
+    // TODO(hjiang): Double confirm for deletion vector manifest filename.
     let mut deletion_vector_manifest_writer: Option<ManifestWriter> = None;
     let mut file_index_manifest_writer: Option<ManifestWriter> = None;
     let init_deletion_vector_manifest_writer_for_once =
