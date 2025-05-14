@@ -486,6 +486,10 @@ impl IcebergOperation for IcebergTableManager {
             // Reference: https://iceberg.apache.org/spec/?h=content#sequence-numbers
             let manifest = manifest_file.load_manifest(&file_io).await?;
             let (manifest_entries, _) = manifest.into_parts();
+            assert!(
+                !manifest_entries.is_empty(),
+                "Shouldn't have empty manifest file"
+            );
 
 
             println!("\n\nmanifest entries = {:?}", manifest_entries);
