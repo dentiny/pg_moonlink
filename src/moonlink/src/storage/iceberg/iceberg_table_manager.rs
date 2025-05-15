@@ -238,7 +238,8 @@ impl IcebergTableManager {
 
         IcebergValidation::validate_puffin_manifest_entry(entry)?;
         let deletion_vector = DeletionVector::load_from_dv_blob(file_io.clone(), data_file).await?;
-        let batch_deletion_vector = deletion_vector.take_as_batch_delete_vector();
+        let batch_deletion_vector = deletion_vector
+            .take_as_batch_delete_vector(self.mooncake_table_metadata.config.batch_size());
         data_file_entry.unwrap().deletion_vector = batch_deletion_vector;
 
         Ok(())
@@ -549,10 +550,11 @@ mod tests {
 
     use crate::row::IdentityProp as RowIdentity;
     use crate::row::MoonlinkRow;
-    use crate::row::{IdentityProp, RowValue};
+    use crate::row::RowValue;
     use crate::storage::iceberg::iceberg_table_manager::IcebergTableManager;
     #[cfg(feature = "storage-s3")]
     use crate::storage::iceberg::s3_test_utils;
+    use crate::storage::index::Index;
     use crate::storage::mooncake_table::{
         TableConfig as MooncakeTableConfig, TableMetadata as MooncakeTableMetadata,
     };
@@ -868,6 +870,8 @@ mod tests {
         let path = temp_dir.path().to_path_buf();
         let mooncake_table_metadata =
             create_test_table_metadata(temp_dir.path().to_str().unwrap().to_string());
+        let identity_property = mooncake_table_metadata.identity.clone();
+
         let iceberg_table_config = IcebergTableConfig {
             warehouse_uri,
             namespace: vec!["namespace".to_string()],
@@ -882,7 +886,7 @@ mod tests {
             "test_table".to_string(),
             /*version=*/ 1,
             path,
-            IdentityProp::Keys(vec![0]),
+            identity_property.clone(),
             iceberg_table_config.clone(),
             mooncake_table_config,
         )
