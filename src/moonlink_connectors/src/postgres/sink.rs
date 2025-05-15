@@ -11,7 +11,7 @@ use crate::postgres::util::PostgresTableRow;
 use async_trait::async_trait;
 use moonlink::IcebergTableConfig;
 use moonlink::ReadStateManager;
-use moonlink::{MooncakeTable, TableEvent, TableHandler};
+use moonlink::{MooncakeTable, TableConfig, TableEvent, TableHandler};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -88,6 +88,7 @@ impl BatchSink for Sink {
                 table_path,
                 identity,
                 iceberg_table_config,
+                TableConfig::new(),
             )
             .await;
             let (table_commit_tx, table_commit_rx) = watch::channel(0u64);

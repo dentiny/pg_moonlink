@@ -73,6 +73,7 @@ pub async fn test_table(
         context.path(),
         identity,
         iceberg_table_config,
+        TableConfig::new(),
     )
     .await
 }

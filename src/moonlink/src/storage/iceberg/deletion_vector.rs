@@ -19,10 +19,6 @@ const MIN_SERIALIZED_DELETION_VECTOR_BLOB: usize = 12;
 pub(crate) const DELETION_VECTOR_CADINALITY: &str = "cardinality";
 pub(crate) const DELETION_VECTOR_REFERENCED_DATA_FILE: &str = "referenced-data-file";
 
-// Max number of rows in a batch. Use to convert puffin deletion vector to moonlink batch delete vector.
-// TODO(hjiang): Confirm max batch size when integrate iceberg system with moonlink.
-const HARD_CODE_DELETE_VECTOR_MAX_ROW: usize = 4096;
-
 pub(crate) struct DeletionVector {
     /// Roaring bitmap representing deleted rows.
     pub(crate) bitmap: RoaringTreemap,
@@ -219,8 +215,8 @@ impl DeletionVector {
     }
 
     /// Convert self to `BatchDeletionVector`, after which self ownership is terminated.
-    pub fn take_as_batch_delete_vector(self) -> BatchDeletionVector {
-        let mut batch_delete_vector = BatchDeletionVector::new(HARD_CODE_DELETE_VECTOR_MAX_ROW);
+    pub fn take_as_batch_delete_vector(self, batch_size: usize) -> BatchDeletionVector {
+        let mut batch_delete_vector = BatchDeletionVector::new(batch_size);
         for row_idx in self.bitmap.iter() {
             batch_delete_vector.delete_row(row_idx as usize);
         }
@@ -269,9 +265,13 @@ mod tests {
             create_test_blob_properties(/*deleted_rows=*/ deleted_rows.len()),
         );
         let deserialized_dv = DeletionVector::deserialize(blob).unwrap();
-        for row in deleted_rows {
-            assert!(deserialized_dv.bitmap.contains(row));
+        for row in deleted_rows.iter() {
+            assert!(deserialized_dv.bitmap.contains(*row));
         }
-        assert_eq!(dv.bitmap.len(), deserialized_dv.bitmap.len());
+        assert_eq!(dv.bitmap, deserialized_dv.bitmap);
+
+        // Check conversion into BatchDeletionVector.
+        let batch_deletion_vector = dv.take_as_batch_delete_vector(1024);
+        assert_eq!(batch_deletion_vector.collect_deleted_rows(), deleted_rows);
     }
 }

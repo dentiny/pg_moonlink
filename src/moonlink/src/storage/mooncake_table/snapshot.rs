@@ -1,6 +1,6 @@
 use super::data_batches::{create_batch_from_rows, InMemoryBatch};
 use super::delete_vector::BatchDeletionVector;
-use super::{Snapshot, SnapshotTask, TableMetadata};
+use super::{Snapshot, SnapshotTask, TableConfig, TableMetadata};
 use crate::error::Result;
 use crate::storage::iceberg::iceberg_table_manager::{
     IcebergOperation, IcebergTableConfig, IcebergTableManager,
@@ -10,14 +10,16 @@ use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 use crate::storage::mooncake_table::MoonlinkRow;
 use crate::storage::storage_utils::{ProcessedDeletionRecord, RawDeletionRecord, RecordLocation};
 use parquet::arrow::ArrowWriter;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::mem::take;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub(crate) struct SnapshotTableState {
+    /// Mooncake table config.
+    mooncake_table_config: TableConfig,
+
     /// Current snapshot
-    ///
-    /// TODO(hjiang): Current snapshot should be loaded from iceberg table manager.
     current_snapshot: Snapshot,
 
     /// In memory RecordBatches, maps from batch to in-memory batch.
@@ -85,6 +87,7 @@ impl SnapshotTableState {
             .unwrap();
 
         Self {
+            mooncake_table_config: metadata.config.clone(),
             current_snapshot: snapshot,
             batches,
             rows: None,
@@ -95,7 +98,44 @@ impl SnapshotTableState {
         }
     }
 
+    /// Update data file flush LSN.
+    pub(crate) fn update_flush_lsn(&mut self, lsn: u64) {
+        self.current_snapshot.data_file_flush_lsn = Some(lsn)
+    }
+
+    /// Aggregate committed deletion logs to flush point.
+    fn aggregate_ondisk_committed_deletion_logs(&self) -> HashMap<PathBuf, BatchDeletionVector> {
+        let mut aggregated_deletion_logs = std::collections::HashMap::new();
+        if self.current_snapshot.data_file_flush_lsn.is_none() {
+            return aggregated_deletion_logs;
+        }
+
+        let flush_point_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
+        for cur_deletion_log in self.committed_deletion_log.iter() {
+            assert!(
+                cur_deletion_log.lsn <= self.current_snapshot.snapshot_version,
+                "Committed deletion log {:?} is later than current snapshot LSN {}",
+                cur_deletion_log,
+                self.current_snapshot.snapshot_version
+            );
+            if cur_deletion_log.lsn > flush_point_lsn {
+                continue;
+            }
+            if let RecordLocation::DiskFile(file_id, row_idx) = &cur_deletion_log.pos {
+                let filepath = (*file_id.0).clone();
+                let deletion_vector = aggregated_deletion_logs
+                    .entry(filepath)
+                    .or_insert_with(|| BatchDeletionVector::new(1000));
+                assert!(deletion_vector.delete_row(*row_idx));
+            }
+        }
+        aggregated_deletion_logs
+    }
+
     pub(super) async fn update_snapshot(&mut self, mut task: SnapshotTask) -> u64 {
+        // To reduce iceberg write frequency, only create new iceberg snapshot when there're new data files.
+        let new_data_files = task.get_new_data_files();
+
         self.merge_mem_indices(&mut task);
         self.finalize_batches(&mut task);
         self.integrate_disk_slices(&mut task);
@@ -111,14 +151,34 @@ impl SnapshotTableState {
         }
 
         // Till this point, committed changes have been reflected to current snapshot; sync the latest change to iceberg.
+        // Sync the latest change to iceberg, only triggered when there're new data files generated.
+        // To reduce iceberg persistence overhead, we only snapshot when (1) there're persisted data files, or (2) accumulated unflushed deletion vector exceeds threshold.
+        // To achieve consistency between data files and deletion vectors, we only consider those with persisted data files.
+        //
         // TODO(hjiang): Error handling for snapshot sync-up.
-        self.iceberg_table_manager
-            .sync_snapshot(
-                self.current_snapshot.disk_files.clone(),
-                self.current_snapshot.get_file_indices(),
-            )
-            .await
-            .unwrap();
+        // TODO(hjiang): Need to prune committed deletion logs, will finish in the next PR.
+        // TODO(hjiang): Should also trigger when there're large number of new deletions.
+        //
+        // TODO(hjiang): Add unit test where there're no new disk files.
+        if self.current_snapshot.data_file_flush_lsn.is_some()
+            && new_data_files.len()
+                >= self
+                    .mooncake_table_config
+                    .iceberg_snapshot_new_data_file_count()
+        {
+            let flush_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
+            let aggregated_committed_deletion_logs =
+                self.aggregate_ondisk_committed_deletion_logs();
+            self.iceberg_table_manager
+                .sync_snapshot(
+                    flush_lsn,
+                    new_data_files,
+                    aggregated_committed_deletion_logs,
+                    self.current_snapshot.get_file_indices(),
+                )
+                .await
+                .unwrap();
+        }
 
         // TODO(hjiang): Committed deletion logs should be pruned.
         self.committed_deletion_log.clear();

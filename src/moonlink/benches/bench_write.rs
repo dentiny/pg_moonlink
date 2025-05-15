@@ -1,8 +1,7 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use moonlink::row::{IdentityProp, MoonlinkRow, RowValue};
-use moonlink::IcebergTableConfig;
-use moonlink::MooncakeTable;
+use moonlink::{IcebergTableConfig, MooncakeTable, TableConfig};
 use std::collections::HashMap;
 use tempfile::tempdir;
 use tokio::runtime::Runtime;
@@ -60,6 +59,7 @@ fn bench_write(c: &mut Criterion) {
                     temp_dir.path().to_path_buf(),
                     IdentityProp::SinglePrimitiveKey(0),
                     iceberg_table_config,
+                    TableConfig::new(),
                 )
                 .await;
                 for row in batches.iter() {
@@ -89,6 +89,7 @@ fn bench_write(c: &mut Criterion) {
                     temp_dir.path().to_path_buf(),
                     IdentityProp::SinglePrimitiveKey(0),
                     iceberg_table_config,
+                    TableConfig::new(),
                 )
                 .await;
                 for row in batches.iter() {
@@ -121,6 +122,7 @@ fn bench_write(c: &mut Criterion) {
                     temp_dir.path().to_path_buf(),
                     IdentityProp::SinglePrimitiveKey(0),
                     iceberg_table_config,
+                    TableConfig::new(),
                 ));
                 rt.block_on(async {
                     for row in batches.iter() {

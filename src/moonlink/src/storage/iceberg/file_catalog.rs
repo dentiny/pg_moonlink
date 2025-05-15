@@ -691,6 +691,9 @@ impl Catalog for FileCatalog {
                 } => {
                     builder = builder.set_ref(ref_name, reference.clone())?;
                 }
+                TableUpdate::SetProperties { updates } => {
+                    builder = builder.set_properties(updates.clone())?;
+                }
                 _ => {
                     unreachable!("Only snapshot updates are expected in this implementation");
                 }
@@ -719,7 +722,9 @@ impl Catalog for FileCatalog {
 
         // Manifest files and manifest list has persisted into storage, make modifications based on puffin blobs.
         //
-        // TODO(hjiang): Add unit test for update and check manifest population.
+        // TODO(hjiang):
+        // 1. Add unit test for update and check manifest population.
+        // 2. Here for possible deletion vector and hash index, we potentially rewrite manifest file for data files for twice.
         for (puffin_filepath, puffin_blob_metadata) in self.puffin_blobs.iter() {
             append_puffin_metadata_and_rewrite(
                 &metadata,

@@ -33,6 +33,9 @@ use uuid::Uuid;
 #[cfg(test)]
 use mockall::*;
 
+/// Key for iceberg table property, to record flush lsn.
+const MOONCAKE_TABLE_FLUSH_LSN: &str = "mooncake-table-flush-lsn";
+
 #[derive(Clone, Debug, TypedBuilder)]
 pub struct IcebergTableConfig {
     /// Table warehouse location.
@@ -54,8 +57,7 @@ pub(crate) trait IcebergOperation {
     ///
     /// # Arguments
     ///
-    /// * disk_files: a map from data file paths to batch deletion vector.
-    ///   Data file path could be either local (when upload local data file to iceberg), or remote (after recovery from iceberg table).
+    /// * disk_files: new data files to be managed by iceberg
     /// * file_indices: all file indexes which have been persisted, could be either local or remote.
     ///
     /// Please notice, it takes full content to commit snapshot.
@@ -64,7 +66,9 @@ pub(crate) trait IcebergOperation {
     /// Provide delta change interface, so snapshot doesn't need to store everything.
     async fn sync_snapshot(
         &mut self,
-        disk_files: HashMap<PathBuf, BatchDeletionVector>,
+        flush_lsn: u64,
+        disk_files: Vec<PathBuf>,
+        desired_deletion_vector: HashMap<PathBuf, BatchDeletionVector>,
         file_indices: &[MooncakeFileIndex],
     ) -> IcebergResult<()>;
 
@@ -126,11 +130,19 @@ impl IcebergTableManager {
     }
 
     /// Get a unique puffin filepath under table warehouse uri.
-    fn get_unique_puffin_filepath(&self) -> String {
+    fn get_unique_deletion_vector_filepath(&self) -> String {
         let location_generator =
             DefaultLocationGenerator::new(self.iceberg_table.as_ref().unwrap().metadata().clone())
                 .unwrap();
-        location_generator.generate_location(&format!("{}-puffin.bin", Uuid::new_v4()))
+        location_generator
+            .generate_location(&format!("{}-deletion-vector-v1-puffin.bin", Uuid::new_v4()))
+    }
+    fn get_unique_hash_index_v1_filepath(&self) -> String {
+        let location_generator =
+            DefaultLocationGenerator::new(self.iceberg_table.as_ref().unwrap().metadata().clone())
+                .unwrap();
+        location_generator
+            .generate_location(&format!("{}-hash-index-v1-puffin.bin", Uuid::new_v4()))
     }
 
     /// Get or create an iceberg table, and load full table status into table manager.
@@ -230,7 +242,8 @@ impl IcebergTableManager {
 
         IcebergValidation::validate_puffin_manifest_entry(entry)?;
         let deletion_vector = DeletionVector::load_from_dv_blob(file_io.clone(), data_file).await?;
-        let batch_deletion_vector = deletion_vector.take_as_batch_delete_vector();
+        let batch_deletion_vector = deletion_vector
+            .take_as_batch_delete_vector(self.mooncake_table_metadata.config.batch_size());
         data_file_entry.unwrap().deletion_vector = batch_deletion_vector;
 
         Ok(())
@@ -240,6 +253,7 @@ impl IcebergTableManager {
     fn transform_to_mooncake_snapshot(
         &self,
         persisted_file_indices: Vec<MooncakeFileIndex>,
+        flush_lsn: Option<u64>,
     ) -> MooncakeSnapshot {
         let mut mooncake_snapshot = MooncakeSnapshot::new(self.mooncake_table_metadata.clone());
 
@@ -266,6 +280,9 @@ impl IcebergTableManager {
             in_memory_index: HashSet::new(),
             file_indices: persisted_file_indices,
         };
+
+        // Fill in flush LSN.
+        mooncake_snapshot.data_file_flush_lsn = flush_lsn;
 
         mooncake_snapshot
     }
@@ -325,64 +342,32 @@ impl IcebergTableManager {
         }))
     }
 
-    /// Dump in-memory data files and their deletion vector into iceberg table,
-    /// only the changed part (i.e. new data files, updated deletion vectors) will be persisted into the table.
-    /// Returns new data files to append into iceberg table.
-    async fn sync_data_files_and_deletion_vector(
+    /// Dump local data files into iceberg table.
+    /// Return new iceberg data files for append transaction.
+    async fn sync_data_files(
         &mut self,
-        mut disk_files: HashMap<PathBuf, BatchDeletionVector>,
-    ) -> IcebergResult<(
-        Vec<DataFile>,                   /*new data files*/
-        HashMap<PathBuf, DataFileEntry>, /*new data file entries*/
-    )> {
-        let mut new_data_files = vec![];
-        let mut new_persisted_data_files: HashMap<PathBuf, DataFileEntry> = HashMap::new();
-        let old_persisted_data_files = self.persisted_data_files.clone();
-        for (local_path, deletion_vector) in disk_files.drain() {
-            match old_persisted_data_files.get(&local_path) {
-                Some(entry) => {
-                    if entry.deletion_vector == deletion_vector {
-                        new_persisted_data_files.insert(local_path, entry.clone());
-                        continue;
-                    }
-
-                    // Deletion vector for the current data file has been updated.
-                    let path_str = entry.data_file.file_path().to_string();
-                    let blob_ref = self
-                        .write_deletion_vector(path_str, deletion_vector.clone())
-                        .await?;
-                    new_persisted_data_files.insert(
-                        local_path,
-                        DataFileEntry {
-                            data_file: entry.data_file.clone(),
-                            deletion_vector,
-                            persisted_deletion_vector: blob_ref,
-                        },
-                    );
-                }
-                None => {
-                    let data_file = utils::write_record_batch_to_iceberg(
-                        self.iceberg_table.as_ref().unwrap(),
-                        &local_path,
-                    )
-                    .await?;
-                    let data_filepath = data_file.file_path().to_string();
-                    new_data_files.push(data_file.clone());
-                    let blob_ref = self
-                        .write_deletion_vector(data_filepath, deletion_vector.clone())
-                        .await?;
-                    new_persisted_data_files.insert(
-                        local_path,
-                        DataFileEntry {
-                            data_file,
-                            deletion_vector,
-                            persisted_deletion_vector: blob_ref,
-                        },
-                    );
-                }
-            }
+        new_data_files: Vec<PathBuf>,
+    ) -> IcebergResult<Vec<DataFile>> {
+        let mut new_iceberg_data_files = Vec::with_capacity(new_data_files.len());
+        for local_data_file in new_data_files.into_iter() {
+            let iceberg_data_file = utils::write_record_batch_to_iceberg(
+                self.iceberg_table.as_ref().unwrap(),
+                &local_data_file,
+            )
+            .await?;
+            let old_entry = self.persisted_data_files.insert(
+                local_data_file.clone(),
+                DataFileEntry {
+                    data_file: iceberg_data_file.clone(),
+                    deletion_vector: BatchDeletionVector::new(
+                        self.mooncake_table_metadata.config.batch_size(),
+                    ),
+                },
+            );
+            assert!(old_entry.is_none());
+            new_iceberg_data_files.push(iceberg_data_file);
         }
-        Ok((new_data_files, new_persisted_data_files))
+        Ok(new_iceberg_data_files)
     }
 
     /// Dump file indexes into the iceberg table, only new file indexes will be persisted into the table.
@@ -391,11 +376,11 @@ impl IcebergTableManager {
     /// TODO(hjiang): Need to configure (1) the number of blobs in a puffin file; and (2) the number of file index in a puffin blob.
     /// For implementation simpicity, put everything in a single file and a single blob.
     async fn sync_file_indices(&mut self, file_indices: &[MooncakeFileIndex]) -> IcebergResult<()> {
-        if file_indices.is_empty() {
+        if file_indices.len() == self.persisted_file_index_ids.len() {
             return Ok(());
         }
 
-        let puffin_filepath = self.get_unique_puffin_filepath();
+        let puffin_filepath = self.get_unique_hash_index_v1_filepath();
         let mut puffin_writer = puffin_utils::create_puffin_writer(
             self.iceberg_table.as_ref().unwrap().file_io(),
             puffin_filepath.clone(),
@@ -445,23 +430,22 @@ impl IcebergTableManager {
 
 /// TODO(hjiang): Parallelize all IO operations.
 impl IcebergOperation for IcebergTableManager {
+    /// TODO(hjiang): Persist LSN into iceberg table as well.
     async fn sync_snapshot(
         &mut self,
-        disk_files: HashMap<PathBuf, BatchDeletionVector>,
+        flush_lsn: u64,
+        new_disk_files: Vec<PathBuf>,
+        desired_deletion_vector: HashMap<PathBuf, BatchDeletionVector>,
         file_indices: &[MooncakeFileIndex],
     ) -> IcebergResult<()> {
         // Initialize iceberg table on access.
         self.get_or_create_table().await?;
 
-        // Persist data files and deletion vector changes.
-        let (new_data_files, new_persisted_data_files) =
-            self.sync_data_files_and_deletion_vector(disk_files).await?;
+        // Persist data files.
+        let new_iceberg_data_files = self.sync_data_files(new_disk_files).await?;
 
-        // If no change for both data files and deletion vectors (it also implies no new index files), no need to initiate a new transaction.
-        if self.persisted_data_files == new_persisted_data_files {
-            return Ok(());
-        }
-        self.persisted_data_files = new_persisted_data_files;
+        // Persist committed deletion logs.
+        self.sync_deletion_vector(desired_deletion_vector).await?;
 
         // TODO(hjiang): Prune in-memory committed deletion logs: only keep un-persisted ones.
 
@@ -470,12 +454,19 @@ impl IcebergOperation for IcebergTableManager {
 
         // Only start append action when there're new data files.
         let mut txn = Transaction::new(self.iceberg_table.as_ref().unwrap());
-        if !new_data_files.is_empty() {
+        if !new_iceberg_data_files.is_empty() {
             let mut action =
                 txn.fast_append(/*commit_uuid=*/ None, /*key_metadata=*/ vec![])?;
-            action.add_data_files(new_data_files)?;
+            action.add_data_files(new_iceberg_data_files)?;
             txn = action.apply().await?;
         }
+
+        // Persist flush lsn at table property, it's just a workaround.
+        // The ideal solution is to store at snapshot summary additional properties.
+        // Issue: https://github.com/apache/iceberg-rust/issues/1329
+        let mut prop = HashMap::new();
+        prop.insert(MOONCAKE_TABLE_FLUSH_LSN.to_string(), flush_lsn.to_string());
+        txn = txn.set_properties(prop)?;
 
         self.iceberg_table = Some(txn.commit(&*self.catalog).await?);
         self.catalog.clear_puffin_metadata();
@@ -488,6 +479,10 @@ impl IcebergOperation for IcebergTableManager {
 
         self.get_or_create_table().await?;
         let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
+        let mut flush_lsn: Option<u64> = None;
+        if let Some(lsn) = table_metadata.properties().get(MOONCAKE_TABLE_FLUSH_LSN) {
+            flush_lsn = Some(lsn.parse().unwrap());
+        }
 
         // There's nothing stored in iceberg table (aka, first time initialization).
         if table_metadata.current_snapshot().is_none() {
@@ -510,6 +505,10 @@ impl IcebergOperation for IcebergTableManager {
             // Reference: https://iceberg.apache.org/spec/?h=content#sequence-numbers
             let manifest = manifest_file.load_manifest(&file_io).await?;
             let (manifest_entries, _) = manifest.into_parts();
+            assert!(
+                !manifest_entries.is_empty(),
+                "Shouldn't have empty manifest file"
+            );
 
             // On load, we do two pass on all entries, to check whether all deletion vector has a corresponding data file.
             for entry in manifest_entries.iter() {
@@ -526,7 +525,7 @@ impl IcebergOperation for IcebergTableManager {
             }
         }
 
-        let mooncake_snapshot = self.transform_to_mooncake_snapshot(loaded_file_indices);
+        let mooncake_snapshot = self.transform_to_mooncake_snapshot(loaded_file_indices, flush_lsn);
         Ok(mooncake_snapshot)
     }
 }
@@ -537,13 +536,15 @@ mod tests {
 
     use crate::row::IdentityProp as RowIdentity;
     use crate::row::MoonlinkRow;
-    use crate::row::{IdentityProp, RowValue};
+    use crate::row::RowValue;
     use crate::storage::iceberg::iceberg_table_manager::IcebergTableManager;
     #[cfg(feature = "storage-s3")]
     use crate::storage::iceberg::s3_test_utils;
+
     use crate::storage::mooncake_table::{
         TableConfig as MooncakeTableConfig, TableMetadata as MooncakeTableMetadata,
     };
+
     use crate::storage::MooncakeTable;
 
     use std::collections::HashMap;
@@ -561,17 +562,27 @@ mod tests {
     use parquet::arrow::ArrowWriter;
 
     /// Create test batch deletion vector.
-    fn test_deletion_vector_1() -> BatchDeletionVector {
-        let mut deletion_vector = BatchDeletionVector::new(/*max_rows=*/ 3);
-        deletion_vector.delete_row(2);
-        deletion_vector
+    fn test_committed_deletion_log_1(
+        data_filepath: PathBuf,
+    ) -> HashMap<PathBuf, BatchDeletionVector> {
+        let mut deletion_vector = BatchDeletionVector::new(MooncakeTableConfig::new().batch_size());
+        deletion_vector.delete_row(0);
+
+        let mut deletion_log = HashMap::new();
+        deletion_log.insert(data_filepath.clone(), deletion_vector);
+        deletion_log
     }
     /// Test deletion vector 2 includes deletion vector 1, used to mimic new data file rows deletion situation.
-    fn test_deletion_vector_2() -> BatchDeletionVector {
-        let mut deletion_vector = BatchDeletionVector::new(/*max_rows=*/ 3);
+    fn test_committed_deletion_log_2(
+        data_filepath: PathBuf,
+    ) -> HashMap<PathBuf, BatchDeletionVector> {
+        let mut deletion_vector = BatchDeletionVector::new(MooncakeTableConfig::new().batch_size());
         deletion_vector.delete_row(1);
         deletion_vector.delete_row(2);
-        deletion_vector
+
+        let mut deletion_log = HashMap::new();
+        deletion_log.insert(data_filepath.clone(), deletion_vector);
+        deletion_log
     }
 
     /// Test util function to create arrow schema.
@@ -701,27 +712,29 @@ mod tests {
         let parquet_path = tmp_dir.path().join(data_filename_1);
         write_arrow_record_batch_to_local(parquet_path.as_path(), arrow_schema.clone(), &batch)
             .await?;
-        let mut snapshot_disk_files: HashMap<PathBuf, BatchDeletionVector> = HashMap::new();
-        snapshot_disk_files.insert(parquet_path.clone(), test_deletion_vector_1());
+
         iceberg_table_manager
             .sync_snapshot(
-                snapshot_disk_files.clone(),
+                /*flush_lsn=*/ 0,
+                /*new_disk_files=*/ vec![parquet_path.clone()],
+                /*committed_deletion_log=*/
+                test_committed_deletion_log_1(parquet_path.clone()),
                 /*file_indices=*/ vec![].as_slice(),
             )
             .await?;
 
         // Write second snapshot to iceberg table, with updated deletion vector and new data file.
-        snapshot_disk_files.insert(parquet_path.clone(), test_deletion_vector_2());
-
         let data_filename_2 = "data-2.parquet";
         let batch = test_batch_2(arrow_schema.clone());
         let parquet_path = tmp_dir.path().join(data_filename_2);
         write_arrow_record_batch_to_local(parquet_path.as_path(), arrow_schema.clone(), &batch)
             .await?;
-        snapshot_disk_files.insert(parquet_path.clone(), test_deletion_vector_1());
         iceberg_table_manager
             .sync_snapshot(
-                snapshot_disk_files,
+                /*flush_lsn=*/ 1,
+                /*new_disk_files=*/ vec![parquet_path.clone()],
+                /*committed_deletion_log=*/
+                test_committed_deletion_log_2(parquet_path.clone()),
                 /*file_indices=*/ vec![].as_slice(),
             )
             .await?;
@@ -763,7 +776,7 @@ mod tests {
                 );
                 assert_eq!(
                     deleted_rows,
-                    test_deletion_vector_1().collect_deleted_rows(),
+                    vec![1, 2],
                     "Loaded deletion vector is not the same as the one gets stored."
                 );
                 continue;
@@ -780,7 +793,7 @@ mod tests {
             );
             assert_eq!(
                 deleted_rows,
-                test_deletion_vector_2().collect_deleted_rows(),
+                vec![0],
                 "Loaded deletion vector is not the same as the one gets stored."
             );
         }
@@ -804,24 +817,64 @@ mod tests {
         Ok(())
     }
 
+    /// Testing scenario: attempt an iceberg snapshot when no data file, deletion vector or index files generated.
+    #[tokio::test]
+    async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {
+        let tmp_dir = tempdir()?;
+        let mooncake_table_metadata =
+            create_test_table_metadata(tmp_dir.path().to_str().unwrap().to_string());
+        let config = IcebergTableConfig {
+            warehouse_uri: tmp_dir.path().to_str().unwrap().to_string(),
+            namespace: vec!["namespace".to_string()],
+            table_name: "test_table".to_string(),
+        };
+        let mut iceberg_table_manager =
+            IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone());
+        iceberg_table_manager
+            .sync_snapshot(
+                /*flush_lsn=*/ 0,
+                /*disk_files=*/ vec![],
+                /*desired_deletion_vector=*/ HashMap::new(),
+                /*file_indices=*/ vec![].as_slice(),
+            )
+            .await?;
+
+        // Recover from iceberg snapshot, and check mooncake table snapshot version.
+        let mut iceberg_table_manager =
+            IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone());
+        let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
+        assert!(snapshot.disk_files.is_empty());
+        assert!(snapshot.indices.in_memory_index.is_empty());
+        assert!(snapshot.indices.file_indices.is_empty());
+        assert!(snapshot.data_file_flush_lsn.is_none());
+        Ok(())
+    }
+
+    // TODO(hjiang): Figure out a way to check file index content; for example, search for an item.
     async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergResult<()> {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().to_path_buf();
         let mooncake_table_metadata =
             create_test_table_metadata(temp_dir.path().to_str().unwrap().to_string());
+        let identity_property = mooncake_table_metadata.identity.clone();
+
         let iceberg_table_config = IcebergTableConfig {
             warehouse_uri,
             namespace: vec!["namespace".to_string()],
             table_name: "test_table".to_string(),
         };
         let schema = create_test_arrow_schema();
+        // Create iceberg snapshot whenever `create_snapshot` is called.
+        let mut mooncake_table_config = MooncakeTableConfig::new();
+        mooncake_table_config.iceberg_snapshot_new_data_file_count = 0;
         let mut table = MooncakeTable::new(
             schema.as_ref().clone(),
             "test_table".to_string(),
             /*version=*/ 1,
             path,
-            IdentityProp::Keys(vec![0]),
+            identity_property,
             iceberg_table_config.clone(),
+            mooncake_table_config,
         )
         .await;
 
@@ -873,14 +926,14 @@ mod tests {
             )
         })?;
         // First deletion of row2, which happens in MemSlice.
-        table.delete(row1.clone(), /*lsn=*/ 100);
-        table.flush(/*lsn=*/ 200).await.map_err(|e| {
+        table.delete(row1.clone(), /*flush_lsn=*/ 100);
+        table.flush(/*flush_lsn=*/ 200).await.map_err(|e| {
             IcebergError::new(
                 iceberg::ErrorKind::Unexpected,
                 format!("Failed to flush records to mooncake table because {:?}", e),
             )
         })?;
-        table.commit(/*lsn=*/ 200);
+        table.commit(/*flush_lsn=*/ 200);
         table.create_snapshot().unwrap().await.map_err(|e| {
             IcebergError::new(
                 iceberg::ErrorKind::Unexpected,
@@ -906,6 +959,7 @@ mod tests {
             "Snapshot data files and file indices are {:?}",
             get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
         );
+        assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 200);
 
         // Check the loaded data file is of the expected format and content.
         let file_io = iceberg_table_manager
@@ -940,8 +994,8 @@ mod tests {
         // --------------------------------------
         // Operation series 2: no more additional rows appended, only to delete the first row in the table.
         // Expects to see a new deletion vector, because its corresponding data file has been persisted.
-        table.delete(row2.clone(), /*lsn=*/ 300);
-        table.flush(/*lsn=*/ 300).await.map_err(|e| {
+        table.delete(row2.clone(), /*flush_lsn=*/ 300);
+        table.flush(/*flush_lsn=*/ 300).await.map_err(|e| {
             IcebergError::new(
                 iceberg::ErrorKind::Unexpected,
                 format!(
@@ -950,7 +1004,7 @@ mod tests {
                 ),
             )
         })?;
-        table.commit(/*lsn=*/ 300);
+        table.commit(/*flush_lsn=*/ 300);
         table.create_snapshot().unwrap().await.map_err(|e| {
             IcebergError::new(
                 iceberg::ErrorKind::Unexpected,
@@ -976,6 +1030,7 @@ mod tests {
             "Snapshot data files and file indices are {:?}",
             get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
         );
+        assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 300);
 
         // Check the loaded data file is of the expected format and content.
         let file_io = iceberg_table_manager
@@ -1002,14 +1057,14 @@ mod tests {
         // --------------------------------------
         // Operation series 3: no more additional rows appended, only to delete the last row in the table.
         // Expects to see the existing deletion vector updated, because its corresponding data file has been persisted.
-        table.delete(row3.clone(), /*lsn=*/ 400);
-        table.flush(/*lsn=*/ 400).await.map_err(|e| {
+        table.delete(row3.clone(), /*flush_lsn=*/ 400);
+        table.flush(/*flush_lsn=*/ 400).await.map_err(|e| {
             IcebergError::new(
                 iceberg::ErrorKind::Unexpected,
                 format!("Failed to flush records to mooncake table because {:?}", e),
             )
         })?;
-        table.commit(/*lsn=*/ 400);
+        table.commit(/*flush_lsn=*/ 400);
         table.create_snapshot().unwrap().await.map_err(|e| {
             IcebergError::new(
                 iceberg::ErrorKind::Unexpected,
@@ -1035,6 +1090,7 @@ mod tests {
             "Snapshot data files and file indices are {:?}",
             get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
         );
+        assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 400);
 
         // Check the loaded data file is of the expected format and content.
         let file_io = iceberg_table_manager
@@ -1080,13 +1136,13 @@ mod tests {
                 ),
             )
         })?;
-        table.flush(/*lsn=*/ 500).await.map_err(|e| {
+        table.flush(/*flush_lsn=*/ 500).await.map_err(|e| {
             IcebergError::new(
                 iceberg::ErrorKind::Unexpected,
                 format!("Failed to flush records to mooncake table because {:?}", e),
             )
         })?;
-        table.commit(/*lsn=*/ 500);
+        table.commit(/*flush_lsn=*/ 500);
         table.create_snapshot().unwrap().await.map_err(|e| {
             IcebergError::new(
                 iceberg::ErrorKind::Unexpected,
@@ -1112,6 +1168,7 @@ mod tests {
             "Snapshot data files and file indices are {:?}",
             get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
         );
+        assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 500);
 
         // The old data file and deletion vector is unchanged.
         let old_data_entry = iceberg_table_manager
