@@ -5,7 +5,7 @@ mod storage_utils;
 
 pub use iceberg::iceberg_table_manager::{IcebergTableConfig, IcebergTableManager};
 pub use mooncake_table::{MooncakeTable, TableConfig};
-pub(crate) use mooncake_table::{PuffinDeletionBlob, SnapshotTableState};
+pub(crate) use mooncake_table::{PuffinDeletionBlobAtRead, SnapshotTableState};
 
 #[cfg(test)]
 pub(crate) use mooncake_table::test_utils::*;

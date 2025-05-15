@@ -50,9 +50,9 @@ pub(crate) struct SnapshotTableState {
 }
 
 #[derive(Clone, Debug)]
-pub struct PuffinDeletionBlob {
+pub struct PuffinDeletionBlobAtRead {
     /// Index of local data files.
-    pub data_file_index: u32,
+    pub data_file_index: Option<u32>,
     pub puffin_filepath: String,
     pub start_offset: u32,
     pub blob_size: u32,
@@ -64,7 +64,7 @@ pub struct ReadOutput {
     /// 2. Associated files, which include committed but un-persisted records.
     pub file_paths: Vec<String>,
     /// Deletion vectors.
-    pub deletion_vectors: Vec<PuffinDeletionBlob>,
+    pub deletion_vectors: Vec<PuffinDeletionBlobAtRead>,
     /// Committed but un-persisted positional deletion records.
     pub positional_deletions: Vec<(u32 /*file_index*/, u32 /*row_index*/)>,
     /// Contains committed but non-persisted record batches, which are persisted as temporary data files on local filesystem.
@@ -104,7 +104,9 @@ impl SnapshotTableState {
     }
 
     /// Prune and aggregate committed deletion logs to flush point.
-    fn prune_and_aggregate_ondisk_committed_deletion_logs(&mut self) -> HashMap<PathBuf, BatchDeletionVector> {
+    fn prune_and_aggregate_ondisk_committed_deletion_logs(
+        &mut self,
+    ) -> HashMap<PathBuf, BatchDeletionVector> {
         let mut aggregated_deletion_logs = std::collections::HashMap::new();
         if self.current_snapshot.data_file_flush_lsn.is_none() {
             return aggregated_deletion_logs;
@@ -178,7 +180,8 @@ impl SnapshotTableState {
             let flush_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
             let aggregated_committed_deletion_logs =
                 self.prune_and_aggregate_ondisk_committed_deletion_logs();
-            self.iceberg_table_manager
+            let puffin_blob_ref = self
+                .iceberg_table_manager
                 .sync_snapshot(
                     flush_lsn,
                     new_data_files,
@@ -187,10 +190,17 @@ impl SnapshotTableState {
                 )
                 .await
                 .unwrap();
-        }
 
-        // TODO(hjiang): Committed deletion logs should be pruned.
-        self.committed_deletion_log.clear();
+            // Update current snapshot reference.
+            for (local_disk_file, puffin_blob_ref) in puffin_blob_ref.into_iter() {
+                let entry = self
+                    .current_snapshot
+                    .disk_files
+                    .get_mut(&local_disk_file)
+                    .unwrap();
+                entry.puffin_deletion_blob = Some(puffin_blob_ref);
+            }
+        }
 
         self.current_snapshot.snapshot_version
     }
@@ -232,15 +242,17 @@ impl SnapshotTableState {
     fn integrate_disk_slices(&mut self, task: &mut SnapshotTask) {
         for mut slice in take(&mut task.new_disk_slices) {
             // register new files
-            self.current_snapshot.disk_files.extend(
-                slice
-                    .output_files()
-                    .iter()
-                    .map(|(f, rows)| (f.clone(), DiskFileDeletionVector {
-                        batch_deletion_vector: BatchDeletionVector::new(*rows),
-                        puffin_deletion_blob: None,
-                    })),
-            );
+            self.current_snapshot
+                .disk_files
+                .extend(slice.output_files().iter().map(|(f, rows)| {
+                    (
+                        f.clone(),
+                        DiskFileDeletionVector {
+                            batch_deletion_vector: BatchDeletionVector::new(*rows),
+                            puffin_deletion_blob: None,
+                        },
+                    )
+                }));
 
             // remap deletions written *after* this slice’s LSN
             let write_lsn = slice.lsn();
@@ -432,7 +444,7 @@ impl SnapshotTableState {
     fn get_deletion_records(
         &self,
     ) -> (
-        Vec<PuffinDeletionBlob>, /*deletion vector puffin*/
+        Vec<PuffinDeletionBlobAtRead>, /*deletion vector puffin*/
         Vec<(
             u32, /*index of disk file in snapshot*/
             u32, /*row id*/

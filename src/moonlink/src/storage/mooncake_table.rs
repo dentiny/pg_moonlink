@@ -6,6 +6,7 @@ mod shared_array;
 mod snapshot;
 
 use super::iceberg::iceberg_table_manager::IcebergTableConfig;
+use super::iceberg::puffin_utils::PuffinBlobRef;
 use super::index::{FileIndex, MemIndex, MooncakeIndex};
 use super::storage_utils::{RawDeletionRecord, RecordLocation};
 use crate::error::{Error, Result};
@@ -22,7 +23,7 @@ use arrow_schema::Schema;
 use delete_vector::BatchDeletionVector;
 pub(crate) use disk_slice::DiskSliceWriter;
 use mem_slice::MemSlice;
-pub(crate) use snapshot::{PuffinDeletionBlob, SnapshotTableState};
+pub(crate) use snapshot::{PuffinDeletionBlobAtRead, SnapshotTableState};
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 
@@ -93,7 +94,7 @@ pub(crate) struct DiskFileDeletionVector {
     /// In-memory deletion vector, used for new deletion records process in-memory.
     pub(crate) batch_deletion_vector: BatchDeletionVector,
     /// Persisted iceberg deletion vector puffin blob.
-    pub(crate) puffin_deletion_blob: Option<PuffinDeletionBlob>,
+    pub(crate) puffin_deletion_blob: Option<PuffinBlobRef>,
 }
 
 /// Snapshot contains state of the table at a given time.
@@ -103,7 +104,7 @@ pub struct Snapshot {
     /// table metadata
     pub(crate) metadata: Arc<TableMetadata>,
     /// datafile and their deletion vector.
-    /// TODO(hjiang): Use `String` as key.
+    /// TODO(hjiang): For the initial release and before we figure out a cache design, disk files are always local ones.
     pub(crate) disk_files: HashMap<PathBuf, DiskFileDeletionVector>,
     /// Current snapshot version, which is the mooncake table commit point.
     pub(crate) snapshot_version: u64,
