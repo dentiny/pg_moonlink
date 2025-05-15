@@ -52,7 +52,7 @@ pub(crate) struct SnapshotTableState {
 #[derive(Clone, Debug)]
 pub struct PuffinDeletionBlobAtRead {
     /// Index of local data files.
-    pub data_file_index: Option<u32>,
+    pub data_file_index: u32,
     pub puffin_filepath: String,
     pub start_offset: u32,
     pub blob_size: u32,
@@ -66,7 +66,7 @@ pub struct ReadOutput {
     /// Deletion vectors.
     pub deletion_vectors: Vec<PuffinDeletionBlobAtRead>,
     /// Committed but un-persisted positional deletion records.
-    pub positional_deletions: Vec<(u32 /*file_index*/, u32 /*row_index*/)>,
+    pub positional_deletes: Vec<(u32 /*file_index*/, u32 /*row_index*/)>,
     /// Contains committed but non-persisted record batches, which are persisted as temporary data files on local filesystem.
     pub associated_files: Vec<String>,
 }
@@ -450,6 +450,23 @@ impl SnapshotTableState {
             u32, /*row id*/
         )>,
     ) {
+        // Get puffin blobs for deletion vector.
+        let mut deletion_vector_blob_at_read = vec![];
+        for (idx, (_, disk_deletion_vector)) in self.current_snapshot.disk_files.iter().enumerate()
+        {
+            if disk_deletion_vector.puffin_deletion_blob.is_none() {
+                continue;
+            }
+            let puffin_deletion_blob = disk_deletion_vector.puffin_deletion_blob.as_ref().unwrap();
+            deletion_vector_blob_at_read.push(PuffinDeletionBlobAtRead {
+                data_file_index: idx as u32,
+                puffin_filepath: puffin_deletion_blob.puffin_filepath.clone(),
+                start_offset: puffin_deletion_blob.start_offset,
+                blob_size: puffin_deletion_blob.blob_size,
+            });
+        }
+
+        // Get committed but un-persisted deletion vector.
         let mut ret = Vec::new();
         for deletion in self.committed_deletion_log.iter() {
             if let RecordLocation::DiskFile(file_name, row_id) = &deletion.pos {
@@ -461,14 +478,14 @@ impl SnapshotTableState {
                 }
             }
         }
-        (vec![], ret)
+        (deletion_vector_blob_at_read, ret)
     }
 
     pub(crate) fn request_read(&self) -> Result<ReadOutput> {
         let mut file_paths: Vec<String> =
             Vec::with_capacity(self.current_snapshot.disk_files.len());
         let mut associated_files = Vec::new();
-        let deletions = self.get_deletion_records();
+        let (deletion_vectors_at_read, positional_deletes) = self.get_deletion_records();
         file_paths.extend(
             self.current_snapshot
                 .disk_files
@@ -483,8 +500,8 @@ impl SnapshotTableState {
             associated_files.push(file_path.to_string_lossy().to_string());
             return Ok(ReadOutput {
                 file_paths,
-                deletion_vectors: vec![],
-                positional_deletions: vec![],
+                deletion_vectors: deletion_vectors_at_read,
+                positional_deletes,
                 associated_files,
             });
         }
@@ -537,8 +554,8 @@ impl SnapshotTableState {
         }
         Ok(ReadOutput {
             file_paths,
-            deletion_vectors: vec![],
-            positional_deletions: vec![],
+            deletion_vectors: deletion_vectors_at_read,
+            positional_deletes,
             associated_files,
         })
     }

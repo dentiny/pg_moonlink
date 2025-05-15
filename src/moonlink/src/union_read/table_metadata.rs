@@ -7,7 +7,7 @@ use bincode::error::EncodeError;
 pub(super) struct TableMetadata {
     pub(super) data_files: Vec<String>,
     pub(super) deletion_vector: Vec<PuffinDeletionBlobAtRead>,
-    pub(super) position_deletes: Vec<(u32, u32)>,
+    pub(super) positional_deletes: Vec<(u32, u32)>,
 }
 
 impl Encode for TableMetadata {
@@ -20,8 +20,8 @@ impl Encode for TableMetadata {
             offset = offset.saturating_add(data_file.len());
         }
         write_usize(writer, offset)?;
-        write_usize(writer, self.position_deletes.len())?;
-        for position_delete in &self.position_deletes {
+        write_usize(writer, self.positional_deletes.len())?;
+        for position_delete in &self.positional_deletes {
             write_u32(writer, position_delete.0)?;
             write_u32(writer, position_delete.1)?;
         }
