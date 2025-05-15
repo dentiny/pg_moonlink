@@ -77,6 +77,9 @@ impl SnapshotTableState {
     }
 
     pub(super) async fn update_snapshot(&mut self, mut task: SnapshotTask) -> u64 {
+        // To reduce iceberg write frequency, only create new iceberg snapshot when there're new data files.
+        let new_data_files = task.get_new_data_files();
+
         self.merge_mem_indices(&mut task);
         self.finalize_batches(&mut task);
         self.integrate_disk_slices(&mut task);
@@ -91,15 +94,21 @@ impl SnapshotTableState {
             self.last_commit = cp;
         }
 
-        // Sync the latest change to iceberg.
+        // Sync the latest change to iceberg, only triggered when there're new data files generated.
+        // TODO(hjiang): Should also trigger when there're large number of new deletions.
         // TODO(hjiang): Error handling for snapshot sync-up.
+        // if !new_data_files.is_empty() {
+        // TODO(hjiang): Need to prune committed deletion logs, will finish in the next PR.
         self.iceberg_table_manager
             .sync_snapshot(
-                self.current_snapshot.disk_files.clone(),
+                /*lsn=*/ self.current_snapshot.snapshot_version,
+                new_data_files,
+                &self.committed_deletion_log,
                 self.current_snapshot.get_file_indices(),
             )
             .await
             .unwrap();
+        // }
 
         self.current_snapshot.snapshot_version
     }
@@ -276,7 +285,6 @@ impl SnapshotTableState {
             RecordLocation::MemoryBatch(batch_id, row_id) => {
                 if self.batches.contains_key(batch_id) {
                     // Possible we deleted an in memory row that was flushed
-
                     let res = self
                         .batches
                         .get_mut(batch_id)
