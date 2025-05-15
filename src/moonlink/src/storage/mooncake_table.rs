@@ -26,12 +26,14 @@ pub(crate) use snapshot::SnapshotTableState;
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 
-#[derive(Debug)]
-pub(crate) struct TableConfig {
-    /// mem slice size
-    ///
-    mem_slice_size: usize,
-    batch_size: usize,
+#[derive(Clone, Debug)]
+pub struct TableConfig {
+    /// Number of batch records which decides when to flush records from MemSlice to disk.
+    pub mem_slice_size: usize,
+    /// Max number of rows in MemSlice.
+    pub batch_size: usize,
+    /// Number of new data files to trigger an iceberg snapshot.
+    pub iceberg_snapshot_new_data_file_count: usize,
 }
 
 impl TableConfig {
@@ -39,20 +41,28 @@ impl TableConfig {
     const DEFAULT_MEM_SLICE_SIZE: usize = 4 * 16;
     #[cfg(debug_assertions)]
     const DEFAULT_BATCH_SIZE: usize = 4;
+    #[cfg(debug_assertions)]
+    const DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT: usize = 1;
 
     #[cfg(not(debug_assertions))]
     const DEFAULT_MEM_SLICE_SIZE: usize = 2048 * 16;
     #[cfg(not(debug_assertions))]
     const DEFAULT_BATCH_SIZE: usize = 2048;
+    #[cfg(not(debug_assertions))]
+    const DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT: usize = 1;
 
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             mem_slice_size: Self::DEFAULT_MEM_SLICE_SIZE,
             batch_size: Self::DEFAULT_BATCH_SIZE,
+            iceberg_snapshot_new_data_file_count: Self::DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT,
         }
     }
-    pub(crate) fn batch_size(&self) -> usize {
+    pub fn batch_size(&self) -> usize {
         self.batch_size
+    }
+    pub fn iceberg_snapshot_new_data_file_count(&self) -> usize {
+        self.iceberg_snapshot_new_data_file_count
     }
 }
 
@@ -228,8 +238,8 @@ impl MooncakeTable {
         base_path: PathBuf,
         identity: IdentityProp,
         iceberg_table_config: IcebergTableConfig,
+        table_config: TableConfig,
     ) -> Self {
-        let table_config = TableConfig::new();
         let schema = Arc::new(schema);
         let metadata = Arc::new(TableMetadata {
             name,

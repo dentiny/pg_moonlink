@@ -3,7 +3,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use futures::executor::block_on;
 use moonlink::row::{IdentityProp, MoonlinkRow, RowValue};
 use moonlink::IcebergTableConfig;
-use moonlink::MooncakeTable;
+use moonlink::{MooncakeTable, TableConfig};
 use std::collections::HashMap;
 use std::time::Duration;
 use tempfile::tempdir;
@@ -59,6 +59,7 @@ fn bench_write_mooncake_table(c: &mut Criterion) {
         base_path,
         IdentityProp::SinglePrimitiveKey(0),
         iceberg_table_config,
+        TableConfig::new(),
     ));
 
     let mut total_appended = 0;

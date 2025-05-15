@@ -3,6 +3,7 @@ use crate::storage::IcebergTableConfig;
 use crate::storage::{verify_files_and_deletions, MooncakeTable};
 use crate::table_handler::{TableEvent, TableHandler}; // Ensure this path is correct
 use crate::union_read::{decode_read_state_for_testing, ReadStateManager};
+use crate::TableConfig;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -69,6 +70,7 @@ impl TestEnvironment {
             path,
             IdentityProp::Keys(vec![0]),
             iceberg_table_config,
+            TableConfig::new(),
         )
         .await;
 
