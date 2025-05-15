@@ -4,7 +4,6 @@ use crate::pg_replicate::{
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use chrono::Timelike;
-use iceberg::arrow as IcebergArrow;
 use moonlink::row::RowValue;
 use moonlink::row::{IdentityProp, MoonlinkRow};
 use num_traits::cast::ToPrimitive;
@@ -337,6 +336,7 @@ mod tests {
     use arrow::array::{Date32Array, StringArray, TimestampMicrosecondArray};
     use arrow::datatypes::DataType;
     use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+    use iceberg::arrow as IcebergArrow;
     use moonlink::row::RowValue;
 
     #[test]
