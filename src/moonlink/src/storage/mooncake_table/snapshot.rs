@@ -11,8 +11,9 @@ use crate::storage::mooncake_table::MoonlinkRow;
 use crate::storage::storage_utils::RawDeletionRecord;
 use crate::storage::storage_utils::{ProcessedDeletionRecord, RecordLocation};
 use parquet::arrow::ArrowWriter;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::mem::take;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub(crate) struct SnapshotTableState {
@@ -76,6 +77,27 @@ impl SnapshotTableState {
         }
     }
 
+    /// Aggregate committed deletion logs, whose corresponding data has been persisted into local files.
+    fn aggregate_ondisk_committed_deletion_logs(&self) -> HashMap<PathBuf, BatchDeletionVector> {
+        let mut aggregated_deletion_logs = std::collections::HashMap::new();
+        for cur_deletion_log in self.committed_deletion_log.iter() {
+            assert!(
+                cur_deletion_log.lsn <= self.current_snapshot.snapshot_version,
+                "Committed deletion log {:?} is later than current snapshot LSN {}",
+                cur_deletion_log,
+                self.current_snapshot.snapshot_version
+            );
+            if let RecordLocation::DiskFile(file_id, row_idx) = &cur_deletion_log.pos {
+                let filepath = (*file_id.0).clone();
+                let deletion_vector = aggregated_deletion_logs
+                    .entry(filepath)
+                    .or_insert_with(|| BatchDeletionVector::new(1000));
+                assert!(deletion_vector.delete_row(*row_idx));
+            }
+        }
+        aggregated_deletion_logs
+    }
+
     pub(super) async fn update_snapshot(&mut self, mut task: SnapshotTask) -> u64 {
         // To reduce iceberg write frequency, only create new iceberg snapshot when there're new data files.
         let new_data_files = task.get_new_data_files();
@@ -97,18 +119,21 @@ impl SnapshotTableState {
         // Sync the latest change to iceberg, only triggered when there're new data files generated.
         // TODO(hjiang): Should also trigger when there're large number of new deletions.
         // TODO(hjiang): Error handling for snapshot sync-up.
-        // if !new_data_files.is_empty() {
         // TODO(hjiang): Need to prune committed deletion logs, will finish in the next PR.
+        //
+        // TODO(hjiang): Add unit test where there're no new disk files.
+        // To reduce iceberg persistence overhead, we only snapshot persisted data files, instead of all committed records.
+        // To achieve consistency between data files and deletion vectors, we only consider those with persisted data files.
+        let aggregated_committed_deletion_logs = self.aggregate_ondisk_committed_deletion_logs();
         self.iceberg_table_manager
             .sync_snapshot(
                 /*lsn=*/ self.current_snapshot.snapshot_version,
                 new_data_files,
-                &self.committed_deletion_log,
+                aggregated_committed_deletion_logs,
                 self.current_snapshot.get_file_indices(),
             )
             .await
             .unwrap();
-        // }
 
         self.current_snapshot.snapshot_version
     }
@@ -320,7 +345,7 @@ impl SnapshotTableState {
             let deletion = entry.take().unwrap();
 
             if deletion.lsn <= task.new_lsn {
-                Self::commit_deletion(self, deletion);
+                self.commit_deletion(deletion);
             } else {
                 still_uncommitted.push(Some(deletion));
             }

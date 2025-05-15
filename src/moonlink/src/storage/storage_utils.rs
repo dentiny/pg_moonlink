@@ -48,25 +48,3 @@ impl From<(u64, usize)> for RecordLocation {
         RecordLocation::MemoryBatch(value.0, value.1)
     }
 }
-
-/// TODO(hjiang): Need to pass down mem slice size.
-/// Aggregate all committed deletion logs into <data file, batch deletion vector>, whose LSN is less or equal to [`lsn`].
-pub(crate) fn aggregate_committed_deletion_logs(
-    committed_deletion_logs: &[ProcessedDeletionRecord],
-    lsn: u64,
-) -> std::collections::HashMap<PathBuf, BatchDeletionVector> {
-    let mut aggregated_deletion_logs = std::collections::HashMap::new();
-    for cur_deletion_log in committed_deletion_logs.iter() {
-        if cur_deletion_log.lsn > lsn {
-            continue;
-        }
-        if let RecordLocation::DiskFile(file_id, row_idx) = &cur_deletion_log.pos {
-            let filepath = (*file_id.0).clone();
-            let deletion_vector = aggregated_deletion_logs
-                .entry(filepath)
-                .or_insert_with(|| BatchDeletionVector::new(1000));
-            assert!(deletion_vector.delete_row(*row_idx));
-        }
-    }
-    aggregated_deletion_logs
-}

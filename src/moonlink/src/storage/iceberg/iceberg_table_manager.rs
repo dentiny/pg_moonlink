@@ -66,7 +66,7 @@ pub(crate) trait IcebergOperation {
         &mut self,
         lsn: u64,
         disk_files: Vec<PathBuf>,
-        committed_deletion_log: &[ProcessedDeletionRecord],
+        desired_deletion_vector: HashMap<PathBuf, BatchDeletionVector>,
         file_indices: &[MooncakeFileIndex],
     ) -> IcebergResult<()>;
 
@@ -443,9 +443,9 @@ impl IcebergOperation for IcebergTableManager {
     /// TODO(hjiang): Persist LSN into iceberg table as well.
     async fn sync_snapshot(
         &mut self,
-        lsn: u64,
+        _lsn: u64,
         new_disk_files: Vec<PathBuf>,
-        committed_deletion_log: &[ProcessedDeletionRecord],
+        desired_deletion_vector: HashMap<PathBuf, BatchDeletionVector>,
         file_indices: &[MooncakeFileIndex],
     ) -> IcebergResult<()> {
         // Initialize iceberg table on access.
@@ -455,8 +455,6 @@ impl IcebergOperation for IcebergTableManager {
         let new_iceberg_data_files = self.sync_data_files(new_disk_files).await?;
 
         // Persist committed deletion logs.
-        let desired_deletion_vector =
-            storage_utils::aggregate_committed_deletion_logs(committed_deletion_log, lsn);
         self.sync_deletion_vector(desired_deletion_vector).await?;
 
         // Persist file index changes.
@@ -560,33 +558,27 @@ mod tests {
     use parquet::arrow::ArrowWriter;
 
     /// Create test batch deletion vector.
-    fn test_committed_deletion_log_1(data_filepath: PathBuf) -> Vec<ProcessedDeletionRecord> {
-        vec![ProcessedDeletionRecord {
-            _lookup_key: 0, // unused,
-            pos: RecordLocation::DiskFile(FileId(Arc::new(data_filepath)), /*row_index=*/ 0),
-            lsn: 0,
-        }]
+    fn test_committed_deletion_log_1(
+        data_filepath: PathBuf,
+    ) -> HashMap<PathBuf, BatchDeletionVector> {
+        let mut deletion_vector = BatchDeletionVector::new(MooncakeTableConfig::new().batch_size());
+        deletion_vector.delete_row(0);
+
+        let mut deletion_log = HashMap::new();
+        deletion_log.insert(data_filepath.clone(), deletion_vector);
+        deletion_log
     }
     /// Test deletion vector 2 includes deletion vector 1, used to mimic new data file rows deletion situation.
-    fn test_committed_deletion_log_2(data_filepath: PathBuf) -> Vec<ProcessedDeletionRecord> {
-        vec![
-            ProcessedDeletionRecord {
-                _lookup_key: 0, // unused,
-                pos: RecordLocation::DiskFile(
-                    FileId(Arc::new(data_filepath.clone())),
-                    /*row_index=*/ 1,
-                ),
-                lsn: 0,
-            },
-            ProcessedDeletionRecord {
-                _lookup_key: 0, // unused,
-                pos: RecordLocation::DiskFile(
-                    FileId(Arc::new(data_filepath.clone())),
-                    /*row_index=*/ 2,
-                ),
-                lsn: 1,
-            },
-        ]
+    fn test_committed_deletion_log_2(
+        data_filepath: PathBuf,
+    ) -> HashMap<PathBuf, BatchDeletionVector> {
+        let mut deletion_vector = BatchDeletionVector::new(MooncakeTableConfig::new().batch_size());
+        deletion_vector.delete_row(1);
+        deletion_vector.delete_row(2);
+
+        let mut deletion_log = HashMap::new();
+        deletion_log.insert(data_filepath.clone(), deletion_vector);
+        deletion_log
     }
 
     /// Test util function to create arrow schema.
@@ -722,7 +714,7 @@ mod tests {
                 /*lsn=*/ 0,
                 /*new_disk_files=*/ vec![parquet_path.clone()],
                 /*committed_deletion_log=*/
-                &test_committed_deletion_log_1(parquet_path.clone()),
+                test_committed_deletion_log_1(parquet_path.clone()),
                 /*file_indices=*/ vec![].as_slice(),
             )
             .await?;
@@ -738,7 +730,7 @@ mod tests {
                 /*lsn=*/ 1,
                 /*new_disk_files=*/ vec![parquet_path.clone()],
                 /*committed_deletion_log=*/
-                &test_committed_deletion_log_2(parquet_path.clone()),
+                test_committed_deletion_log_2(parquet_path.clone()),
                 /*file_indices=*/ vec![].as_slice(),
             )
             .await?;
