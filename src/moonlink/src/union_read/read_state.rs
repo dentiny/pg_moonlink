@@ -31,6 +31,7 @@ impl ReadState {
         let metadata = TableMetadata {
             data_files: input.0,
             position_deletes: input.1,
+            deletion_vector: vec![],
         };
         let data = bincode::encode_to_vec(metadata, BINCODE_CONFIG).unwrap(); // TODO
         Self {

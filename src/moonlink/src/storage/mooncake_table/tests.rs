@@ -219,10 +219,10 @@ async fn test_full_row_with_duplication_and_identical() -> Result<()> {
         let table_snapshot = table.snapshot.read().await;
         let ReadOutput {
             file_paths,
-            deletions,
+            positional_deletions,
             ..
         } = table_snapshot.request_read()?;
-        verify_files_and_deletions(&file_paths, deletions.as_slice(), &[1, 2, 3]);
+        verify_files_and_deletions(&file_paths, positional_deletions.as_slice(), &[1, 2, 3]);
     }
 
     Ok(())

@@ -323,7 +323,7 @@ impl IcebergTableManager {
             blob_properties,
         );
         let blob_size = blob.data().len();
-        let puffin_filepath = self.get_unique_puffin_filepath();
+        let puffin_filepath = self.get_unique_deletion_vector_filepath();
         let mut puffin_writer = puffin_utils::create_puffin_writer(
             self.iceberg_table.as_ref().unwrap().file_io(),
             puffin_filepath.clone(),
@@ -362,12 +362,40 @@ impl IcebergTableManager {
                     deletion_vector: BatchDeletionVector::new(
                         self.mooncake_table_metadata.config.batch_size(),
                     ),
+                    persisted_deletion_vector: None,
                 },
             );
             assert!(old_entry.is_none());
             new_iceberg_data_files.push(iceberg_data_file);
         }
         Ok(new_iceberg_data_files)
+    }
+
+    /// Dump committed deletion logs into iceberg table, only the changed part will be persisted.
+    async fn sync_deletion_vector(
+        &mut self,
+        deletion_logs: HashMap<PathBuf, BatchDeletionVector>,
+    ) -> IcebergResult<()> {
+        for (data_filepath, desired_deletion_vector) in deletion_logs.into_iter() {
+            let mut entry = self
+                .persisted_data_files
+                .get(&data_filepath)
+                .unwrap()
+                .clone();
+            if entry.deletion_vector == desired_deletion_vector {
+                continue;
+            }
+            // Data filepath in iceberg table.
+            let iceberg_data_file = entry.data_file.file_path();
+            self.write_deletion_vector(
+                iceberg_data_file.to_string(),
+                desired_deletion_vector.clone(),
+            )
+            .await?;
+            entry.deletion_vector = desired_deletion_vector;
+            self.persisted_data_files.insert(data_filepath, entry);
+        }
+        Ok(())
     }
 
     /// Dump file indexes into the iceberg table, only new file indexes will be persisted into the table.
@@ -430,7 +458,6 @@ impl IcebergTableManager {
 
 /// TODO(hjiang): Parallelize all IO operations.
 impl IcebergOperation for IcebergTableManager {
-    /// TODO(hjiang): Persist LSN into iceberg table as well.
     async fn sync_snapshot(
         &mut self,
         flush_lsn: u64,

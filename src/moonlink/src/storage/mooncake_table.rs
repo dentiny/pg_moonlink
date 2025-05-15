@@ -22,7 +22,7 @@ use arrow_schema::Schema;
 use delete_vector::BatchDeletionVector;
 pub(crate) use disk_slice::DiskSliceWriter;
 use mem_slice::MemSlice;
-pub(crate) use snapshot::SnapshotTableState;
+pub(crate) use snapshot::{PuffinDeletionBlob, SnapshotTableState};
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 

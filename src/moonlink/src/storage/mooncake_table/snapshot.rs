@@ -454,7 +454,8 @@ impl SnapshotTableState {
             associated_files.push(file_path.to_string_lossy().to_string());
             return Ok(ReadOutput {
                 file_paths,
-                deletions,
+                deletion_vectors: vec![],
+                positional_deletions: vec![],
                 associated_files,
             });
         }
@@ -507,7 +508,8 @@ impl SnapshotTableState {
         }
         Ok(ReadOutput {
             file_paths,
-            deletions,
+            deletion_vectors: vec![],
+            positional_deletions: vec![],
             associated_files,
         })
     }

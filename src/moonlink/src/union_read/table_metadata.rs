@@ -1,7 +1,7 @@
+use crate::storage::mooncake_table::PuffinDeletionBlob;
+
 use bincode::enc::{write::Writer, Encode, Encoder};
 use bincode::error::EncodeError;
-
-
 
 #[derive(Debug)]
 pub(super) struct TableMetadata {
@@ -84,6 +84,7 @@ impl TableMetadata {
 
         TableMetadata {
             data_files,
+            deletion_vector: vec![],
             position_deletes,
         }
     }

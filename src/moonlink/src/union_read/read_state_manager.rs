@@ -125,7 +125,7 @@ impl ReadStateManager {
 
             self.last_read_lsn.store(effective_lsn, Ordering::Release);
             *last_read_state_guard = Arc::new(ReadState::new(
-                (read_output.file_paths, read_output.deletions),
+                (read_output.file_paths, read_output.positional_deletions),
                 read_output.associated_files,
             ));
         }
