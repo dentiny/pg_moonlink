@@ -13,6 +13,8 @@ pub(super) struct TableMetadata {
 impl Encode for TableMetadata {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
         let writer = encoder.writer();
+
+        // Write data filepaths offsets.
         write_usize(writer, self.data_files.len())?;
         let mut offset = 0;
         for data_file in &self.data_files {
@@ -20,14 +22,42 @@ impl Encode for TableMetadata {
             offset = offset.saturating_add(data_file.len());
         }
         write_usize(writer, offset)?;
+
+        // Write deletion vector puffin blob filepaths offsets.
+        // Arrange all offsets together (instead of mixing with blob start offset and blob size), so decode side could directly operate on `uint32_t` pointers.
+        write_usize(writer, self.deletion_vector.len())?;
+        let mut offset = 0;
+        for cur_puffin_blob in self.deletion_vector.iter() {
+            write_usize(writer, offset)?;
+            offset = offset.saturating_add(cur_puffin_blob.puffin_filepath.len());
+        }
+        write_usize(writer, offset)?;
+
+        // Write deletion vector puffin blob information.
+        write_usize(writer, self.deletion_vector.len())?;
+        for cur_puffin_blob in self.deletion_vector.iter() {
+            write_u32(writer, cur_puffin_blob.data_file_index)?;
+            write_u32(writer, cur_puffin_blob.start_offset)?;
+            write_u32(writer, cur_puffin_blob.blob_size)?;
+        }
+
+        // Write positional deletion records.
         write_usize(writer, self.positional_deletes.len())?;
         for position_delete in &self.positional_deletes {
             write_u32(writer, position_delete.0)?;
             write_u32(writer, position_delete.1)?;
         }
+
+        // Write data filepaths.
         for data_file in &self.data_files {
             writer.write(data_file.as_bytes())?;
         }
+
+        // Write puffin filepaths.
+        for puffin_file in self.deletion_vector.iter() {
+            writer.write(puffin_file.puffin_filepath.as_bytes())?;
+        }
+
         Ok(())
     }
 }
