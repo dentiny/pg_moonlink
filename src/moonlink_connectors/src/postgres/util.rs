@@ -4,6 +4,7 @@ use crate::pg_replicate::{
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use chrono::Timelike;
+use iceberg::arrow as IcebergArrow;
 use moonlink::row::RowValue;
 use moonlink::row::{IdentityProp, MoonlinkRow};
 use num_traits::cast::ToPrimitive;
@@ -15,7 +16,7 @@ fn postgres_primitive_to_arrow_type(
     typ: &Type,
     name: &str,
     nullable: bool,
-    field_id: i32,
+    field_id: &mut i32,
 ) -> Field {
     let (data_type, extension_name) = match *typ {
         Type::BOOL => (DataType::Boolean, None),
@@ -58,20 +59,30 @@ fn postgres_primitive_to_arrow_type(
     if let Some(ext_name) = extension_name {
         metadata.insert("ARROW:extension:name".to_string(), ext_name);
     }
+    *field_id += 1;
     metadata.insert("PARQUET:field_id".to_string(), field_id.to_string());
     field = field.with_metadata(metadata);
 
     field
 }
 
-fn postgres_type_to_arrow_type(typ: &Type, name: &str, nullable: bool, field_id: i32) -> Field {
+fn postgres_type_to_arrow_type(
+    typ: &Type,
+    name: &str,
+    nullable: bool,
+    field_id: &mut i32,
+) -> Field {
     match typ.kind() {
         Kind::Simple => postgres_primitive_to_arrow_type(typ, name, nullable, field_id),
         Kind::Array(inner) => {
             let item_type = postgres_type_to_arrow_type(
                 inner, /*name=*/ "item", /*nullable=*/ false, field_id,
             );
-            Field::new_list(name, Arc::new(item_type), nullable)
+            let field = Field::new_list(name, Arc::new(item_type), nullable);
+            let mut metadata = HashMap::new();
+            *field_id += 1;
+            metadata.insert("PARQUET:field_id".to_string(), field_id.to_string());
+            field.with_metadata(metadata)
         }
         Kind::Composite(fields) => {
             let fields: Vec<Field> = fields
@@ -96,14 +107,11 @@ fn postgres_type_to_arrow_type(typ: &Type, name: &str, nullable: bool, field_id:
 
 /// Convert a PostgreSQL TableSchema to an Arrow Schema
 pub fn postgres_schema_to_moonlink_schema(table_schema: &TableSchema) -> (Schema, IdentityProp) {
-    let mut field_id = 0; // Used to indicate different columns.
+    let mut field_id = 0; // Used to indicate different columns, including internal fields within complex type.
     let fields: Vec<Field> = table_schema
         .column_schemas
         .iter()
-        .map(|col| {
-            field_id += 1;
-            postgres_type_to_arrow_type(&col.typ, &col.name, col.nullable, field_id)
-        })
+        .map(|col| postgres_type_to_arrow_type(&col.typ, &col.name, col.nullable, &mut field_id))
         .collect();
 
     let identity = match &table_schema.lookup_key {
@@ -358,6 +366,12 @@ mod tests {
                     modifier: 0,
                     nullable: true,
                 },
+                ColumnSchema {
+                    name: "array".to_string(),
+                    typ: Type::BOOL_ARRAY,
+                    modifier: 0,
+                    nullable: true,
+                },
             ],
             lookup_key: LookupKey::Key {
                 name: "id".to_string(),
@@ -367,7 +381,7 @@ mod tests {
 
         let (arrow_schema, identity) = postgres_schema_to_moonlink_schema(&table_schema);
 
-        assert_eq!(arrow_schema.fields().len(), 3);
+        assert_eq!(arrow_schema.fields().len(), 4);
         assert_eq!(arrow_schema.field(0).name(), "id");
         assert_eq!(arrow_schema.field(0).data_type(), &DataType::Int32);
         assert!(!arrow_schema.field(0).is_nullable());
@@ -384,6 +398,15 @@ mod tests {
         assert!(arrow_schema.field(2).is_nullable());
 
         assert_eq!(identity, IdentityProp::SinglePrimitiveKey(0));
+
+        // Convert from arrow schema to iceberg schema, and verify with no conversion issue.
+        let iceberg_arrow = IcebergArrow::arrow_schema_to_schema(&arrow_schema).unwrap();
+        assert_eq!(iceberg_arrow.name_by_field_id(1).unwrap(), "id");
+        assert_eq!(iceberg_arrow.name_by_field_id(2).unwrap(), "name");
+        assert_eq!(iceberg_arrow.name_by_field_id(3).unwrap(), "created_at");
+        assert_eq!(iceberg_arrow.name_by_field_id(4).unwrap(), "array.element");
+        assert_eq!(iceberg_arrow.name_by_field_id(5).unwrap(), "array");
+        assert!(iceberg_arrow.name_by_field_id(6).is_none());
     }
 
     #[test]
