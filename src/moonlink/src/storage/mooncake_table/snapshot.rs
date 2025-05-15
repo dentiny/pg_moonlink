@@ -77,9 +77,19 @@ impl SnapshotTableState {
         }
     }
 
-    /// Aggregate committed deletion logs, whose corresponding data has been persisted into local files.
+    /// Update data file flush LSN.
+    pub(crate) fn update_flush_lsn(&mut self, lsn: u64) {
+        self.current_snapshot.data_file_flush_lsn = Some(lsn)
+    }
+
+    /// Aggregate committed deletion logs to flush point.
     fn aggregate_ondisk_committed_deletion_logs(&self) -> HashMap<PathBuf, BatchDeletionVector> {
         let mut aggregated_deletion_logs = std::collections::HashMap::new();
+        if self.current_snapshot.data_file_flush_lsn.is_none() {
+            return aggregated_deletion_logs;
+        }
+
+        let flush_point_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
         for cur_deletion_log in self.committed_deletion_log.iter() {
             assert!(
                 cur_deletion_log.lsn <= self.current_snapshot.snapshot_version,
@@ -87,6 +97,9 @@ impl SnapshotTableState {
                 cur_deletion_log,
                 self.current_snapshot.snapshot_version
             );
+            if cur_deletion_log.lsn > flush_point_lsn {
+                continue;
+            }
             if let RecordLocation::DiskFile(file_id, row_idx) = &cur_deletion_log.pos {
                 let filepath = (*file_id.0).clone();
                 let deletion_vector = aggregated_deletion_logs

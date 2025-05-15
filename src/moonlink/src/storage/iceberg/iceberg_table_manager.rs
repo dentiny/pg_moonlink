@@ -11,8 +11,6 @@ use crate::storage::index::{FileIndex as MooncakeFileIndex, MooncakeIndex};
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 use crate::storage::mooncake_table::Snapshot as MooncakeSnapshot;
 use crate::storage::mooncake_table::TableMetadata as MooncakeTableMetadata;
-use crate::storage::storage_utils;
-use crate::storage::storage_utils::ProcessedDeletionRecord;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -540,7 +538,7 @@ mod tests {
     use crate::storage::mooncake_table::{
         TableConfig as MooncakeTableConfig, TableMetadata as MooncakeTableMetadata,
     };
-    use crate::storage::storage_utils::{FileId, RecordLocation};
+
     use crate::storage::MooncakeTable;
 
     use std::collections::HashMap;

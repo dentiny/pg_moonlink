@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::mooncake_table::delete_vector::BatchDeletionVector;
 use crate::row::MoonlinkRow;
 
 // UNDONE(UPDATE_DELETE): a better way to handle file ids
