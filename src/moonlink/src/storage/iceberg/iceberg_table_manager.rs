@@ -813,6 +813,38 @@ mod tests {
         Ok(())
     }
 
+    /// Testing scenario: attempt an iceberg snapshot when no data file, deletion vector or index files generated.
+    #[tokio::test]
+    async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {
+        let tmp_dir = tempdir()?;
+        let mooncake_table_metadata =
+            create_test_table_metadata(tmp_dir.path().to_str().unwrap().to_string());
+        let config = IcebergTableConfig {
+            warehouse_uri: tmp_dir.path().to_str().unwrap().to_string(),
+            namespace: vec!["namespace".to_string()],
+            table_name: "test_table".to_string(),
+        };
+        let mut iceberg_table_manager =
+            IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone());
+        iceberg_table_manager
+            .sync_snapshot(
+                /*lsn=*/ 0,
+                /*disk_files=*/ vec![],
+                /*desired_deletion_vector=*/ HashMap::new(),
+                /*file_indices=*/ vec![].as_slice(),
+            )
+            .await?;
+
+        // Recover from iceberg snapshot, and check mooncake table snapshot version.
+        let mut iceberg_table_manager =
+            IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone());
+        let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
+        assert!(snapshot.disk_files.is_empty());
+        assert!(snapshot.indices.in_memory_index.is_empty());
+        assert!(snapshot.indices.file_indices.is_empty());
+        Ok(())
+    }
+
     // TODO(hjiang): Figure out a way to check file index content; for example, search for an item.
     async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergResult<()> {
         let temp_dir = tempfile::tempdir().unwrap();
