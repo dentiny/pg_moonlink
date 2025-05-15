@@ -554,7 +554,7 @@ mod tests {
     use crate::storage::iceberg::iceberg_table_manager::IcebergTableManager;
     #[cfg(feature = "storage-s3")]
     use crate::storage::iceberg::s3_test_utils;
-    use crate::storage::index::Index;
+
     use crate::storage::mooncake_table::{
         TableConfig as MooncakeTableConfig, TableMetadata as MooncakeTableMetadata,
     };
@@ -886,7 +886,7 @@ mod tests {
             "test_table".to_string(),
             /*version=*/ 1,
             path,
-            identity_property.clone(),
+            identity_property,
             iceberg_table_config.clone(),
             mooncake_table_config,
         )

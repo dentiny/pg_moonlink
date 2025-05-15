@@ -226,8 +226,6 @@ impl DeletionVector {
 
 #[cfg(test)]
 mod tests {
-    use crate::TableConfig;
-
     use super::*;
 
     fn create_test_blob_properties(deleted_rows: usize) -> HashMap<String, String> {
