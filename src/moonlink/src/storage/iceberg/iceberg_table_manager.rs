@@ -32,6 +32,9 @@ use uuid::Uuid;
 #[cfg(test)]
 use mockall::*;
 
+/// Key for iceberg table property, to record flush lsn.
+const MOONCAKE_TABLE_FLUSH_LSN: &str = "mooncake-table-flush-lsn";
+
 #[derive(Clone, Debug, TypedBuilder)]
 pub struct IcebergTableConfig {
     /// Table warehouse location.
@@ -245,6 +248,7 @@ impl IcebergTableManager {
     fn transform_to_mooncake_snapshot(
         &self,
         persisted_file_indices: Vec<MooncakeFileIndex>,
+        flush_lsn: Option<u64>,
     ) -> MooncakeSnapshot {
         let mut mooncake_snapshot = MooncakeSnapshot::new(self.mooncake_table_metadata.clone());
 
@@ -271,6 +275,9 @@ impl IcebergTableManager {
             in_memory_index: HashSet::new(),
             file_indices: persisted_file_indices,
         };
+
+        // Fill in flush LSN.
+        mooncake_snapshot.data_file_flush_lsn = flush_lsn;
 
         mooncake_snapshot
     }
@@ -467,6 +474,13 @@ impl IcebergOperation for IcebergTableManager {
             txn = action.apply().await?;
         }
 
+        // Persist flush lsn at table property, it's just a workaround.
+        // The ideal solution is to store at snapshot summary additional properties.
+        // Issue: https://github.com/apache/iceberg-rust/issues/1329
+        let mut prop = HashMap::new();
+        prop.insert(MOONCAKE_TABLE_FLUSH_LSN.to_string(), flush_lsn.to_string());
+        txn = txn.set_properties(prop)?;
+
         self.iceberg_table = Some(txn.commit(&*self.catalog).await?);
         self.catalog.clear_puffin_metadata();
 
@@ -478,6 +492,10 @@ impl IcebergOperation for IcebergTableManager {
 
         self.get_or_create_table().await?;
         let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
+        let mut flush_lsn: Option<u64> = None;
+        if let Some(lsn) = table_metadata.properties().get(MOONCAKE_TABLE_FLUSH_LSN) {
+            flush_lsn = Some(lsn.parse().unwrap());
+        }
 
         // There's nothing stored in iceberg table (aka, first time initialization).
         if table_metadata.current_snapshot().is_none() {
@@ -520,7 +538,7 @@ impl IcebergOperation for IcebergTableManager {
             }
         }
 
-        let mooncake_snapshot = self.transform_to_mooncake_snapshot(loaded_file_indices);
+        let mooncake_snapshot = self.transform_to_mooncake_snapshot(loaded_file_indices, flush_lsn);
         Ok(mooncake_snapshot)
     }
 }
@@ -840,6 +858,7 @@ mod tests {
         assert!(snapshot.disk_files.is_empty());
         assert!(snapshot.indices.in_memory_index.is_empty());
         assert!(snapshot.indices.file_indices.is_empty());
+        assert!(snapshot.data_file_flush_lsn.is_none());
         Ok(())
     }
 
@@ -950,6 +969,7 @@ mod tests {
             "Snapshot data files and file indices are {:?}",
             get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
         );
+        assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 200);
 
         // Check the loaded data file is of the expected format and content.
         let file_io = iceberg_table_manager
@@ -1020,6 +1040,7 @@ mod tests {
             "Snapshot data files and file indices are {:?}",
             get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
         );
+        assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 300);
 
         // Check the loaded data file is of the expected format and content.
         let file_io = iceberg_table_manager
@@ -1079,6 +1100,7 @@ mod tests {
             "Snapshot data files and file indices are {:?}",
             get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
         );
+        assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 400);
 
         // Check the loaded data file is of the expected format and content.
         let file_io = iceberg_table_manager
@@ -1156,6 +1178,7 @@ mod tests {
             "Snapshot data files and file indices are {:?}",
             get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
         );
+        assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 500);
 
         // The old data file and deletion vector is unchanged.
         let old_data_entry = iceberg_table_manager

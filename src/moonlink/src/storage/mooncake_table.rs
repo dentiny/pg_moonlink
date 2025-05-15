@@ -36,6 +36,12 @@ pub struct TableConfig {
     pub iceberg_snapshot_new_data_file_count: usize,
 }
 
+impl Default for TableConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TableConfig {
     #[cfg(debug_assertions)]
     const DEFAULT_MEM_SLICE_SIZE: usize = 4 * 16;

@@ -691,6 +691,9 @@ impl Catalog for FileCatalog {
                 } => {
                     builder = builder.set_ref(ref_name, reference.clone())?;
                 }
+                TableUpdate::SetProperties { updates } => {
+                    builder = builder.set_properties(updates.clone())?;
+                }
                 _ => {
                     unreachable!("Only snapshot updates are expected in this implementation");
                 }
