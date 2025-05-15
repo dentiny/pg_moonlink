@@ -51,7 +51,7 @@ pub(crate) struct SnapshotTableState {
 
 #[derive(Clone, Debug)]
 pub struct PuffinDeletionBlob {
-    /// Index of data files.
+    /// Index of local data files.
     pub data_file_index: u32,
     pub puffin_filepath: String,
     pub start_offset: u32,
@@ -103,14 +103,18 @@ impl SnapshotTableState {
         self.current_snapshot.data_file_flush_lsn = Some(lsn)
     }
 
-    /// Aggregate committed deletion logs to flush point.
-    fn aggregate_ondisk_committed_deletion_logs(&self) -> HashMap<PathBuf, BatchDeletionVector> {
+    /// Prune and aggregate committed deletion logs to flush point.
+    fn prune_and_aggregate_ondisk_committed_deletion_logs(&mut self) -> HashMap<PathBuf, BatchDeletionVector> {
         let mut aggregated_deletion_logs = std::collections::HashMap::new();
         if self.current_snapshot.data_file_flush_lsn.is_none() {
             return aggregated_deletion_logs;
         }
 
+        // Include two types of committed logs: (1) in-memory committed deletion logs; (2) commit point after flush LSN.
+        let mut new_committed_deletion_log = vec![];
+
         let flush_point_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
+        // TODO(hjiang): deletion record is not cheap to copy, we should be able to consume the ownership for `committed_deletion_log`.
         for cur_deletion_log in self.committed_deletion_log.iter() {
             assert!(
                 cur_deletion_log.lsn <= self.current_snapshot.snapshot_version,
@@ -119,6 +123,7 @@ impl SnapshotTableState {
                 self.current_snapshot.snapshot_version
             );
             if cur_deletion_log.lsn > flush_point_lsn {
+                new_committed_deletion_log.push(cur_deletion_log.clone());
                 continue;
             }
             if let RecordLocation::DiskFile(file_id, row_idx) = &cur_deletion_log.pos {
@@ -127,8 +132,13 @@ impl SnapshotTableState {
                     .entry(filepath)
                     .or_insert_with(|| BatchDeletionVector::new(1000));
                 assert!(deletion_vector.delete_row(*row_idx));
+            } else {
+                new_committed_deletion_log.push(cur_deletion_log.clone());
             }
         }
+
+        self.committed_deletion_log = new_committed_deletion_log;
+
         aggregated_deletion_logs
     }
 
@@ -156,7 +166,6 @@ impl SnapshotTableState {
         // To achieve consistency between data files and deletion vectors, we only consider those with persisted data files.
         //
         // TODO(hjiang): Error handling for snapshot sync-up.
-        // TODO(hjiang): Need to prune committed deletion logs, will finish in the next PR.
         // TODO(hjiang): Should also trigger when there're large number of new deletions.
         //
         // TODO(hjiang): Add unit test where there're no new disk files.
@@ -168,7 +177,7 @@ impl SnapshotTableState {
         {
             let flush_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
             let aggregated_committed_deletion_logs =
-                self.aggregate_ondisk_committed_deletion_logs();
+                self.prune_and_aggregate_ondisk_committed_deletion_logs();
             self.iceberg_table_manager
                 .sync_snapshot(
                     flush_lsn,
@@ -423,7 +432,7 @@ impl SnapshotTableState {
     fn get_deletion_records(
         &self,
     ) -> (
-        Vec<String>, /*deletion vector puffin*/
+        Vec<PuffinDeletionBlob>, /*deletion vector puffin*/
         Vec<(
             u32, /*index of disk file in snapshot*/
             u32, /*row id*/
