@@ -10,7 +10,7 @@ use crate::storage::iceberg::utils;
 use crate::storage::iceberg::validation as IcebergValidation;
 use crate::storage::index::{FileIndex as MooncakeFileIndex, MooncakeIndex};
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
-use crate::storage::mooncake_table::Snapshot as MooncakeSnapshot;
+use crate::storage::mooncake_table::{DiskFileDeletionVector, Snapshot as MooncakeSnapshot};
 use crate::storage::mooncake_table::TableMetadata as MooncakeTableMetadata;
 
 use std::collections::{HashMap, HashSet};
@@ -271,7 +271,10 @@ impl IcebergTableManager {
         for (data_filepath, data_file_entry) in self.persisted_data_files.iter() {
             mooncake_snapshot.disk_files.insert(
                 data_filepath.clone(),
-                data_file_entry.deletion_vector.clone(),
+                DiskFileDeletionVector {
+                    puffin_deletion_blob: None,
+                    batch_deletion_vector: data_file_entry.deletion_vector.clone(),
+                }
             );
         }
 

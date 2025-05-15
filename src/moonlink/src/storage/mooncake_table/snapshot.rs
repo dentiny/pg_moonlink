@@ -1,6 +1,6 @@
 use super::data_batches::{create_batch_from_rows, InMemoryBatch};
 use super::delete_vector::BatchDeletionVector;
-use super::{Snapshot, SnapshotTask, TableConfig, TableMetadata};
+use super::{DiskFileDeletionVector, Snapshot, SnapshotTask, TableConfig, TableMetadata};
 use crate::error::Result;
 use crate::storage::iceberg::iceberg_table_manager::{
     IcebergOperation, IcebergTableConfig, IcebergTableManager,
@@ -49,7 +49,7 @@ pub(crate) struct SnapshotTableState {
     iceberg_table_manager: IcebergTableManager,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PuffinDeletionBlob {
     /// Index of data files.
     pub data_file_index: u32,
@@ -227,7 +227,10 @@ impl SnapshotTableState {
                 slice
                     .output_files()
                     .iter()
-                    .map(|(f, rows)| (f.clone(), BatchDeletionVector::new(*rows))),
+                    .map(|(f, rows)| (f.clone(), DiskFileDeletionVector {
+                        batch_deletion_vector: BatchDeletionVector::new(*rows),
+                        puffin_deletion_blob: None,
+                    })),
             );
 
             // remap deletions written *after* this slice’s LSN
@@ -326,6 +329,7 @@ impl SnapshotTableState {
                 .disk_files
                 .get_mut(file_name.0.as_ref())
                 .expect("missing disk file")
+                .batch_deletion_vector
                 .is_deleted(*row_id),
         }
     }
@@ -373,6 +377,7 @@ impl SnapshotTableState {
                     .disk_files
                     .get_mut(file_name.0.as_ref())
                     .unwrap()
+                    .batch_deletion_vector
                     .delete_row(*row_id);
                 assert!(res);
             }
@@ -417,10 +422,13 @@ impl SnapshotTableState {
     /// Get committed deletion record for current snapshot.
     fn get_deletion_records(
         &self,
-    ) -> Vec<(
-        u32, /*index of disk file in snapshot*/
-        u32, /*row id*/
-    )> {
+    ) -> (
+        Vec<String>, /*deletion vector puffin*/
+        Vec<(
+            u32, /*index of disk file in snapshot*/
+            u32, /*row id*/
+        )>,
+    ) {
         let mut ret = Vec::new();
         for deletion in self.committed_deletion_log.iter() {
             if let RecordLocation::DiskFile(file_name, row_id) = &deletion.pos {
@@ -432,7 +440,7 @@ impl SnapshotTableState {
                 }
             }
         }
-        ret
+        (vec![], ret)
     }
 
     pub(crate) fn request_read(&self) -> Result<ReadOutput> {

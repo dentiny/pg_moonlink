@@ -88,6 +88,14 @@ pub struct TableMetadata {
     pub(crate) identity: IdentityProp,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct DiskFileDeletionVector {
+    /// In-memory deletion vector, used for new deletion records process in-memory.
+    pub(crate) batch_deletion_vector: BatchDeletionVector,
+    /// Persisted iceberg deletion vector puffin blob.
+    pub(crate) puffin_deletion_blob: Option<PuffinDeletionBlob>,
+}
+
 /// Snapshot contains state of the table at a given time.
 /// A snapshot maps directly to an iceberg snapshot.
 ///
@@ -96,7 +104,7 @@ pub struct Snapshot {
     pub(crate) metadata: Arc<TableMetadata>,
     /// datafile and their deletion vector.
     /// TODO(hjiang): Use `String` as key.
-    pub(crate) disk_files: HashMap<PathBuf, BatchDeletionVector>,
+    pub(crate) disk_files: HashMap<PathBuf, DiskFileDeletionVector>,
     /// Current snapshot version, which is the mooncake table commit point.
     pub(crate) snapshot_version: u64,
     /// LSN which last data file flush operation happens.
