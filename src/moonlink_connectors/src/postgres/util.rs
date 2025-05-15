@@ -11,7 +11,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_postgres::types::{Kind, Type};
 
-pub fn postgres_primitive_to_arrow_type(typ: &Type, name: &str, nullable: bool) -> Field {
+fn postgres_primitive_to_arrow_type(
+    typ: &Type,
+    name: &str,
+    nullable: bool,
+    field_id: i32,
+) -> Field {
     let (data_type, extension_name) = match *typ {
         Type::BOOL => (DataType::Boolean, None),
         Type::INT2 => (DataType::Int16, None),
@@ -49,42 +54,56 @@ pub fn postgres_primitive_to_arrow_type(typ: &Type, name: &str, nullable: bool) 
     let mut field = Field::new(name, data_type, nullable);
 
     // Apply extension type if specified
+    let mut metadata = HashMap::new();
     if let Some(ext_name) = extension_name {
-        let mut metadata = HashMap::new();
         metadata.insert("ARROW:extension:name".to_string(), ext_name);
-        field = field.with_metadata(metadata);
     }
+    metadata.insert("PARQUET:field_id".to_string(), field_id.to_string());
+    field = field.with_metadata(metadata);
 
     field
 }
 
-pub fn postgres_type_to_arrow_type(typ: &Type, name: &str, nullable: bool) -> Field {
+fn postgres_type_to_arrow_type(typ: &Type, name: &str, nullable: bool, field_id: i32) -> Field {
     match typ.kind() {
-        Kind::Simple => postgres_primitive_to_arrow_type(typ, name, nullable),
+        Kind::Simple => postgres_primitive_to_arrow_type(typ, name, nullable, field_id),
         Kind::Array(inner) => {
-            let item_type = postgres_type_to_arrow_type(inner, "item", false);
+            let item_type = postgres_type_to_arrow_type(
+                inner, /*name=*/ "item", /*nullable=*/ false, field_id,
+            );
             Field::new_list(name, Arc::new(item_type), nullable)
         }
         Kind::Composite(fields) => {
             let fields: Vec<Field> = fields
                 .iter()
-                .map(|f| postgres_type_to_arrow_type(f.type_(), f.name(), true))
+                .map(|f| {
+                    postgres_type_to_arrow_type(
+                        f.type_(),
+                        f.name(),
+                        /*nullable=*/ true,
+                        field_id,
+                    )
+                })
                 .collect();
             Field::new_struct(name, fields, nullable)
         }
         Kind::Enum(_) => Field::new(name, DataType::Utf8, nullable),
         _ => {
-            panic!("Unsupported type: {:?}", typ);
+            todo!("Unsupported type: {:?}", typ);
         }
     }
 }
 
 /// Convert a PostgreSQL TableSchema to an Arrow Schema
 pub fn postgres_schema_to_moonlink_schema(table_schema: &TableSchema) -> (Schema, IdentityProp) {
+    let mut field_id = 0; // Used to indicate different columns.
     let fields: Vec<Field> = table_schema
         .column_schemas
         .iter()
-        .map(|col| postgres_type_to_arrow_type(&col.typ, &col.name, col.nullable))
+        .map(|col| {
+            field_id += 1;
+            postgres_type_to_arrow_type(&col.typ, &col.name, col.nullable, field_id)
+        })
         .collect();
 
     let identity = match &table_schema.lookup_key {
@@ -229,7 +248,7 @@ fn convert_array_cell(cell: ArrayCell) -> Vec<RowValue> {
 
 impl From<PostgresTableRow> for MoonlinkRow {
     fn from(row: PostgresTableRow) -> Self {
-        let mut values = Vec::new();
+        let mut values = Vec::with_capacity(row.0.values.len());
         for cell in row.0.values {
             match cell {
                 Cell::I16(value) => {
