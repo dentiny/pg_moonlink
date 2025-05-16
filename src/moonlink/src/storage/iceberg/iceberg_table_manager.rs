@@ -54,6 +54,11 @@ pub(crate) trait IcebergOperation {
     /// Write a new snapshot to iceberg table.
     /// It could be called for multiple times to write and commit multiple snapshots.
     ///
+    /// - Apart from data files, it also supports deletion vector (which is introduced in v3) and self-defined hash index,
+    ///   both of which are stored in puffin files.
+    /// - For deletion vectors, we store one blob in one puffin file.
+    /// - For hash index, we store one mooncake file index in one puffin file.
+    ///
     /// # Arguments
     ///
     /// * disk_files: new data files to be managed by iceberg
@@ -308,13 +313,7 @@ impl IcebergTableManager {
                     deleted_row_count.to_string(),
                 ),
             ]);
-            let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
-            // TODO(hjiang): Fix sequence number and snapshot id, which should be -1.
-            let blob = iceberg_deletion_vector.serialize(
-                table_metadata.current_snapshot_id().unwrap_or(-1),
-                table_metadata.next_sequence_number(),
-                blob_properties,
-            );
+            let blob = iceberg_deletion_vector.serialize(blob_properties);
             let puffin_filepath = self.get_unique_deletion_vector_filepath();
             let mut puffin_writer = puffin_utils::create_puffin_writer(
                 self.iceberg_table.as_ref().unwrap().file_io(),

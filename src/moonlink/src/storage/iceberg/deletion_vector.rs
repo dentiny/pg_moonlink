@@ -70,12 +70,7 @@ impl DeletionVector {
     /// - len field records the combined length of the vector and magic bytes stored as 4 bytes in big-endian.
     /// - vector is the serialized bitmap in u64 format: https://github.com/RoaringBitmap/RoaringFormatSpec?tab=readme-ov-file#extension-for-64-bit-implementations
     /// - crc32c field is checksum of the magic bytes and serialized vector as 4 bytes in big-endian.
-    pub fn serialize(
-        &self,
-        snapshot_id: i64,
-        seqno: i64,
-        properties: HashMap<String, String>,
-    ) -> Blob {
+    pub fn serialize(&self, properties: HashMap<String, String>) -> Blob {
         DeletionVector::check_properties(&properties);
 
         // Calculate combined length (magic bytes + bitmap).
@@ -133,11 +128,14 @@ impl DeletionVector {
             std::ptr::copy_nonoverlapping(crc_bytes.as_ptr(), ptr.add(offset), crc_bytes.len());
         }
 
+        // Snapshot ID and sequence number are not known at the time the Puffin file is created,
+        // so they're set to -1 in blob metadata for puffin v1.
+        // Reference: https://iceberg.apache.org/puffin-spec/?h=puffin#blob-types
         Blob::builder()
             .r#type(DELETION_VECTOR_V1.to_string())
             .fields(vec![])
-            .snapshot_id(snapshot_id)
-            .sequence_number(seqno)
+            .snapshot_id(-1)
+            .sequence_number(-1)
             .data(data)
             .properties(properties)
             .build()
@@ -244,11 +242,7 @@ mod tests {
     #[test]
     fn test_empty_deletion_vector() {
         let dv = DeletionVector::new();
-        let blob = dv.serialize(
-            /*snapshot_id=*/ 0,
-            /*seqno=*/ 0,
-            create_test_blob_properties(/*deleted_rows=*/ 0),
-        );
+        let blob = dv.serialize(create_test_blob_properties(/*deleted_rows=*/ 0));
         let deserialized_dv = DeletionVector::deserialize(blob).unwrap();
         assert!(dv.bitmap.is_empty());
         assert!(deserialized_dv.bitmap.is_empty());
@@ -259,11 +253,9 @@ mod tests {
         let mut dv = DeletionVector::new();
         let deleted_rows: Vec<u64> = vec![1, 3, 5, 7, 1000];
         dv.mark_rows_deleted(deleted_rows.clone());
-        let blob = dv.serialize(
-            /*snapshot_id=*/ 0,
-            /*seqno=*/ 0,
-            create_test_blob_properties(/*deleted_rows=*/ deleted_rows.len()),
-        );
+        let blob = dv.serialize(create_test_blob_properties(
+            /*deleted_rows=*/ deleted_rows.len(),
+        ));
         let deserialized_dv = DeletionVector::deserialize(blob).unwrap();
         for row in deleted_rows.iter() {
             assert!(deserialized_dv.bitmap.contains(*row));
