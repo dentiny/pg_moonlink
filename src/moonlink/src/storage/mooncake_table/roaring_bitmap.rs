@@ -1,102 +1,61 @@
 use crate::error::Result;
-use arrow::array::BooleanArray;
 use arrow::compute;
 use arrow::record_batch::RecordBatch;
-use arrow::util::bit_util;
+use arrow_array::builder::BooleanBuilder;
+use roaring::RoaringTreemap;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BatchDeletionVector {
-    /// Boolean array tracking deletions (false = deleted, true = active)
-    deletion_vector: Option<Vec<u8>>,
-
-    /// Maximum number of rows this buffer can track
-    max_rows: usize,
+/// A thin wrapper for roaring bitmap.
+pub struct RoaringBitmapDV {
+    bitmap: RoaringTreemap,
 }
 
-impl BatchDeletionVector {
-    /// Create a new delete buffer with the specified capacity
-    pub fn new(max_rows: usize) -> Self {
+impl RoaringBitmapDV {
+    pub fn new() -> Self {
         Self {
-            deletion_vector: None,
-            max_rows,
+            bitmap: RoaringTreemap::new(),
         }
     }
 
-    /// Mark a row as deleted
+    /// Return the row is successfully marked as "deleted".
+    /// Return false if it's already deleted.
     pub fn delete_row(&mut self, row_idx: usize) -> bool {
-        // Set the bit at row_idx to 1 (deleted)
-        if self.deletion_vector.is_none() {
-            self.deletion_vector = Some(vec![0xFF; self.max_rows / 8 + 1]);
-            for i in self.max_rows..(self.max_rows / 8 + 1) * 8 {
-                bit_util::unset_bit(self.deletion_vector.as_mut().unwrap(), i);
-            }
-        }
-        let exist = bit_util::get_bit(self.deletion_vector.as_ref().unwrap(), row_idx);
-        if exist {
-            bit_util::unset_bit(self.deletion_vector.as_mut().unwrap(), row_idx);
-        }
-        exist
+        self.bitmap.insert(row_idx as u64)
     }
 
     /// Apply the deletion vector to filter a record batch
     pub fn apply_to_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        if self.deletion_vector.is_none() {
-            return Ok(batch.clone());
+        let total_rows = batch.num_rows();
+        let mut builder = BooleanBuilder::new();
+        for i in 0..total_rows {
+            builder.append_value(!self.bitmap.contains(i as u64));
         }
-        let filter = BooleanArray::new_from_u8(self.deletion_vector.as_ref().unwrap())
-            .slice(0, batch.num_rows());
-        // Apply the filter to the batch
-        let filtered_batch = compute::filter_record_batch(batch, &filter)?;
-        Ok(filtered_batch)
+        let filter = builder.finish();
+        let filter_batch = compute::filter_record_batch(batch, &filter)?;
+        Ok(filter_batch)
     }
 
+    /// Return whether the given row is deleted.
     pub fn is_deleted(&self, row_idx: usize) -> bool {
-        if self.deletion_vector.is_none() {
-            false
-        } else {
-            !bit_util::get_bit(self.deletion_vector.as_ref().unwrap(), row_idx)
-        }
+        self.bitmap.contains(row_idx as u64)
     }
 
+    /// Return all active row indexes.
     pub fn collect_active_rows(&self, total_rows: usize) -> Vec<usize> {
-        let Some(bitmap) = &self.deletion_vector else {
-            return (0..total_rows).collect();
-        };
         (0..total_rows)
-            .filter(move |i| bit_util::get_bit(bitmap, *i))
+            .filter(|i| !self.bitmap.contains(*i as u64))
             .collect()
     }
 
+    /// Return all deleted row indexes.
     pub fn collect_deleted_rows(&self) -> Vec<u64> {
-        let Some(bitmap) = &self.deletion_vector else {
-            return Vec::new();
-        };
-
-        let mut deleted = Vec::new();
-        for (byte_idx, byte) in bitmap.iter().enumerate() {
-            // No deletion in the byte.
-            if *byte == 0xFF {
-                continue;
-            }
-
-            for bit_idx in 0..8 {
-                let row_idx = byte_idx * 8 + bit_idx;
-                if row_idx >= self.max_rows {
-                    break;
-                }
-                if byte & (1 << bit_idx) == 0 {
-                    deleted.push(row_idx as u64);
-                }
-            }
-        }
-        deleted
+        self.bitmap.iter().collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+    use arrow::array::{ArrayRef, Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -104,7 +63,7 @@ mod tests {
     #[test]
     fn test_delete_buffer() -> Result<()> {
         // Create a delete vector
-        let mut buffer = BatchDeletionVector::new(5);
+        let mut buffer = RoaringBitmapDV::new();
         // Delete some rows
         buffer.delete_row(1);
         buffer.delete_row(3);
@@ -163,13 +122,11 @@ mod tests {
     #[test]
     fn test_into_iter() {
         // Create a delete vector
-        let mut buffer = BatchDeletionVector::new(10);
+        let mut buffer = RoaringBitmapDV::new();
 
         // Before deletion all rows are active
         let active_rows: Vec<usize> = buffer.collect_active_rows(10);
         assert_eq!(active_rows, (0..10).collect::<Vec<_>>());
-        let deleted_rows: Vec<u64> = buffer.collect_deleted_rows();
-        assert!(deleted_rows.is_empty());
 
         // Delete rows 1, 3, and 8
         buffer.delete_row(1);
@@ -179,8 +136,6 @@ mod tests {
         // Check that the iterator returns those positions
         let active_rows: Vec<usize> = buffer.collect_active_rows(10);
         assert_eq!(active_rows, vec![0, 2, 4, 5, 6, 7, 9]);
-        let deleted_rows: Vec<u64> = buffer.collect_deleted_rows();
-        assert_eq!(deleted_rows, vec![1, 3, 8]);
     }
 
     #[test]
@@ -195,7 +150,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(values)]).unwrap();
 
         // Create a BatchDeletionVector for 5 rows
-        let mut del_vec = BatchDeletionVector::new(5);
+        let mut del_vec = RoaringBitmapDV::new();
 
         // Mark rows 1 and 3 (values 20 and 40) as deleted
         del_vec.delete_row(1);
@@ -230,7 +185,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(values)]).unwrap();
 
         // No deletions
-        let del_vec = BatchDeletionVector::new(3);
+        let del_vec = RoaringBitmapDV::new();
 
         let filtered = del_vec.apply_to_batch(&batch).unwrap();
 

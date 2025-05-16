@@ -59,6 +59,11 @@ name = "bench_write"
 harness = false
 required-features = ["bench"]
 
+[[bench]]
+name = "microbench_deletion_vector"
+harness = false
+required-features = ["bench"]
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(profiling_enabled)'] }
 
