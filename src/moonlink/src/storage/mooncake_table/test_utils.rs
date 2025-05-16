@@ -186,7 +186,7 @@ pub fn verify_files_and_deletions(
     let file_io = FileIOBuilder::new_fs_io().build().unwrap();
     let mut position_deletes = position_deletes;
     for cur_blob in deletion_vectors.into_iter() {
-        let blob = block_on(puffin_utils::load_blob_from_puffin_filepath(
+        let blob = block_on(puffin_utils::load_blob_from_puffin_file(
             file_io.clone(),
             &cur_blob.puffin_filepath,
         ))
