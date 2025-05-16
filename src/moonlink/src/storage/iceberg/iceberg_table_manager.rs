@@ -390,10 +390,7 @@ impl IcebergTableManager {
             // Data filepath in iceberg table.
             let iceberg_data_file = entry.data_file.file_path();
             let puffin_blob = self
-                .write_deletion_vector(
-                    iceberg_data_file.to_string(),
-                    entry.deletion_vector.clone(),
-                )
+                .write_deletion_vector(iceberg_data_file.to_string(), entry.deletion_vector.clone())
                 .await?;
             self.persisted_data_files
                 .insert(local_data_filepath.clone(), entry);

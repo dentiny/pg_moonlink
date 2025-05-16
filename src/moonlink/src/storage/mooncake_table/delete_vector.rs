@@ -31,7 +31,7 @@ impl BatchDeletionVector {
         for i in self.max_rows..(self.max_rows / 8 + 1) * 8 {
             bit_util::unset_bit(self.deletion_vector.as_mut().unwrap(), i);
         }
-    } 
+    }
 
     /// Mark a row as deleted
     pub(crate) fn delete_row(&mut self, row_idx: usize) -> bool {
@@ -47,8 +47,7 @@ impl BatchDeletionVector {
     /// Merge with another batch deletion vector.
     pub(crate) fn merge_with(&mut self, rhs: &BatchDeletionVector) {
         assert_eq!(
-            self.max_rows,
-            rhs.max_rows,
+            self.max_rows, rhs.max_rows,
             "Cannot merge deletion vectors with different max rows"
         );
 
@@ -243,5 +242,4 @@ mod tests {
         dv1.merge_with(&dv2);
         assert_eq!(dv1.collect_deleted_rows(), vec![0, 2, 6, 8]);
     }
-
 }

@@ -1,9 +1,9 @@
 use crate::storage::mooncake_table::PuffinDeletionBlobAtRead;
 
+use bincode::config;
 use bincode::enc::{write::Writer, Encode, Encoder};
 use bincode::error::EncodeError;
 use iceberg::puffin;
-use bincode::config;
 
 const BINCODE_CONFIG: config::Configuration = config::standard();
 
@@ -78,8 +78,8 @@ fn write_usize<W: Writer>(writer: &mut W, value: usize) -> Result<(), EncodeErro
 impl TableMetadata {
     pub fn decode(data: &[u8]) -> Self {
         use crate::storage::mooncake_table::PuffinDeletionBlobAtRead;
-        use std::convert::TryInto;
         use bincode::config;
+        use std::convert::TryInto;
 
         let mut cursor = 0;
 
@@ -116,9 +116,9 @@ impl TableMetadata {
             let start_offset = read_u32(data, &mut cursor);
             let blob_size = read_u32(data, &mut cursor);
             deletion_vector_blobs.push(PuffinDeletionBlobAtRead {
-               data_file_index,
-               start_offset,
-               blob_size,
+                data_file_index,
+                start_offset,
+                blob_size,
                 puffin_filepath: "".to_string(), // Temporarily fill in empty string and decode later.
             });
         }
@@ -148,7 +148,8 @@ impl TableMetadata {
         for i in 0..puffin_files_len {
             let start = puffin_file_offsets[i];
             let end = puffin_file_offsets[i + 1];
-            let cur_puffin_filepath = String::from_utf8(data[cursor + start..cursor + end].to_vec()).unwrap();
+            let cur_puffin_filepath =
+                String::from_utf8(data[cursor + start..cursor + end].to_vec()).unwrap();
             deletion_vector_blobs[i].puffin_filepath = cur_puffin_filepath;
         }
         if data_files_len > 0 {
@@ -197,7 +198,7 @@ mod tests {
             ],
             deletion_vector: vec![
                 create_puffin_deletion_blob_1(),
-                create_puffin_deletion_blob_2(),  
+                create_puffin_deletion_blob_2(),
             ],
             positional_deletes: vec![(2, 2)],
         };
@@ -206,5 +207,4 @@ mod tests {
         let decoded_metadata = TableMetadata::decode(data.as_slice());
         assert_eq!(table_metadata, decoded_metadata);
     }
-
 }

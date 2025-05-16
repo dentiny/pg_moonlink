@@ -130,9 +130,10 @@ impl SnapshotTableState {
             }
             if let RecordLocation::DiskFile(file_id, row_idx) = &cur_deletion_log.pos {
                 let filepath = (*file_id.0).clone();
-                let deletion_vector = aggregated_deletion_logs
-                    .entry(filepath)
-                    .or_insert_with(|| BatchDeletionVector::new(self.mooncake_table_config.batch_size()));
+                let deletion_vector =
+                    aggregated_deletion_logs.entry(filepath).or_insert_with(|| {
+                        BatchDeletionVector::new(self.mooncake_table_config.batch_size())
+                    });
                 assert!(deletion_vector.delete_row(*row_idx));
             } else {
                 new_committed_deletion_log.push(cur_deletion_log.clone());

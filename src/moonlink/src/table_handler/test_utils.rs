@@ -194,7 +194,7 @@ pub async fn check_read_snapshot(
     expected_ids: &[i32],
 ) {
     let read_state = read_manager.try_read(Some(target_lsn)).await.unwrap();
-    let (files, deletions) = decode_read_state_for_testing(&read_state);
+    let (files, deletion_vectors, position_deletes) = decode_read_state_for_testing(&read_state);
 
     if files.is_empty() && !expected_ids.is_empty() {
         unreachable!(
@@ -202,5 +202,5 @@ pub async fn check_read_snapshot(
             target_lsn, expected_ids
         );
     }
-    verify_files_and_deletions(&files, &deletions, expected_ids);
+    verify_files_and_deletions(&files, position_deletes, deletion_vectors, expected_ids);
 }

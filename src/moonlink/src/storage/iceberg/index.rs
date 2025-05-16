@@ -174,7 +174,7 @@ impl FileIndexBlob {
         file_io: FileIO,
         puffin_file: &DataFile,
     ) -> IcebergResult<Self> {
-        let blob = puffin_utils::load_blob_from_puffin_file(file_io, puffin_file).await?;
+        let blob = puffin_utils::load_blob_from_puffin_data_entry(file_io, puffin_file).await?;
         FileIndexBlob::from_blob(blob)
     }
 

@@ -210,7 +210,7 @@ impl DeletionVector {
     ///
     /// TODO(hjiang): Add unit test for load blob from local filesystem.
     pub async fn load_from_dv_blob(file_io: FileIO, puffin_file: &DataFile) -> IcebergResult<Self> {
-        let blob = puffin_utils::load_blob_from_puffin_file(file_io, puffin_file).await?;
+        let blob = puffin_utils::load_blob_from_puffin_data_entry(file_io, puffin_file).await?;
         DeletionVector::deserialize(blob)
     }
 

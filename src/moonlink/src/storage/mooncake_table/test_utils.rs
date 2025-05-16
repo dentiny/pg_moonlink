@@ -1,8 +1,13 @@
 use super::*;
 use crate::row::{IdentityProp, RowValue};
+use crate::storage::iceberg::deletion_vector::DeletionVector;
 use crate::storage::iceberg::iceberg_table_manager::IcebergTableConfig;
+use crate::storage::iceberg::puffin_utils;
+use crate::storage::mooncake_table::snapshot::PuffinDeletionBlobAtRead;
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field};
+use futures::executor::block_on;
+use iceberg::io::{FileIO, FileIOBuilder};
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use std::collections::HashSet;
 use std::fs::{create_dir_all, File};
@@ -152,7 +157,7 @@ pub async fn append_commit_flush_snapshot(
     Ok(())
 }
 
-pub fn verify_files_and_deletions(
+fn verify_files_and_deletions_impl(
     files: &[String],
     deletions: &[(u32, u32)],
     expected_ids: &[i32],
@@ -169,4 +174,34 @@ pub fn verify_files_and_deletions(
     }
     res.sort();
     assert_eq!(res, expected_ids);
+}
+
+pub fn verify_files_and_deletions(
+    files: &[String],
+    position_deletes: Vec<(u32, u32)>,
+    deletion_vectors: Vec<PuffinDeletionBlobAtRead>,
+    expected_ids: &[i32],
+) {
+    // Read deletion vector blobs and add to position deletes.
+    let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+    let mut position_deletes = position_deletes;
+    for cur_blob in deletion_vectors.into_iter() {
+        let blob = block_on(puffin_utils::load_blob_from_puffin_filepath(
+            file_io.clone(),
+            &cur_blob.puffin_filepath,
+        ))
+        .unwrap();
+        let dv = DeletionVector::deserialize(blob).unwrap();
+        let batch_deletion_vector = dv.take_as_batch_delete_vector(TableConfig::DEFAULT_BATCH_SIZE);
+        let deleted_rows = batch_deletion_vector.collect_deleted_rows();
+        assert!(!deleted_rows.is_empty());
+        position_deletes.append(
+            &mut deleted_rows
+                .iter()
+                .map(|row_idx| (cur_blob.data_file_index, *row_idx as u32))
+                .collect::<Vec<(u32, u32)>>(),
+        );
+    }
+
+    verify_files_and_deletions_impl(files, &position_deletes, expected_ids)
 }
