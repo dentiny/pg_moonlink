@@ -5,12 +5,13 @@ use crate::storage::iceberg::deletion_vector::{
 use crate::storage::iceberg::index::FileIndexBlob;
 use crate::storage::iceberg::moonlink_catalog::MoonlinkCatalog;
 use crate::storage::iceberg::puffin_utils;
+use crate::storage::iceberg::puffin_utils::PuffinBlobRef;
 use crate::storage::iceberg::utils;
 use crate::storage::iceberg::validation as IcebergValidation;
 use crate::storage::index::{FileIndex as MooncakeFileIndex, MooncakeIndex};
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
-use crate::storage::mooncake_table::Snapshot as MooncakeSnapshot;
 use crate::storage::mooncake_table::TableMetadata as MooncakeTableMetadata;
+use crate::storage::mooncake_table::{DiskFileDeletionVector, Snapshot as MooncakeSnapshot};
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -67,9 +68,9 @@ pub(crate) trait IcebergOperation {
         &mut self,
         flush_lsn: u64,
         disk_files: Vec<PathBuf>,
-        desired_deletion_vector: HashMap<PathBuf, BatchDeletionVector>,
+        new_deletion_vector: HashMap<PathBuf, BatchDeletionVector>,
         file_indices: &[MooncakeFileIndex],
-    ) -> IcebergResult<()>;
+    ) -> IcebergResult<HashMap<PathBuf, PuffinBlobRef>>;
 
     /// Load latest snapshot from iceberg table. Used for recovery and initialization.
     /// Notice this function is supposed to call **only once**.
@@ -79,11 +80,13 @@ pub(crate) trait IcebergOperation {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct DataFileEntry {
+pub(crate) struct DataFileEntry {
     /// Iceberg data file, used to decide what to persist at new commit requests.
     data_file: DataFile,
     /// In-memory deletion vector.
     deletion_vector: BatchDeletionVector,
+    /// Puffin blob for its deletion vector.
+    persisted_deletion_vector: Option<PuffinBlobRef>,
 }
 
 /// TODO(hjiang):
@@ -208,6 +211,7 @@ impl IcebergTableManager {
         let new_data_file_entry = DataFileEntry {
             data_file: data_file.clone(),
             deletion_vector: BatchDeletionVector::new(/*max_rows=*/ 0),
+            persisted_deletion_vector: None,
         };
         let old_entry = self
             .persisted_data_files
@@ -267,7 +271,10 @@ impl IcebergTableManager {
         for (data_filepath, data_file_entry) in self.persisted_data_files.iter() {
             mooncake_snapshot.disk_files.insert(
                 data_filepath.clone(),
-                data_file_entry.deletion_vector.clone(),
+                DiskFileDeletionVector {
+                    puffin_deletion_blob: None,
+                    batch_deletion_vector: data_file_entry.deletion_vector.clone(),
+                },
             );
         }
 
@@ -286,49 +293,55 @@ impl IcebergTableManager {
     /// ---------- store snapshot ----------
     ///
     /// Write deletion vector to puffin file.
+    /// Precondition: batch deletion vector is not empty.
+    ///
+    /// Puffin blob write condition:
+    /// 1. No compression is performed, otherwise it's hard to get blob size without another read operation.
+    /// 2. We put one deletion vector within one puffin file.
     async fn write_deletion_vector(
         &mut self,
         data_file: String,
         deletion_vector: BatchDeletionVector,
-    ) -> IcebergResult<()> {
+    ) -> IcebergResult<PuffinBlobRef> {
         let deleted_rows = deletion_vector.collect_deleted_rows();
-        if deleted_rows.is_empty() {
-            return Ok(());
-        }
+        assert!(!deleted_rows.is_empty());
 
-        if !deleted_rows.is_empty() {
-            // TODO(hjiang): Currently one deletion vector is stored in one puffin file, need to revisit later.
-            let deleted_row_count = deleted_rows.len();
-            let mut iceberg_deletion_vector = DeletionVector::new();
-            iceberg_deletion_vector.mark_rows_deleted(deleted_rows);
-            let blob_properties = HashMap::from([
-                (DELETION_VECTOR_REFERENCED_DATA_FILE.to_string(), data_file),
-                (
-                    DELETION_VECTOR_CADINALITY.to_string(),
-                    deleted_row_count.to_string(),
-                ),
-            ]);
-            let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
-            // TODO(hjiang): Fix sequence number and snapshot id, which should be -1.
-            let blob = iceberg_deletion_vector.serialize(
-                table_metadata.current_snapshot_id().unwrap_or(-1),
-                table_metadata.next_sequence_number(),
-                blob_properties,
-            );
-            let puffin_filepath = self.get_unique_deletion_vector_filepath();
-            let mut puffin_writer = puffin_utils::create_puffin_writer(
-                self.iceberg_table.as_ref().unwrap().file_io(),
-                puffin_filepath.clone(),
-            )
+        // TODO(hjiang): Currently one deletion vector is stored in one puffin file, need to revisit later.
+        let deleted_row_count = deleted_rows.len();
+        let mut iceberg_deletion_vector = DeletionVector::new();
+        iceberg_deletion_vector.mark_rows_deleted(deleted_rows);
+        let blob_properties = HashMap::from([
+            (DELETION_VECTOR_REFERENCED_DATA_FILE.to_string(), data_file),
+            (
+                DELETION_VECTOR_CADINALITY.to_string(),
+                deleted_row_count.to_string(),
+            ),
+        ]);
+        let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
+        // TODO(hjiang): Fix sequence number and snapshot id, which should be -1.
+        let blob = iceberg_deletion_vector.serialize(
+            table_metadata.current_snapshot_id().unwrap_or(-1),
+            table_metadata.next_sequence_number(),
+            blob_properties,
+        );
+        let blob_size = blob.data().len();
+        let puffin_filepath = self.get_unique_deletion_vector_filepath();
+        let mut puffin_writer = puffin_utils::create_puffin_writer(
+            self.iceberg_table.as_ref().unwrap().file_io(),
+            puffin_filepath.clone(),
+        )
+        .await?;
+        puffin_writer.add(blob, CompressionCodec::None).await?;
+
+        self.catalog
+            .record_puffin_metadata_and_close(puffin_filepath.clone(), puffin_writer)
             .await?;
-            puffin_writer.add(blob, CompressionCodec::None).await?;
 
-            self.catalog
-                .record_puffin_metadata_and_close(puffin_filepath, puffin_writer)
-                .await?;
-        }
-
-        Ok(())
+        Ok(PuffinBlobRef {
+            puffin_filepath,
+            start_offset: 4_u32, // Puffin file starts with 4 magic bytes.
+            blob_size: blob_size as u32,
+        })
     }
 
     /// Dump local data files into iceberg table.
@@ -351,6 +364,7 @@ impl IcebergTableManager {
                     deletion_vector: BatchDeletionVector::new(
                         self.mooncake_table_metadata.config.batch_size(),
                     ),
+                    persisted_deletion_vector: None,
                 },
             );
             assert!(old_entry.is_none());
@@ -362,28 +376,30 @@ impl IcebergTableManager {
     /// Dump committed deletion logs into iceberg table, only the changed part will be persisted.
     async fn sync_deletion_vector(
         &mut self,
-        deletion_logs: HashMap<PathBuf, BatchDeletionVector>,
-    ) -> IcebergResult<()> {
-        for (data_filepath, desired_deletion_vector) in deletion_logs.into_iter() {
+        new_deletion_logs: HashMap<PathBuf, BatchDeletionVector>,
+    ) -> IcebergResult<HashMap<PathBuf, PuffinBlobRef>> {
+        let mut puffin_deletion_blobs = HashMap::new();
+        for (local_data_filepath, new_deletion_vector) in new_deletion_logs.into_iter() {
             let mut entry = self
                 .persisted_data_files
-                .get(&data_filepath)
+                .get(&local_data_filepath)
                 .unwrap()
                 .clone();
-            if entry.deletion_vector == desired_deletion_vector {
-                continue;
-            }
+            entry.deletion_vector.merge_with(&new_deletion_vector);
+
             // Data filepath in iceberg table.
             let iceberg_data_file = entry.data_file.file_path();
-            self.write_deletion_vector(
-                iceberg_data_file.to_string(),
-                desired_deletion_vector.clone(),
-            )
-            .await?;
-            entry.deletion_vector = desired_deletion_vector;
-            self.persisted_data_files.insert(data_filepath, entry);
+            let puffin_blob = self
+                .write_deletion_vector(
+                    iceberg_data_file.to_string(),
+                    entry.deletion_vector.clone(),
+                )
+                .await?;
+            self.persisted_data_files
+                .insert(local_data_filepath.clone(), entry);
+            puffin_deletion_blobs.insert(local_data_filepath, puffin_blob);
         }
-        Ok(())
+        Ok(puffin_deletion_blobs)
     }
 
     /// Dump file indexes into the iceberg table, only new file indexes will be persisted into the table.
@@ -446,14 +462,13 @@ impl IcebergTableManager {
 
 /// TODO(hjiang): Parallelize all IO operations.
 impl IcebergOperation for IcebergTableManager {
-    /// TODO(hjiang): Persist LSN into iceberg table as well.
     async fn sync_snapshot(
         &mut self,
         flush_lsn: u64,
         new_disk_files: Vec<PathBuf>,
-        desired_deletion_vector: HashMap<PathBuf, BatchDeletionVector>,
+        new_deletion_vector: HashMap<PathBuf, BatchDeletionVector>,
         file_indices: &[MooncakeFileIndex],
-    ) -> IcebergResult<()> {
+    ) -> IcebergResult<HashMap<PathBuf, PuffinBlobRef>> {
         // Initialize iceberg table on access.
         self.get_or_create_table().await?;
 
@@ -461,7 +476,7 @@ impl IcebergOperation for IcebergTableManager {
         let new_iceberg_data_files = self.sync_data_files(new_disk_files).await?;
 
         // Persist committed deletion logs.
-        self.sync_deletion_vector(desired_deletion_vector).await?;
+        let deletion_puffin_blobs = self.sync_deletion_vector(new_deletion_vector).await?;
 
         // Persist file index changes.
         self.sync_file_indices(file_indices).await?;
@@ -485,7 +500,7 @@ impl IcebergOperation for IcebergTableManager {
         self.iceberg_table = Some(txn.commit(&*self.catalog).await?);
         self.catalog.clear_puffin_metadata();
 
-        Ok(())
+        Ok(deletion_puffin_blobs)
     }
 
     async fn load_snapshot_from_table(&mut self) -> IcebergResult<MooncakeSnapshot> {
@@ -999,7 +1014,7 @@ mod tests {
             expected_arrow_batch, loaded_arrow_batch
         );
 
-        let deleted_rows = deletion_vector.collect_deleted_rows();
+        let deleted_rows = deletion_vector.batch_deletion_vector.collect_deleted_rows();
         assert!(
             deleted_rows.is_empty(),
             "There should be no deletion vector in iceberg table."
@@ -1060,7 +1075,7 @@ mod tests {
             expected_arrow_batch, loaded_arrow_batch
         );
 
-        let deleted_rows = deletion_vector.collect_deleted_rows();
+        let deleted_rows = deletion_vector.batch_deletion_vector.collect_deleted_rows();
         let expected_deleted_rows = vec![0_u64];
         assert_eq!(
             deleted_rows, expected_deleted_rows,
@@ -1120,7 +1135,7 @@ mod tests {
             expected_arrow_batch, loaded_arrow_batch
         );
 
-        let deleted_rows = deletion_vector.collect_deleted_rows();
+        let deleted_rows = deletion_vector.batch_deletion_vector.collect_deleted_rows();
         let expected_deleted_rows = vec![0_u64, 1_u64];
         assert_eq!(
             deleted_rows, expected_deleted_rows,
@@ -1219,7 +1234,7 @@ mod tests {
             expected_arrow_batch, loaded_arrow_batch
         );
 
-        let deleted_rows = deletion_vector.collect_deleted_rows();
+        let deleted_rows = deletion_vector.batch_deletion_vector.collect_deleted_rows();
         assert!(
             deleted_rows.is_empty(),
             "The new appended data file should have no deletion vector aside, but actually it contains deletion vector {:?}",

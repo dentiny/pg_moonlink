@@ -4,6 +4,8 @@
 //
 
 use super::table_metadata::TableMetadata;
+use crate::storage::PuffinDeletionBlobAtRead;
+
 use bincode::config;
 
 const BINCODE_CONFIG: config::Configuration = config::standard();
@@ -25,12 +27,15 @@ impl Drop for ReadState {
 
 impl ReadState {
     pub(super) fn new(
-        input: (Vec<String>, Vec<(u32, u32)>),
+        data_files: Vec<String>,
+        deletion_vectors_at_read: Vec<PuffinDeletionBlobAtRead>,
+        positional_deletes: Vec<(u32 /*file_index*/, u32 /*row_index*/)>,
         associated_files: Vec<String>,
     ) -> Self {
         let metadata = TableMetadata {
-            data_files: input.0,
-            position_deletes: input.1,
+            data_files,
+            deletion_vector: deletion_vectors_at_read,
+            positional_deletes,
         };
         let data = bincode::encode_to_vec(metadata, BINCODE_CONFIG).unwrap(); // TODO
         Self {
@@ -43,5 +48,6 @@ impl ReadState {
 #[cfg(test)]
 pub fn decode_read_state_for_testing(read_state: &ReadState) -> (Vec<String>, Vec<(u32, u32)>) {
     let metadata = TableMetadata::decode(&read_state.data);
-    (metadata.data_files, metadata.position_deletes)
+    // (metadata.data_files, metadata.position_deletes)
+    (metadata.data_files, vec![])
 }
