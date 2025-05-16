@@ -20,14 +20,14 @@ pub struct MoonlinkBackend<T: Eq + Hash> {
 
 impl<T: Eq + Hash> Default for MoonlinkBackend<T> {
     fn default() -> Self {
-        Self::new(DEFAULT_MOONLINK_TABLE_BATH_PATH.to_string())
+        Self::new(DEFAULT_MOONLINK_TABLE_BATH_PATH)
     }
 }
 
 impl<T: Eq + Hash> MoonlinkBackend<T> {
-    pub fn new(base_path: String) -> Self {
+    pub fn new(base_path: &str) -> Self {
         Self {
-            moonlink_table_base_path: std::fs::canonicalize(&base_path)
+            moonlink_table_base_path: std::fs::canonicalize(base_path)
                 .unwrap()
                 .to_str()
                 .unwrap()
@@ -85,8 +85,7 @@ mod tests {
     async fn test_moonlink_service() {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let uri = "postgresql://postgres:postgres@postgres:5432/postgres";
-        let service =
-            MoonlinkBackend::<&'static str>::new(temp_dir.path().to_str().unwrap().to_string());
+        let service = MoonlinkBackend::<&'static str>::new(temp_dir.path().to_str().unwrap());
         // connect to postgres and create a table
         let (client, connection) = connect(uri, NoTls).await.unwrap();
         tokio::spawn(async move {
