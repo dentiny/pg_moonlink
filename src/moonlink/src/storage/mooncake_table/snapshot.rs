@@ -66,7 +66,7 @@ pub struct ReadOutput {
     /// Deletion vectors persisted in puffin files.
     pub deletion_vectors: Vec<PuffinDeletionBlobAtRead>,
     /// Committed but un-persisted positional deletion records.
-    pub positional_deletes: Vec<(u32 /*file_index*/, u32 /*row_index*/)>,
+    pub position_deletes: Vec<(u32 /*file_index*/, u32 /*row_index*/)>,
     /// Contains committed but non-persisted record batches, which are persisted as temporary data files on local filesystem.
     pub associated_files: Vec<String>,
 }
@@ -486,7 +486,7 @@ impl SnapshotTableState {
         let mut file_paths: Vec<String> =
             Vec::with_capacity(self.current_snapshot.disk_files.len());
         let mut associated_files = Vec::new();
-        let (deletion_vectors_at_read, positional_deletes) = self.get_deletion_records();
+        let (deletion_vectors_at_read, position_deletes) = self.get_deletion_records();
         file_paths.extend(
             self.current_snapshot
                 .disk_files
@@ -502,7 +502,7 @@ impl SnapshotTableState {
             return Ok(ReadOutput {
                 file_paths,
                 deletion_vectors: deletion_vectors_at_read,
-                positional_deletes,
+                position_deletes,
                 associated_files,
             });
         }
@@ -556,7 +556,7 @@ impl SnapshotTableState {
         Ok(ReadOutput {
             file_paths,
             deletion_vectors: deletion_vectors_at_read,
-            positional_deletes,
+            position_deletes,
             associated_files,
         })
     }

@@ -29,13 +29,13 @@ impl ReadState {
     pub(super) fn new(
         data_files: Vec<String>,
         deletion_vectors_at_read: Vec<PuffinDeletionBlobAtRead>,
-        positional_deletes: Vec<(u32 /*file_index*/, u32 /*row_index*/)>,
+        position_deletes: Vec<(u32 /*file_index*/, u32 /*row_index*/)>,
         associated_files: Vec<String>,
     ) -> Self {
         let metadata = TableMetadata {
             data_files,
-            deletion_vector: deletion_vectors_at_read,
-            positional_deletes,
+            deletion_vectors: deletion_vectors_at_read,
+            position_deletes,
         };
         let data = bincode::encode_to_vec(metadata, BINCODE_CONFIG).unwrap(); // TODO
         Self {
@@ -52,7 +52,7 @@ pub fn decode_read_state_for_testing(
     let metadata = TableMetadata::decode(&read_state.data);
     (
         metadata.data_files,
-        metadata.deletion_vector,
-        metadata.positional_deletes,
+        metadata.deletion_vectors,
+        metadata.position_deletes,
     )
 }

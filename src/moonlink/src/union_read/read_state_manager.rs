@@ -28,7 +28,7 @@ impl ReadStateManager {
             last_read_state: RwLock::new(Arc::new(ReadState::new(
                 /*data_files=*/ vec![],
                 /*deletion_vectors_at_read=*/ vec![],
-                /*positional_deletes=*/ vec![],
+                /*position_deletes=*/ vec![],
                 /*associated_files=*/ vec![],
             ))),
             table_snapshot,
@@ -132,7 +132,7 @@ impl ReadStateManager {
             *last_read_state_guard = Arc::new(ReadState::new(
                 read_output.file_paths,
                 read_output.deletion_vectors,
-                read_output.positional_deletes,
+                read_output.position_deletes,
                 read_output.associated_files,
             ));
         }

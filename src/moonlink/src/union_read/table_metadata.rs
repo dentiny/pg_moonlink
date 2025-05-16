@@ -6,8 +6,8 @@ use bincode::error::EncodeError;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct TableMetadata {
     pub(super) data_files: Vec<String>,
-    pub(super) deletion_vector: Vec<PuffinDeletionBlobAtRead>,
-    pub(super) positional_deletes: Vec<(u32, u32)>,
+    pub(super) deletion_vectors: Vec<PuffinDeletionBlobAtRead>,
+    pub(super) position_deletes: Vec<(u32, u32)>,
 }
 
 impl Encode for TableMetadata {
@@ -25,24 +25,24 @@ impl Encode for TableMetadata {
 
         // Write deletion vector puffin blob filepaths offsets.
         // Arrange all offsets together (instead of mixing with blob start offset and blob size), so decode side could directly operate on `uint32_t` pointers.
-        write_usize(writer, self.deletion_vector.len())?;
+        write_usize(writer, self.deletion_vectors.len())?;
         let mut offset = 0;
-        for cur_puffin_blob in self.deletion_vector.iter() {
+        for cur_puffin_blob in self.deletion_vectors.iter() {
             write_usize(writer, offset)?;
             offset = offset.saturating_add(cur_puffin_blob.puffin_filepath.len());
         }
         write_usize(writer, offset)?;
 
         // Write deletion vector puffin blob information.
-        for cur_puffin_blob in self.deletion_vector.iter() {
+        for cur_puffin_blob in self.deletion_vectors.iter() {
             write_u32(writer, cur_puffin_blob.data_file_index)?;
             write_u32(writer, cur_puffin_blob.start_offset)?;
             write_u32(writer, cur_puffin_blob.blob_size)?;
         }
 
         // Write positional deletion records.
-        write_usize(writer, self.positional_deletes.len())?;
-        for position_delete in &self.positional_deletes {
+        write_usize(writer, self.position_deletes.len())?;
+        for position_delete in &self.position_deletes {
             write_u32(writer, position_delete.0)?;
             write_u32(writer, position_delete.1)?;
         }
@@ -53,7 +53,7 @@ impl Encode for TableMetadata {
         }
 
         // Write puffin filepaths.
-        for puffin_file in self.deletion_vector.iter() {
+        for puffin_file in self.deletion_vectors.iter() {
             writer.write(puffin_file.puffin_filepath.as_bytes())?;
         }
 
@@ -106,12 +106,12 @@ impl TableMetadata {
         }
 
         // Read deletion vector blobs.
-        let mut deletion_vector_blobs = Vec::with_capacity(puffin_files_len);
+        let mut deletion_vectors_blobs = Vec::with_capacity(puffin_files_len);
         for _ in 0..puffin_files_len {
             let data_file_index = read_u32(data, &mut cursor);
             let start_offset = read_u32(data, &mut cursor);
             let blob_size = read_u32(data, &mut cursor);
-            deletion_vector_blobs.push(PuffinDeletionBlobAtRead {
+            deletion_vectors_blobs.push(PuffinDeletionBlobAtRead {
                 data_file_index,
                 start_offset,
                 blob_size,
@@ -146,7 +146,7 @@ impl TableMetadata {
             let end = puffin_file_offsets[i + 1];
             let cur_puffin_filepath =
                 String::from_utf8(data[cursor + start..cursor + end].to_vec()).unwrap();
-            deletion_vector_blobs[i].puffin_filepath = cur_puffin_filepath;
+            deletion_vectors_blobs[i].puffin_filepath = cur_puffin_filepath;
         }
         if data_files_len > 0 {
             cursor += puffin_file_offsets.last().unwrap();
@@ -154,8 +154,8 @@ impl TableMetadata {
 
         TableMetadata {
             data_files,
-            deletion_vector: deletion_vector_blobs,
-            positional_deletes: position_deletes,
+            deletion_vectors: deletion_vectors_blobs,
+            position_deletes,
         }
     }
 }
@@ -193,11 +193,11 @@ mod tests {
                 "/tmp/iceberg_test/data/2.parquet".to_string(),
                 "/tmp/iceberg-rust/data/temp.parquet".to_string(), // associate file
             ],
-            deletion_vector: vec![
+            deletion_vectors: vec![
                 create_puffin_deletion_blob_1(),
                 create_puffin_deletion_blob_2(),
             ],
-            positional_deletes: vec![(2, 2)],
+            position_deletes: vec![(2, 2)],
         };
         let data = bincode::encode_to_vec(table_metadata.clone(), BINCODE_CONFIG).unwrap();
 
