@@ -57,8 +57,8 @@ impl BatchDeletionVector {
         self.initialize_vector();
         let len = self.max_rows / 8 + 1;
         let self_vec = self.deletion_vector.as_mut().unwrap();
-        for i in 0..len {
-            self_vec[i] &= rhs.deletion_vector.as_ref().unwrap()[i];
+        for (i, val) in self_vec.iter_mut().enumerate().take(len) {
+            *val &= rhs.deletion_vector.as_ref().unwrap()[i];
         }
     }
 
@@ -123,7 +123,7 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use std::collections::HashMap;
-    use std::f64::consts::E;
+
     use std::sync::Arc;
 
     #[test]

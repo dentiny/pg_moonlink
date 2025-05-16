@@ -1,11 +1,7 @@
 use crate::storage::mooncake_table::PuffinDeletionBlobAtRead;
 
-use bincode::config;
 use bincode::enc::{write::Writer, Encode, Encoder};
 use bincode::error::EncodeError;
-use iceberg::puffin;
-
-const BINCODE_CONFIG: config::Configuration = config::standard();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct TableMetadata {
@@ -78,7 +74,7 @@ fn write_usize<W: Writer>(writer: &mut W, value: usize) -> Result<(), EncodeErro
 impl TableMetadata {
     pub fn decode(data: &[u8]) -> Self {
         use crate::storage::mooncake_table::PuffinDeletionBlobAtRead;
-        use bincode::config;
+
         use std::convert::TryInto;
 
         let mut cursor = 0;
@@ -166,9 +162,10 @@ impl TableMetadata {
 
 #[cfg(test)]
 mod tests {
-    use iceberg::table::Table;
-
     use super::*;
+    use bincode::config;
+
+    const BINCODE_CONFIG: config::Configuration = config::standard();
 
     /// Util function to create a puffin deletion blob.
     fn create_puffin_deletion_blob_1() -> PuffinDeletionBlobAtRead {

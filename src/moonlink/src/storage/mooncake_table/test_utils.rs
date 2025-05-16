@@ -7,7 +7,7 @@ use crate::storage::mooncake_table::snapshot::PuffinDeletionBlobAtRead;
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field};
 use futures::executor::block_on;
-use iceberg::io::{FileIO, FileIOBuilder};
+use iceberg::io::FileIOBuilder;
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use std::collections::HashSet;
 use std::fs::{create_dir_all, File};

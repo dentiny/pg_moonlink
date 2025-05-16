@@ -6,7 +6,6 @@ use iceberg::puffin::PuffinWriter;
 use iceberg::puffin::{Blob, PuffinReader};
 use iceberg::spec::DataFile;
 use iceberg::{Error as IcebergError, Result as IcebergResult};
-use parquet::file::reader::FilePageIterator;
 
 /// Reference to puffin blob.
 #[derive(Clone, Debug, Eq, PartialEq)]
