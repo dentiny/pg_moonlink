@@ -27,14 +27,14 @@ impl Encode for TableMetadata {
         // Arrange all offsets together (instead of mixing with blob start offset and blob size), so decode side could directly operate on `uint32_t` pointers.
         write_usize(writer, self.deletion_vectors.len())?;
         let mut offset = 0;
-        for cur_puffin_blob in self.deletion_vectors.iter() {
+        for cur_puffin_blob in &self.deletion_vectors {
             write_usize(writer, offset)?;
             offset = offset.saturating_add(cur_puffin_blob.puffin_filepath.len());
         }
         write_usize(writer, offset)?;
 
         // Write deletion vector puffin blob information.
-        for cur_puffin_blob in self.deletion_vectors.iter() {
+        for cur_puffin_blob in &self.deletion_vectors {
             write_u32(writer, cur_puffin_blob.data_file_index)?;
             write_u32(writer, cur_puffin_blob.start_offset)?;
             write_u32(writer, cur_puffin_blob.blob_size)?;
