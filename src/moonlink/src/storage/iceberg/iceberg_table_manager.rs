@@ -301,31 +301,28 @@ impl IcebergTableManager {
             return Ok(());
         }
 
-        if !deleted_rows.is_empty() {
-            // TODO(hjiang): Currently one deletion vector is stored in one puffin file, need to revisit later.
-            let deleted_row_count = deleted_rows.len();
-            let mut iceberg_deletion_vector = DeletionVector::new();
-            iceberg_deletion_vector.mark_rows_deleted(deleted_rows);
-            let blob_properties = HashMap::from([
-                (DELETION_VECTOR_REFERENCED_DATA_FILE.to_string(), data_file),
-                (
-                    DELETION_VECTOR_CADINALITY.to_string(),
-                    deleted_row_count.to_string(),
-                ),
-            ]);
-            let blob = iceberg_deletion_vector.serialize(blob_properties);
-            let puffin_filepath = self.get_unique_deletion_vector_filepath();
-            let mut puffin_writer = puffin_utils::create_puffin_writer(
-                self.iceberg_table.as_ref().unwrap().file_io(),
-                puffin_filepath.clone(),
-            )
-            .await?;
-            puffin_writer.add(blob, CompressionCodec::None).await?;
+        let deleted_row_count = deleted_rows.len();
+        let mut iceberg_deletion_vector = DeletionVector::new();
+        iceberg_deletion_vector.mark_rows_deleted(deleted_rows);
+        let blob_properties = HashMap::from([
+            (DELETION_VECTOR_REFERENCED_DATA_FILE.to_string(), data_file),
+            (
+                DELETION_VECTOR_CADINALITY.to_string(),
+                deleted_row_count.to_string(),
+            ),
+        ]);
+        let blob = iceberg_deletion_vector.serialize(blob_properties);
+        let puffin_filepath = self.get_unique_deletion_vector_filepath();
+        let mut puffin_writer = puffin_utils::create_puffin_writer(
+            self.iceberg_table.as_ref().unwrap().file_io(),
+            puffin_filepath.clone(),
+        )
+        .await?;
+        puffin_writer.add(blob, CompressionCodec::None).await?;
 
-            self.catalog
-                .record_puffin_metadata_and_close(puffin_filepath, puffin_writer)
-                .await?;
-        }
+        self.catalog
+            .record_puffin_metadata_and_close(puffin_filepath, puffin_writer)
+            .await?;
 
         Ok(())
     }
