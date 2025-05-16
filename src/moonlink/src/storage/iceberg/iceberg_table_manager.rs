@@ -385,12 +385,7 @@ impl IcebergTableManager {
                 .get(&local_data_filepath)
                 .unwrap()
                 .clone();
-
-            // TODO(hjiang): Implement a merge functionality for batch deletion vector.
-            let new_rows_deleted = new_deletion_vector.collect_deleted_rows();
-            for cur_row_idx in new_rows_deleted.iter() {
-                assert!(entry.deletion_vector.delete_row(*cur_row_idx as usize));
-            }
+            entry.deletion_vector.merge_with(&new_deletion_vector);
 
             // Data filepath in iceberg table.
             let iceberg_data_file = entry.data_file.file_path();
