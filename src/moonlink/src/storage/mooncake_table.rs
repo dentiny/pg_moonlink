@@ -91,7 +91,7 @@ pub struct TableMetadata {
 
 #[derive(Clone, Debug)]
 pub(crate) struct DiskFileDeletionVector {
-    /// In-memory deletion vector, used for new deletion records process in-memory.
+    /// In-memory deletion vector, used for new deletion records in-memory processing.
     pub(crate) batch_deletion_vector: BatchDeletionVector,
     /// Persisted iceberg deletion vector puffin blob.
     pub(crate) puffin_deletion_blob: Option<PuffinBlobRef>,

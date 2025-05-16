@@ -63,7 +63,7 @@ pub struct ReadOutput {
     /// 1. Committed and persisted data files.
     /// 2. Associated files, which include committed but un-persisted records.
     pub file_paths: Vec<String>,
-    /// Deletion vectors.
+    /// Deletion vectors persisted in puffin files.
     pub deletion_vectors: Vec<PuffinDeletionBlobAtRead>,
     /// Committed but un-persisted positional deletion records.
     pub positional_deletes: Vec<(u32 /*file_index*/, u32 /*row_index*/)>,

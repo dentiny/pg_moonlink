@@ -7,6 +7,7 @@ use crate::storage::mooncake_table::snapshot::PuffinDeletionBlobAtRead;
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field};
 use futures::executor::block_on;
+use futures::future::join_all;
 use iceberg::io::FileIOBuilder;
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use std::collections::HashSet;
@@ -185,12 +186,16 @@ pub fn verify_files_and_deletions(
     // Read deletion vector blobs and add to position deletes.
     let file_io = FileIOBuilder::new_fs_io().build().unwrap();
     let mut position_deletes = position_deletes;
-    for cur_blob in deletion_vectors.into_iter() {
-        let blob = block_on(puffin_utils::load_blob_from_puffin_file(
-            file_io.clone(),
-            &cur_blob.puffin_filepath,
-        ))
-        .unwrap();
+    let mut load_blob_futures = Vec::with_capacity(deletion_vectors.len());
+    for cur_blob in deletion_vectors.iter() {
+        let get_blob_future =
+            puffin_utils::load_blob_from_puffin_file(file_io.clone(), &cur_blob.puffin_filepath);
+        load_blob_futures.push(get_blob_future);
+    }
+
+    let load_blob_results = block_on(join_all(load_blob_futures));
+    for (idx, cur_load_blob_res) in load_blob_results.into_iter().enumerate() {
+        let blob = cur_load_blob_res.unwrap();
         let dv = DeletionVector::deserialize(blob).unwrap();
         let batch_deletion_vector = dv.take_as_batch_delete_vector(TableConfig::DEFAULT_BATCH_SIZE);
         let deleted_rows = batch_deletion_vector.collect_deleted_rows();
@@ -198,7 +203,7 @@ pub fn verify_files_and_deletions(
         position_deletes.append(
             &mut deleted_rows
                 .iter()
-                .map(|row_idx| (cur_blob.data_file_index, *row_idx as u32))
+                .map(|row_idx| (deletion_vectors[idx].data_file_index, *row_idx as u32))
                 .collect::<Vec<(u32, u32)>>(),
         );
     }

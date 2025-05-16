@@ -23,7 +23,7 @@ impl BatchDeletionVector {
     }
 
     /// Initialize deletion vector.
-    fn initialize_vector(&mut self) {
+    fn initialize_vector_for_once(&mut self) {
         if self.deletion_vector.is_some() {
             return;
         }
@@ -36,7 +36,7 @@ impl BatchDeletionVector {
     /// Mark a row as deleted
     pub(crate) fn delete_row(&mut self, row_idx: usize) -> bool {
         // Set the bit at row_idx to 1 (deleted)
-        self.initialize_vector();
+        self.initialize_vector_for_once();
         let exist = bit_util::get_bit(self.deletion_vector.as_ref().unwrap(), row_idx);
         if exist {
             bit_util::unset_bit(self.deletion_vector.as_mut().unwrap(), row_idx);
@@ -54,10 +54,9 @@ impl BatchDeletionVector {
         if rhs.deletion_vector.is_none() {
             return;
         }
-        self.initialize_vector();
-        let len = self.max_rows / 8 + 1;
+        self.initialize_vector_for_once();
         let self_vec = self.deletion_vector.as_mut().unwrap();
-        for (i, val) in self_vec.iter_mut().enumerate().take(len) {
+        for (i, val) in self_vec.iter_mut().enumerate() {
             *val &= rhs.deletion_vector.as_ref().unwrap()[i];
         }
     }
@@ -123,7 +122,6 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use std::collections::HashMap;
-
     use std::sync::Arc;
 
     #[test]

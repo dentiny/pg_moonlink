@@ -32,7 +32,7 @@ pub(crate) async fn create_puffin_writer(
     Ok(puffin_writer)
 }
 
-/// Load blob from the given puffin data entry.
+/// Load blob from the given puffin filepath.
 /// Note: this function assumes there's only one blob in the puffin file.
 pub(crate) async fn load_blob_from_puffin_file(
     file_io: FileIO,
