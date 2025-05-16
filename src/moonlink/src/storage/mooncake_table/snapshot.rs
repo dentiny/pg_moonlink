@@ -49,7 +49,7 @@ pub(crate) struct SnapshotTableState {
     iceberg_table_manager: IcebergTableManager,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PuffinDeletionBlobAtRead {
     /// Index of local data files.
     pub data_file_index: u32,

@@ -2,8 +2,12 @@ use crate::storage::mooncake_table::PuffinDeletionBlobAtRead;
 
 use bincode::enc::{write::Writer, Encode, Encoder};
 use bincode::error::EncodeError;
+use iceberg::puffin;
+use bincode::config;
 
-#[derive(Debug)]
+const BINCODE_CONFIG: config::Configuration = config::standard();
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct TableMetadata {
     pub(super) data_files: Vec<String>,
     pub(super) deletion_vector: Vec<PuffinDeletionBlobAtRead>,
@@ -34,7 +38,6 @@ impl Encode for TableMetadata {
         write_usize(writer, offset)?;
 
         // Write deletion vector puffin blob information.
-        write_usize(writer, self.deletion_vector.len())?;
         for cur_puffin_blob in self.deletion_vector.iter() {
             write_u32(writer, cur_puffin_blob.data_file_index)?;
             write_u32(writer, cur_puffin_blob.start_offset)?;
@@ -74,7 +77,9 @@ fn write_usize<W: Writer>(writer: &mut W, value: usize) -> Result<(), EncodeErro
 #[cfg(test)]
 impl TableMetadata {
     pub fn decode(data: &[u8]) -> Self {
+        use crate::storage::mooncake_table::PuffinDeletionBlobAtRead;
         use std::convert::TryInto;
+        use bincode::config;
 
         let mut cursor = 0;
 
@@ -88,34 +93,118 @@ impl TableMetadata {
             read_u32(data, cursor) as usize
         }
 
+        // Read data filepath offsets.
         let data_files_len = read_usize(data, &mut cursor);
-
-        let mut offsets = Vec::with_capacity(data_files_len + 1);
+        let mut data_file_offsets = Vec::with_capacity(data_files_len + 1);
         for _ in 0..=data_files_len {
-            offsets.push(read_usize(data, &mut cursor));
+            let data_file_offset = read_usize(data, &mut cursor);
+            data_file_offsets.push(data_file_offset);
         }
 
-        let position_deletes_len = read_usize(data, &mut cursor);
+        // Read puffin filepath offsets.
+        let puffin_files_len = read_usize(data, &mut cursor);
+        let mut puffin_file_offsets = Vec::with_capacity(puffin_files_len + 1);
+        for _ in 0..=puffin_files_len {
+            let puffin_file_offset = read_usize(data, &mut cursor);
+            puffin_file_offsets.push(puffin_file_offset);
+        }
 
+        // Read deletion vector blobs.
+        let mut deletion_vector_blobs = Vec::with_capacity(puffin_files_len);
+        for _ in 0..puffin_files_len {
+            let data_file_index = read_u32(data, &mut cursor);
+            let start_offset = read_u32(data, &mut cursor);
+            let blob_size = read_u32(data, &mut cursor);
+            deletion_vector_blobs.push(PuffinDeletionBlobAtRead {
+               data_file_index,
+               start_offset,
+               blob_size,
+                puffin_filepath: "".to_string(), // Temporarily fill in empty string and decode later.
+            });
+        }
+
+        // Read positional delete records.
+        let position_deletes_len = read_usize(data, &mut cursor);
         let mut position_deletes = Vec::with_capacity(position_deletes_len);
         for _ in 0..position_deletes_len {
-            let a = read_u32(data, &mut cursor);
-            let b = read_u32(data, &mut cursor);
-            position_deletes.push((a, b));
+            let data_file_index = read_u32(data, &mut cursor);
+            let row_index = read_u32(data, &mut cursor);
+            position_deletes.push((data_file_index, row_index));
         }
 
+        // Read data filepaths.
         let mut data_files = Vec::with_capacity(data_files_len);
         for i in 0..data_files_len {
-            let start = offsets[i];
-            let end = offsets[i + 1];
+            let start = data_file_offsets[i];
+            let end = data_file_offsets[i + 1];
             let s = String::from_utf8(data[cursor + start..cursor + end].to_vec()).unwrap();
             data_files.push(s);
+        }
+        if data_files_len > 0 {
+            cursor += data_file_offsets.last().unwrap();
+        }
+
+        // Read puffin filepaths.
+        for i in 0..puffin_files_len {
+            let start = puffin_file_offsets[i];
+            let end = puffin_file_offsets[i + 1];
+            let cur_puffin_filepath = String::from_utf8(data[cursor + start..cursor + end].to_vec()).unwrap();
+            deletion_vector_blobs[i].puffin_filepath = cur_puffin_filepath;
+        }
+        if data_files_len > 0 {
+            cursor += puffin_file_offsets.last().unwrap();
         }
 
         TableMetadata {
             data_files,
-            deletion_vector: vec![],
-            position_deletes,
+            deletion_vector: deletion_vector_blobs,
+            positional_deletes: position_deletes,
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use iceberg::table::Table;
+
+    use super::*;
+
+    /// Util function to create a puffin deletion blob.
+    fn create_puffin_deletion_blob_1() -> PuffinDeletionBlobAtRead {
+        PuffinDeletionBlobAtRead {
+            data_file_index: 0,
+            puffin_filepath: "/tmp/iceberg_test/1-puffin.bin".to_string(),
+            start_offset: 4,
+            blob_size: 10,
+        }
+    }
+    fn create_puffin_deletion_blob_2() -> PuffinDeletionBlobAtRead {
+        PuffinDeletionBlobAtRead {
+            data_file_index: 0,
+            puffin_filepath: "/tmp/iceberg_test/2-puffin.bin".to_string(),
+            start_offset: 4,
+            blob_size: 20,
+        }
+    }
+
+    #[test]
+    fn test_table_metadata_serde() {
+        let table_metadata = TableMetadata {
+            data_files: vec![
+                "/tmp/iceberg_test/data/1.parquet".to_string(),
+                "/tmp/iceberg_test/data/2.parquet".to_string(),
+                "/tmp/iceberg-rust/data/temp.parquet".to_string(), // associate file
+            ],
+            deletion_vector: vec![
+                create_puffin_deletion_blob_1(),
+                create_puffin_deletion_blob_2(),  
+            ],
+            positional_deletes: vec![(2, 2)],
+        };
+        let data = bincode::encode_to_vec(table_metadata.clone(), BINCODE_CONFIG).unwrap();
+
+        let decoded_metadata = TableMetadata::decode(data.as_slice());
+        assert_eq!(table_metadata, decoded_metadata);
+    }
+
 }
