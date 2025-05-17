@@ -27,7 +27,6 @@ use iceberg::{
 };
 use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 use parquet::file::properties::WriterProperties;
-use tokio::fs::File;
 
 /// Return whether the given manifest entry represents data files.
 pub fn is_data_file_entry(entry: &ManifestEntry) -> bool {
@@ -198,7 +197,7 @@ pub(crate) async fn write_record_batch_to_iceberg(
     );
     let mut data_file_writer = data_file_writer_builder.build().await?;
 
-    let local_file = File::open(parquet_filepath).await?;
+    let local_file = tokio::fs::File::open(parquet_filepath).await?;
     let mut read_stream = ParquetRecordBatchStreamBuilder::new(local_file)
         .await?
         .build()?;

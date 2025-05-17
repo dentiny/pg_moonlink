@@ -255,6 +255,16 @@ mod tests {
     use super::*;
     use crate::row::RowValue;
 
+    use std::sync::Arc;
+
+    use arrow::{
+        array::{Int32Array, StringArray},
+        record_batch::RecordBatch,
+    };
+    use arrow_array::Int64Array;
+    use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
+    use tempfile::tempdir;
+
     impl Clone for MoonlinkRow {
         fn clone(&self) -> Self {
             MoonlinkRow::new(self.values.clone())
@@ -298,5 +308,55 @@ mod tests {
         // You can also check that the identity_row equals its own full row
         assert!(id_row1_all.equals_full_row(&row1, &identity_all));
         assert!(id_row1_first.equals_full_row(&row1, &identity_first));
+    }
+
+    #[tokio::test]
+    async fn test_equals_parquet_at_offset() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int32, false),
+            arrow::datatypes::Field::new("age", arrow::datatypes::DataType::Int64, false),
+        ]));
+        let record_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(Int64Array::from(vec![10, 20, 30, 40])),
+            ],
+        )
+        .unwrap();
+
+        let tmp_dir = tempdir().unwrap();
+        let file_path = tmp_dir.path().join("output.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder()
+            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+            .build();
+
+        let mut writer = ArrowWriter::try_new(file, schema, Some(props)).unwrap();
+        writer.write(&record_batch).unwrap();
+        writer.close().unwrap();
+
+        // Create moonlink row to match against, which matches the second row in the parquet file.
+        let row = MoonlinkRow::new(vec![RowValue::Int32(2), RowValue::Int64(20)]);
+
+        // Check cases record matches.
+        assert!(
+            row.equals_parquet_at_offset(
+                file_path.to_str().unwrap(),
+                /*offset=*/ 1,
+                &IdentityProp::FullRow
+            )
+            .await
+        );
+
+        // Check cases record mismatches.
+        assert!(
+            !row.equals_parquet_at_offset(
+                file_path.to_str().unwrap(),
+                /*offset=*/ 0,
+                &IdentityProp::FullRow
+            )
+            .await
+        );
     }
 }
