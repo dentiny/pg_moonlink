@@ -206,7 +206,7 @@ impl IdentityProp {
         match self {
             IdentityProp::SinglePrimitiveKey(_) => None,
             IdentityProp::Keys(keys) => {
-                let mut identity_columns = Vec::new();
+                let mut identity_columns = Vec::with_capacity(keys.len());
                 for key in keys {
                     identity_columns.push(take(&mut row.values[*key]));
                 }
@@ -218,7 +218,7 @@ impl IdentityProp {
 
     pub fn extract_identity_for_key(&self, row: &MoonlinkRow) -> Option<MoonlinkRow> {
         if let IdentityProp::Keys(keys) = self {
-            let mut identity_columns = Vec::new();
+            let mut identity_columns = Vec::with_capacity(keys.len());
             for key in keys {
                 identity_columns.push(row.values[*key].clone());
             }
