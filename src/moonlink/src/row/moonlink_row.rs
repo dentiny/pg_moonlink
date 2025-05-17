@@ -18,23 +18,22 @@ impl MoonlinkRow {
         Self { values }
     }
 
-    /// Returns an iterator over values for columns included in the projection mask
-    fn projected_iter<'a>(
-        &'a self,
-        projection_mask: &'a ProjectionMask,
-    ) -> impl Iterator<Item = &'a RowValue> + 'a {
-        let col_num = self.values.len();
-        (0..col_num)
-            .filter(move |&idx| projection_mask.leaf_included(idx))
-            .map(move |idx| &self.values[idx])
+    /// Project identity properties for the current row.
+    fn project<'a>(&'a self, identity: &IdentityProp) -> Vec<&'a RowValue> {
+        match identity {
+            IdentityProp::SinglePrimitiveKey(idx) => vec![&self.values[*idx]],
+            IdentityProp::Keys(indices) => indices.iter().map(|i| &self.values[*i]).collect(),
+            IdentityProp::FullRow => self.values.iter().collect(),
+        }
     }
 
+    /// Check whether the `offset`-th record batch matches current moonlink row.
+    /// The `batch` here has been projected.
     fn equals_record_batch_at_offset_impl(
         &self,
         batch: &RecordBatch,
         offset: usize,
         identity: &IdentityProp,
-        proj_mask: Option<ProjectionMask>,
     ) -> bool {
         if offset >= batch.num_rows() {
             panic!("Offset is out of bounds");
@@ -128,38 +127,31 @@ impl MoonlinkRow {
             }
         };
 
-        if let IdentityProp::Keys(keys) = identity {
-            if keys.len() != batch.columns().len() {
-                return self
-                    .values
-                    .iter()
-                    .zip(keys.iter())
-                    .all(|(value, &col_idx)| {
-                        let column = batch.column(col_idx);
-                        value_matches_column(value, column)
-                    });
-            }
-        }
+        let projected_cols = self.project(identity);
+        assert_eq!(projected_cols.len(), batch.columns().len());
 
-        if let Some(mask) = proj_mask {
-            self.projected_iter(&mask)
-                .zip(batch.columns())
-                .all(|(value, column)| value_matches_column(value, column))
-        } else {
-            self.values
-                .iter()
-                .zip(batch.columns())
-                .all(|(value, column)| value_matches_column(value, column))
-        }
+        projected_cols
+            .iter()
+            .zip(batch.columns())
+            .all(|(value, column)| value_matches_column(value, column))
     }
 
+    /// Check whether the `offset`-th of the given record batch matches the current moonlink row.
+    /// It's worth noting `batch` contains all columns (aka, before projection).
     pub fn equals_record_batch_at_offset(
         &self,
         batch: &RecordBatch,
         offset: usize,
         identity: &IdentityProp,
     ) -> bool {
-        self.equals_record_batch_at_offset_impl(batch, offset, identity, /*proj_mask=*/ None)
+        assert_eq!(batch.columns().len(), self.values.len());
+        let indices = match identity {
+            IdentityProp::SinglePrimitiveKey(idx) => batch.project(std::slice::from_ref(idx)),
+            IdentityProp::Keys(keys) => batch.project(keys.as_slice()),
+            IdentityProp::FullRow => Ok(batch.clone()),
+        }
+        .unwrap();
+        self.equals_record_batch_at_offset_impl(&indices, offset, identity)
     }
 
     pub async fn equals_parquet_at_offset(
@@ -194,10 +186,7 @@ impl MoonlinkRow {
             .unwrap();
         let mut batch_reader = reader.next_row_group().await.unwrap().unwrap();
         let batch = batch_reader.next().unwrap().unwrap();
-
-        println!("batch = {:?}", batch);
-
-        self.equals_record_batch_at_offset_impl(&batch, 0, identity, Some(proj_mask))
+        self.equals_record_batch_at_offset_impl(&batch, 0, identity)
     }
 }
 
