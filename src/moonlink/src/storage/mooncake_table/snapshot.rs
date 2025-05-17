@@ -122,7 +122,7 @@ impl SnapshotTableState {
         self.integrate_disk_slices(&mut task);
 
         self.rows = take(&mut task.new_rows);
-        self.process_deletion_log(&mut task);
+        self.process_deletion_log(&mut task)aw;
 
         if task.new_lsn != 0 {
             self.current_snapshot.snapshot_version = task.new_lsn;
@@ -241,7 +241,7 @@ impl SnapshotTableState {
         }
     }
 
-    fn process_delete_record(&mut self, deletion: RawDeletionRecord) -> ProcessedDeletionRecord {
+    async fn process_delete_record(&mut self, deletion: RawDeletionRecord) -> ProcessedDeletionRecord {
         // Fast-path: The row we are deleting was in the mem slice so we already have the position
         if let Some(pos) = deletion.pos {
             return Self::build_processed_deletion(deletion, pos.into());
@@ -308,7 +308,7 @@ impl SnapshotTableState {
     }
 
     /// Verifies that `loc` matches the provided `identity`.
-    fn matches_identity(&self, loc: &RecordLocation, identity: &MoonlinkRow) -> bool {
+    async fn matches_identity(&self, loc: &RecordLocation, identity: &MoonlinkRow) -> bool {
         match loc {
             RecordLocation::MemoryBatch(batch_id, row_id) => {
                 let batch = self.batches.get(batch_id).expect("missing batch");
@@ -324,7 +324,7 @@ impl SnapshotTableState {
                     &name,
                     *row_id,
                     &self.current_snapshot.metadata.identity,
-                )
+                ).await
             }
         }
     }
@@ -357,7 +357,7 @@ impl SnapshotTableState {
         self.committed_deletion_log.push(deletion);
     }
 
-    fn process_deletion_log(&mut self, task: &mut SnapshotTask) {
+    async fn process_deletion_log(&mut self, task: &mut SnapshotTask) {
         self.advance_pending_deletions(task);
         self.apply_new_deletions(task);
     }
@@ -381,9 +381,9 @@ impl SnapshotTableState {
 
     /// Convert raw deletions discovered by the snapshot task and either commit
     /// them or defer until their LSN becomes visible.
-    fn apply_new_deletions(&mut self, task: &mut SnapshotTask) {
+    async fn apply_new_deletions(&mut self, task: &mut SnapshotTask) {
         for raw in take(&mut task.new_deletions) {
-            let processed = Self::process_delete_record(self, raw);
+            let processed = self.process_delete_record(raw);
             if processed.lsn <= task.new_lsn {
                 Self::commit_deletion(self, processed);
             } else {

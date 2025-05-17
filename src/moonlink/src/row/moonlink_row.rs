@@ -6,6 +6,7 @@ use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::ArrowReaderBuilder;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
+use parquet::arrow::async_reader::;
 use std::mem::take;
 
 #[derive(Debug)]
@@ -134,14 +135,14 @@ impl MoonlinkRow {
             .all(|(value, column)| value_matches_column(value, column))
     }
 
-    pub fn equals_parquet_at_offset(
+    pub async fn equals_parquet_at_offset(
         &self,
         file_name: &str,
         offset: usize,
         identity: &IdentityProp,
     ) -> bool {
-        let file = File::open(file_name).unwrap();
-        let reader_builder = ArrowReaderBuilder::try_new(file).unwrap();
+        let file = tokio::fs::File::open(file_name).await.unwrap();
+        let read_stream = ParquetRecordBatchStreamBuilder::new(file).await.unwrap().build().unwrap();
         let row_groups = reader_builder.metadata().row_groups();
         let mut target_row_group = 0;
         let mut row_count: usize = 0;
