@@ -4,6 +4,7 @@ use arrow::array::Array;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
+use parquet::arrow::ProjectionMask;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
 
@@ -17,11 +18,32 @@ impl MoonlinkRow {
         Self { values }
     }
 
+    /// Returns an iterator over values for columns included in the projection mask
+    fn projected_iter<'a>(
+        &'a self,
+        projection_mask: &'a ProjectionMask,
+    ) -> impl Iterator<Item = &'a RowValue> + 'a {
+        let col_num = self.values.len();
+        (0..col_num)
+            .filter(move |&idx| projection_mask.leaf_included(idx))
+            .map(move |idx| &self.values[idx])
+    }
+
     pub fn equals_record_batch_at_offset(
         &self,
         batch: &RecordBatch,
         offset: usize,
         identity: &IdentityProp,
+    ) -> bool {
+        self.equals_record_batch_at_offset_impl(batch, offset, identity, /*proj_mask=*/ None)
+    }
+
+    fn equals_record_batch_at_offset_impl(
+        &self,
+        batch: &RecordBatch,
+        offset: usize,
+        identity: &IdentityProp,
+        proj_mask: Option<ProjectionMask>,
     ) -> bool {
         if offset >= batch.num_rows() {
             panic!("Offset is out of bounds");
@@ -127,10 +149,17 @@ impl MoonlinkRow {
                     });
             }
         }
-        self.values
-            .iter()
-            .zip(batch.columns())
-            .all(|(value, column)| value_matches_column(value, column))
+
+        if let Some(mask) = proj_mask {
+            self.projected_iter(&mask)
+                .zip(batch.columns())
+                .all(|(value, column)| value_matches_column(value, column))
+        } else {
+            self.values
+                .iter()
+                .zip(batch.columns())
+                .all(|(value, column)| value_matches_column(value, column))
+        }
     }
 
     pub async fn equals_parquet_at_offset(
@@ -151,16 +180,24 @@ impl MoonlinkRow {
             row_count += row_group.num_rows() as usize;
             target_row_group += 1;
         }
+        let proj_mask = ProjectionMask::roots(
+            stream_builder.metadata().file_metadata().schema_descr(),
+            identity.get_key_indices(self.values.len()),
+        );
         let mut reader = stream_builder
             .with_row_groups(vec![target_row_group])
             .with_offset(offset - row_count)
             .with_limit(1)
             .with_batch_size(1)
+            .with_projection(proj_mask.clone())
             .build()
             .unwrap();
         let mut batch_reader = reader.next_row_group().await.unwrap().unwrap();
         let batch = batch_reader.next().unwrap().unwrap();
-        self.equals_record_batch_at_offset(&batch, 0, identity)
+
+        println!("batch = {:?}", batch);
+
+        self.equals_record_batch_at_offset_impl(&batch, 0, identity, Some(proj_mask))
     }
 }
 
@@ -199,6 +236,15 @@ impl IdentityProp {
             }
         } else {
             IdentityProp::Keys(columns)
+        }
+    }
+
+    /// Get columns for the current identity property.
+    pub fn get_key_indices(&self, col_num: usize) -> Vec<usize> {
+        match self {
+            IdentityProp::SinglePrimitiveKey(index) => vec![*index],
+            IdentityProp::Keys(key_indices) => key_indices.clone(),
+            IdentityProp::FullRow => (0..col_num).collect(),
         }
     }
 
@@ -335,7 +381,7 @@ mod tests {
         // Create moonlink row to match against, which matches the second row in the parquet file.
         let row = MoonlinkRow::new(vec![RowValue::Int32(2), RowValue::Int64(20)]);
 
-        // Check cases record matches.
+        // Check cases with full row as identity property.
         assert!(
             row.equals_parquet_at_offset(
                 file_path.to_str().unwrap(),
@@ -344,13 +390,47 @@ mod tests {
             )
             .await
         );
-
-        // Check cases record mismatches.
         assert!(
             !row.equals_parquet_at_offset(
                 file_path.to_str().unwrap(),
                 /*offset=*/ 0,
                 &IdentityProp::FullRow
+            )
+            .await
+        );
+
+        // Check cases with single primary key as identity propety.
+        assert!(
+            row.equals_parquet_at_offset(
+                file_path.to_str().unwrap(),
+                /*offset=*/ 1,
+                &IdentityProp::SinglePrimitiveKey(1)
+            )
+            .await
+        );
+        assert!(
+            !row.equals_parquet_at_offset(
+                file_path.to_str().unwrap(),
+                /*offset=*/ 0,
+                &IdentityProp::SinglePrimitiveKey(1)
+            )
+            .await
+        );
+
+        // Check cases with specified keys.
+        assert!(
+            row.equals_parquet_at_offset(
+                file_path.to_str().unwrap(),
+                /*offset=*/ 1,
+                &IdentityProp::Keys(vec![1])
+            )
+            .await
+        );
+        assert!(
+            !row.equals_parquet_at_offset(
+                file_path.to_str().unwrap(),
+                /*offset=*/ 0,
+                &IdentityProp::Keys(vec![1])
             )
             .await
         );
