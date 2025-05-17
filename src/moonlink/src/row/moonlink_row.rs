@@ -257,10 +257,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use arrow::{
-        array::{Int32Array, StringArray},
-        record_batch::RecordBatch,
-    };
+    use arrow::{array::Int32Array, record_batch::RecordBatch};
     use arrow_array::Int64Array;
     use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
     use tempfile::tempdir;

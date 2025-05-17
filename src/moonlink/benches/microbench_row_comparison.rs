@@ -7,6 +7,7 @@ use parquet::arrow::ArrowWriter;
 use std::collections::HashMap;
 use std::fs::File;
 use std::sync::Arc;
+use tokio::runtime::Runtime;
 
 fn create_test_batch() -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![
@@ -118,9 +119,14 @@ fn bench_equals_parquet(c: &mut Criterion) {
     let row = create_test_row();
     let identity = IdentityProp::FullRow;
 
+    let rt = Runtime::new().unwrap();
     c.bench_function("equals_parquet", |b| {
         b.iter(|| {
-            black_box(row.equals_parquet_at_offset(parquet_path.to_str().unwrap(), 0, &identity));
+            black_box(rt.block_on(row.equals_parquet_at_offset(
+                parquet_path.to_str().unwrap(),
+                0,
+                &identity,
+            )));
         })
     });
 }
