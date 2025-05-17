@@ -18,7 +18,7 @@ impl MoonlinkRow {
         Self { values }
     }
 
-    /// Project identity properties for the current row.
+    /// Apply identity properties projection for the current row.
     fn project<'a>(&'a self, identity: &IdentityProp) -> Vec<&'a RowValue> {
         match identity {
             IdentityProp::SinglePrimitiveKey(idx) => vec![&self.values[*idx]],
@@ -27,7 +27,7 @@ impl MoonlinkRow {
         }
     }
 
-    /// Check whether the `offset`-th record batch matches current moonlink row.
+    /// Check whether the `offset`-th record batch matches the current moonlink row.
     /// The `batch` here has been projected.
     fn equals_record_batch_at_offset_impl(
         &self,
