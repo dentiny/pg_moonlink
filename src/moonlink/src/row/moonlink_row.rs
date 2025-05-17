@@ -141,8 +141,7 @@ impl MoonlinkRow {
     ) -> bool {
         let file = tokio::fs::File::open(file_name).await.unwrap();
         let stream_builder = ParquetRecordBatchStreamBuilder::new(file).await.unwrap();
-        let metadata = stream_builder.metadata().clone();
-        let row_groups = metadata.row_groups();
+        let row_groups = stream_builder.metadata().row_groups();
         let mut target_row_group = 0;
         let mut row_count: usize = 0;
         for row_group in row_groups {
@@ -257,8 +256,8 @@ mod tests {
 
     use std::sync::Arc;
 
-    use arrow::{array::Int32Array, record_batch::RecordBatch};
-    use arrow_array::Int64Array;
+    use arrow::record_batch::RecordBatch;
+    use arrow_array::{Int32Array, Int64Array};
     use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
     use tempfile::tempdir;
 
