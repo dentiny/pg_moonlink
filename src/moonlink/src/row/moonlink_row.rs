@@ -29,15 +29,6 @@ impl MoonlinkRow {
             .map(move |idx| &self.values[idx])
     }
 
-    pub fn equals_record_batch_at_offset(
-        &self,
-        batch: &RecordBatch,
-        offset: usize,
-        identity: &IdentityProp,
-    ) -> bool {
-        self.equals_record_batch_at_offset_impl(batch, offset, identity, /*proj_mask=*/ None)
-    }
-
     fn equals_record_batch_at_offset_impl(
         &self,
         batch: &RecordBatch,
@@ -160,6 +151,15 @@ impl MoonlinkRow {
                 .zip(batch.columns())
                 .all(|(value, column)| value_matches_column(value, column))
         }
+    }
+
+    pub fn equals_record_batch_at_offset(
+        &self,
+        batch: &RecordBatch,
+        offset: usize,
+        identity: &IdentityProp,
+    ) -> bool {
+        self.equals_record_batch_at_offset_impl(batch, offset, identity, /*proj_mask=*/ None)
     }
 
     pub async fn equals_parquet_at_offset(
@@ -350,6 +350,61 @@ mod tests {
         // You can also check that the identity_row equals its own full row
         assert!(id_row1_all.equals_full_row(&row1, &identity_all));
         assert!(id_row1_first.equals_full_row(&row1, &identity_first));
+    }
+
+    #[test]
+    fn test_equals_record_batch_at_offset() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int32, false),
+            arrow::datatypes::Field::new("age", arrow::datatypes::DataType::Int64, false),
+        ]));
+        let record_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(Int64Array::from(vec![10, 20, 30, 40])),
+            ],
+        )
+        .unwrap();
+
+        // Create moonlink row to match against, which matches the second row in the parquet file.
+        let row = MoonlinkRow::new(vec![RowValue::Int32(2), RowValue::Int64(20)]);
+
+        // Check record batch match for full row identify property.
+        assert!(!row.equals_record_batch_at_offset(
+            &record_batch,
+            /*offset=*/ 0,
+            &IdentityProp::FullRow
+        ));
+        assert!(row.equals_record_batch_at_offset(
+            &record_batch,
+            /*offset=*/ 1,
+            &IdentityProp::FullRow
+        ));
+
+        // Check record batch match for single primary key identify property.
+        assert!(!row.equals_record_batch_at_offset(
+            &record_batch,
+            /*offset=*/ 0,
+            &IdentityProp::SinglePrimitiveKey(1)
+        ));
+        assert!(row.equals_record_batch_at_offset(
+            &record_batch,
+            /*offset=*/ 1,
+            &IdentityProp::SinglePrimitiveKey(1)
+        ));
+
+        // Check record batch match for specified keys identify property.
+        assert!(!row.equals_record_batch_at_offset(
+            &record_batch,
+            /*offset=*/ 0,
+            &IdentityProp::Keys(vec![1])
+        ));
+        assert!(row.equals_record_batch_at_offset(
+            &record_batch,
+            /*offset=*/ 1,
+            &IdentityProp::Keys(vec![1])
+        ));
     }
 
     #[tokio::test]
