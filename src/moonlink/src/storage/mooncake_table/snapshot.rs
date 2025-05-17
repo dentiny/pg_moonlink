@@ -122,7 +122,7 @@ impl SnapshotTableState {
         self.integrate_disk_slices(&mut task);
 
         self.rows = take(&mut task.new_rows);
-        self.process_deletion_log(&mut task)aw;
+        self.process_deletion_log(&mut task).await;
 
         if task.new_lsn != 0 {
             self.current_snapshot.snapshot_version = task.new_lsn;
@@ -241,7 +241,10 @@ impl SnapshotTableState {
         }
     }
 
-    async fn process_delete_record(&mut self, deletion: RawDeletionRecord) -> ProcessedDeletionRecord {
+    async fn process_delete_record(
+        &mut self,
+        deletion: RawDeletionRecord,
+    ) -> ProcessedDeletionRecord {
         // Fast-path: The row we are deleting was in the mem slice so we already have the position
         if let Some(pos) = deletion.pos {
             return Self::build_processed_deletion(deletion, pos.into());
@@ -266,12 +269,15 @@ impl SnapshotTableState {
                     .as_ref()
                     .expect("row_identity required when multiple matches");
 
-                let pos = candidates
-                    .into_iter()
-                    .find(|loc| self.matches_identity(loc, identity))
-                    .expect("can't find valid record to delete");
-
-                Self::build_processed_deletion(deletion, pos)
+                let mut target_position: Option<RecordLocation> = None;
+                for loc in candidates.into_iter() {
+                    let matches = self.matches_identity(&loc, identity).await;
+                    if matches {
+                        target_position = Some(loc);
+                        break;
+                    }
+                }
+                Self::build_processed_deletion(deletion, target_position.unwrap())
             }
         }
     }
@@ -320,11 +326,13 @@ impl SnapshotTableState {
             }
             RecordLocation::DiskFile(file_name, row_id) => {
                 let name = file_name.0.to_string_lossy();
-                identity.equals_parquet_at_offset(
-                    &name,
-                    *row_id,
-                    &self.current_snapshot.metadata.identity,
-                ).await
+                identity
+                    .equals_parquet_at_offset(
+                        &name,
+                        *row_id,
+                        &self.current_snapshot.metadata.identity,
+                    )
+                    .await
             }
         }
     }
@@ -359,7 +367,7 @@ impl SnapshotTableState {
 
     async fn process_deletion_log(&mut self, task: &mut SnapshotTask) {
         self.advance_pending_deletions(task);
-        self.apply_new_deletions(task);
+        self.apply_new_deletions(task).await;
     }
 
     /// Update, commit, or re-queue previously seen deletions.
@@ -383,7 +391,7 @@ impl SnapshotTableState {
     /// them or defer until their LSN becomes visible.
     async fn apply_new_deletions(&mut self, task: &mut SnapshotTask) {
         for raw in take(&mut task.new_deletions) {
-            let processed = self.process_delete_record(raw);
+            let processed = self.process_delete_record(raw).await;
             if processed.lsn <= task.new_lsn {
                 Self::commit_deletion(self, processed);
             } else {

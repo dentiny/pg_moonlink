@@ -3,10 +3,8 @@ use ahash::AHasher;
 use arrow::array::Array;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
-use parquet::arrow::arrow_reader::ArrowReaderBuilder;
-use std::fs::File;
+use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 use std::hash::{Hash, Hasher};
-use parquet::arrow::async_reader::;
 use std::mem::take;
 
 #[derive(Debug)]
@@ -142,8 +140,9 @@ impl MoonlinkRow {
         identity: &IdentityProp,
     ) -> bool {
         let file = tokio::fs::File::open(file_name).await.unwrap();
-        let read_stream = ParquetRecordBatchStreamBuilder::new(file).await.unwrap().build().unwrap();
-        let row_groups = reader_builder.metadata().row_groups();
+        let stream_builder = ParquetRecordBatchStreamBuilder::new(file).await.unwrap();
+        let metadata = stream_builder.metadata().clone();
+        let row_groups = metadata.row_groups();
         let mut target_row_group = 0;
         let mut row_count: usize = 0;
         for row_group in row_groups {
@@ -153,14 +152,15 @@ impl MoonlinkRow {
             row_count += row_group.num_rows() as usize;
             target_row_group += 1;
         }
-        let mut reader = reader_builder
+        let mut reader = stream_builder
             .with_row_groups(vec![target_row_group])
             .with_offset(offset - row_count)
             .with_limit(1)
             .with_batch_size(1)
             .build()
             .unwrap();
-        let batch = reader.next().unwrap().unwrap();
+        let mut batch_reader = reader.next_row_group().await.unwrap().unwrap();
+        let batch = batch_reader.next().unwrap().unwrap();
         self.equals_record_batch_at_offset(&batch, 0, identity)
     }
 }
