@@ -154,7 +154,7 @@ impl IcebergTableManager {
                 &*self.catalog,
                 &self.config.warehouse_uri,
                 &self.config.namespace,
-                &self.config.table_name.clone(),
+                &self.config.table_name,
                 self.mooncake_table_metadata.schema.as_ref(),
             )
             .await?;
@@ -315,7 +315,7 @@ impl IcebergTableManager {
         let puffin_filepath = self.get_unique_deletion_vector_filepath();
         let mut puffin_writer = puffin_utils::create_puffin_writer(
             self.iceberg_table.as_ref().unwrap().file_io(),
-            puffin_filepath.clone(),
+            &puffin_filepath,
         )
         .await?;
         puffin_writer.add(blob, CompressionCodec::None).await?;
@@ -395,7 +395,7 @@ impl IcebergTableManager {
         let puffin_filepath = self.get_unique_hash_index_v1_filepath();
         let mut puffin_writer = puffin_utils::create_puffin_writer(
             self.iceberg_table.as_ref().unwrap().file_io(),
-            puffin_filepath.clone(),
+            &puffin_filepath,
         )
         .await?;
 
