@@ -1,18 +1,20 @@
-pub(crate) mod deletion_vector;
-pub(crate) mod file_catalog;
-pub(crate) mod iceberg_table_manager;
-pub(crate) mod index;
-pub(crate) mod moonlink_catalog;
-pub(crate) mod puffin_utils;
-pub(crate) mod puffin_writer_proxy;
-mod table_property;
-pub(crate) mod test_utils;
-pub(crate) mod tokio_retry_utils;
-pub(crate) mod utils;
-pub(crate) mod validation;
+pub(super) mod deletion_vector;
+pub(super) mod file_catalog;
+pub(super) mod iceberg_table_manager;
+pub(super) mod index;
+pub(super) mod moonlink_catalog;
+pub(super) mod puffin_utils;
+pub(super) mod puffin_writer_proxy;
+pub(super) mod table_property;
+pub(super) mod tokio_retry_utils;
+pub(super) mod utils;
+pub(super) mod validation;
 
 #[cfg(feature = "storage-s3")]
-pub(crate) mod s3_test_utils;
+mod s3_test_utils;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod test_utils;
