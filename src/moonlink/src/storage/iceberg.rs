@@ -12,3 +12,6 @@ pub(crate) mod validation;
 
 #[cfg(feature = "storage-s3")]
 pub(crate) mod s3_test_utils;
+
+#[cfg(test)]
+mod tests;
