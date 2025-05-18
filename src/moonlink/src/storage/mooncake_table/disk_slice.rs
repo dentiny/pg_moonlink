@@ -5,14 +5,12 @@ use crate::storage::index::{FileIndex, MemIndex};
 use crate::storage::storage_utils::{FileId, ProcessedDeletionRecord, RecordLocation};
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
-use parquet::arrow::ArrowWriter;
+use parquet::arrow::AsyncArrowWriter;
 use std::collections::HashMap;
-use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
-// TODO(hjiang): Split into two structs, DiskSliceWriter and DiskSlice.
 pub(crate) struct DiskSliceWriter {
     /// The schema of the DiskSlice.
     ///
@@ -85,7 +83,7 @@ impl DiskSliceWriter {
                 id += 1;
             }
         }
-        self.write_batch_to_parquet(&filtered_batches)?;
+        self.write_batch_to_parquet(&filtered_batches).await?;
         self.remap_index().await?;
         Ok(())
     }
@@ -112,7 +110,7 @@ impl DiskSliceWriter {
 
     /// Write record batches to parquet files in synchronous mode.
     /// TODO(hjiang): Parallelize the parquet file write operations.
-    fn write_batch_to_parquet(
+    async fn write_batch_to_parquet(
         &mut self,
         record_batches: &Vec<(usize, RecordBatch, Vec<usize>)>,
     ) -> Result<()> {
@@ -128,9 +126,11 @@ impl DiskSliceWriter {
                 // Create the file
                 let file_name = format!("{}.parquet", Uuid::new_v4());
                 file_path = Some(dir_path.join(file_name));
-                let file = File::create(file_path.as_ref().unwrap()).map_err(Error::Io)?;
+                let file = tokio::fs::File::create(file_path.as_ref().unwrap())
+                    .await
+                    .map_err(Error::Io)?;
                 out_file_idx = files.len();
-                writer = Some(ArrowWriter::try_new(file, self.schema.clone(), None)?);
+                writer = Some(AsyncArrowWriter::try_new(file, self.schema.clone(), None)?);
                 out_row_idx = 0;
             }
             for row_idx in row_indices {
@@ -138,17 +138,17 @@ impl DiskSliceWriter {
                 out_row_idx += 1;
             }
             // Write the batch
-            writer.as_mut().unwrap().write(batch)?;
+            writer.as_mut().unwrap().write(batch).await?;
             if writer.as_ref().unwrap().memory_size() > Self::PARQUET_FILE_SIZE {
                 // Finalize the writer
-                writer.unwrap().close()?;
+                writer.unwrap().close().await?;
                 writer = None;
                 files.push((file_path.unwrap(), out_row_idx));
                 file_path = None;
             }
         }
         if let Some(writer) = writer {
-            writer.close()?;
+            writer.close().await?;
             files.push((file_path.unwrap(), out_row_idx));
         }
         self.files = files;
@@ -262,7 +262,7 @@ mod tests {
 
         // Read the files and verify the data
         for (file, _rows) in disk_slice.output_files() {
-            let file = File::open(file).map_err(Error::Io)?;
+            let file = std::fs::File::open(file).map_err(Error::Io)?;
             let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
             println!("Converted arrow schema is: {}", builder.schema());
 

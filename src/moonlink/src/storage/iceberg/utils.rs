@@ -110,8 +110,6 @@ pub fn create_catalog(warehouse_uri: &str) -> IcebergResult<Box<dyn MoonlinkCata
 }
 
 // Create iceberg table properties from table config.
-//
-// TODO(hjiang): We don't allow iceberg table configuration for now, fill in default values.
 fn create_iceberg_table_properties() -> HashMap<String, String> {
     let mut props = HashMap::with_capacity(3);
     props.insert(
