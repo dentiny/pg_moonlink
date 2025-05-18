@@ -258,13 +258,13 @@ mod tests {
 
         // Verify files were created
         assert!(!disk_slice.output_files().is_empty());
-        println!("Files: {:?}", disk_slice.output_files());
 
         // Read the files and verify the data
         for (file, _rows) in disk_slice.output_files() {
             let file = std::fs::File::open(file).map_err(Error::Io)?;
             let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-            println!("Converted arrow schema is: {}", builder.schema());
+            let actual_schema = builder.schema();
+            assert_eq!(*actual_schema, schema);
 
             let mut reader = builder.build().unwrap();
             let record_batch = reader.next().unwrap().unwrap();
@@ -365,7 +365,6 @@ mod tests {
 
         // Verify files were created
         assert!(!disk_slice.output_files().is_empty());
-        println!("Files created: {:?}", disk_slice.output_files());
 
         // Get the remapped index and verify it
         let new_index = disk_slice.take_index().unwrap();
