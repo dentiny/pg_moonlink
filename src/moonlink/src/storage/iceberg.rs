@@ -5,6 +5,7 @@ pub(crate) mod index;
 pub(crate) mod moonlink_catalog;
 pub(crate) mod puffin_utils;
 pub(crate) mod puffin_writer_proxy;
+mod table_property;
 pub(crate) mod test_utils;
 pub(crate) mod tokio_retry_utils;
 pub(crate) mod utils;
