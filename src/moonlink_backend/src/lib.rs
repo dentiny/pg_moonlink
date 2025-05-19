@@ -10,9 +10,10 @@ use std::{collections::HashMap, hash::Hash};
 use tokio::sync::RwLock;
 
 // Default local filesystem directory where all tables data will be stored under.
-const DEFAULT_MOONLINK_TABLE_BATH_PATH: &str = "./mooncake_test/";
+const DEFAULT_MOONLINK_TABLE_BASE_PATH: &str = "./mooncake_test/";
 
 pub struct MoonlinkBackend<T: Eq + Hash> {
+    // Could be either relative or absolute path.
     moonlink_table_base_path: String,
     ingest_sources: RwLock<Vec<MoonlinkPostgresSource>>,
     table_readers: RwLock<HashMap<T, ReadStateManager>>,
@@ -20,18 +21,14 @@ pub struct MoonlinkBackend<T: Eq + Hash> {
 
 impl<T: Eq + Hash> Default for MoonlinkBackend<T> {
     fn default() -> Self {
-        Self::new(DEFAULT_MOONLINK_TABLE_BATH_PATH.to_string())
+        Self::new(DEFAULT_MOONLINK_TABLE_BASE_PATH.to_string())
     }
 }
 
 impl<T: Eq + Hash> MoonlinkBackend<T> {
     pub fn new(base_path: String) -> Self {
         Self {
-            moonlink_table_base_path: std::fs::canonicalize(&base_path)
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .to_string(),
+            moonlink_table_base_path: base_path,
             ingest_sources: RwLock::new(Vec::new()),
             table_readers: RwLock::new(HashMap::new()),
         }
@@ -49,9 +46,16 @@ impl<T: Eq + Hash> MoonlinkBackend<T> {
                 return Ok(());
             }
         }
-        let mut ingest_source =
-            MoonlinkPostgresSource::new(uri.to_owned(), self.moonlink_table_base_path.clone())
-                .await?;
+
+        let base_path = std::path::Path::new(&self.moonlink_table_base_path);
+        tokio::fs::create_dir_all(base_path).await?;
+        let canonicalized_base_path = tokio::fs::canonicalize(base_path).await?;
+
+        let mut ingest_source = MoonlinkPostgresSource::new(
+            uri.to_owned(),
+            canonicalized_base_path.to_str().unwrap().to_string(),
+        )
+        .await?;
         let reader_state_manager = ingest_source.add_table(table_name).await?;
         ingest_sources.push(ingest_source);
         self.table_readers
