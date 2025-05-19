@@ -481,6 +481,7 @@ mod tests {
                     modifier: 0,
                     nullable: true,
                 },
+                // TODO(hjiang): Add composite type handling.
             ],
             lookup_key: LookupKey::Key {
                 name: "uuid_field".to_string(),
