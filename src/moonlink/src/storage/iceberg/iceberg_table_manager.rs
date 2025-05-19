@@ -336,6 +336,11 @@ impl IcebergTableManager {
             .record_puffin_metadata_and_close(puffin_filepath.clone(), puffin_writer)
             .await?;
 
+        println!("\n\n==== write deletion vector puffin file ====\n\n");
+        println!("file path = {}\n", puffin_filepath);
+        println!("start offset = 4\n");
+        println!("blob size = {}\n", blob_size);
+
         Ok(PuffinBlobRef {
             puffin_filepath,
             start_offset: 4_u32, // Puffin file starts with 4 magic bytes.

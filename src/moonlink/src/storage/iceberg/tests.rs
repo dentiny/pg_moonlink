@@ -315,14 +315,13 @@ async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {
 
 // TODO(hjiang): Figure out a way to check file index content; for example, search for an item.
 async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergResult<()> {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let path = temp_dir.path().to_path_buf();
-    let mooncake_table_metadata =
-        create_test_table_metadata(temp_dir.path().to_str().unwrap().to_string());
+    // let temp_dir = tempfile::tempdir().unwrap();
+    // let path = temp_dir.path().to_path_buf();
+    let mooncake_table_metadata = create_test_table_metadata(warehouse_uri.clone());
     let identity_property = mooncake_table_metadata.identity.clone();
 
     let iceberg_table_config = IcebergTableConfig {
-        warehouse_uri,
+        warehouse_uri: warehouse_uri.clone(),
         namespace: vec!["namespace".to_string()],
         table_name: "test_table".to_string(),
     };
@@ -334,7 +333,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         schema.as_ref().clone(),
         "test_table".to_string(),
         /*version=*/ 1,
-        path,
+        warehouse_uri.clone().into(),
         identity_property,
         iceberg_table_config.clone(),
         mooncake_table_config,
@@ -680,8 +679,12 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
 
 #[tokio::test]
 async fn test_filesystem_sync_snapshots() -> IcebergResult<()> {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let path = temp_dir.path().to_str().unwrap().to_string();
+    // let temp_dir = tempfile::tempdir().unwrap();
+    // let path = temp_dir.path().to_str().unwrap().to_string();
+
+    // Fill any non-temporary directory as you wish.
+    let path = "/tmp/iceberg-deletion-vector-test".to_string();
+    let _ = tokio::fs::remove_dir_all(path.clone()).await;
     mooncake_table_snapshot_persist_impl(path).await
 }
 
