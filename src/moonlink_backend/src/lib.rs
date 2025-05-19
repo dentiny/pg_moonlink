@@ -89,7 +89,8 @@ mod tests {
     async fn test_moonlink_service() {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let uri = "postgresql://postgres:postgres@postgres:5432/postgres";
-        let service = MoonlinkBackend::<&'static str>::new(temp_dir.path().to_str().unwrap().to_string());
+        let service =
+            MoonlinkBackend::<&'static str>::new(temp_dir.path().to_str().unwrap().to_string());
         // connect to postgres and create a table
         let (client, connection) = connect(uri, NoTls).await.unwrap();
         tokio::spawn(async move {

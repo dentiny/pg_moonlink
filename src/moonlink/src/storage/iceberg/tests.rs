@@ -814,11 +814,17 @@ async fn check_prev_data_files(
     assert_eq!(loaded_arrow_batch, expected_arrow_batch);
 
     // In the test suite, we only delete the second prepared row.
-    assert!(!deletion_vector.batch_deletion_vector.is_deleted(/*row_idx=*/ 0));
+    assert!(!deletion_vector
+        .batch_deletion_vector
+        .is_deleted(/*row_idx=*/ 0));
     if deleted {
-        assert!(deletion_vector.batch_deletion_vector.is_deleted(/*row_idx=*/ 1));
+        assert!(deletion_vector
+            .batch_deletion_vector
+            .is_deleted(/*row_idx=*/ 1));
     } else {
-        assert!(!deletion_vector.batch_deletion_vector.is_deleted(/*row_idx=*/ 1));
+        assert!(!deletion_vector
+            .batch_deletion_vector
+            .is_deleted(/*row_idx=*/ 1));
     }
 }
 
@@ -854,11 +860,17 @@ async fn check_new_data_files(
     assert_eq!(loaded_arrow_batch, expected_arrow_batch);
 
     // In the test suite, we only delete the second prepared row.
-    assert!(!deletion_vector.batch_deletion_vector.is_deleted(/*row_idx=*/ 0));
+    assert!(!deletion_vector
+        .batch_deletion_vector
+        .is_deleted(/*row_idx=*/ 0));
     if deleted {
-        assert!(deletion_vector.batch_deletion_vector.is_deleted(/*row_idx=*/ 1));
+        assert!(deletion_vector
+            .batch_deletion_vector
+            .is_deleted(/*row_idx=*/ 1));
     } else {
-        assert!(!deletion_vector.batch_deletion_vector.is_deleted(/*row_idx=*/ 1));
+        assert!(!deletion_vector
+            .batch_deletion_vector
+            .is_deleted(/*row_idx=*/ 1));
     }
 }
 
