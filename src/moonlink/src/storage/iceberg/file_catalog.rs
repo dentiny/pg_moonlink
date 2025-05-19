@@ -1,5 +1,5 @@
 use super::puffin_writer_proxy::append_puffin_metadata_and_rewrite;
-use crate::storage::iceberg::moonlink_catalog::DeletionVectorWrite;
+use crate::storage::iceberg::moonlink_catalog::PuffinWrite;
 use crate::storage::iceberg::puffin_writer_proxy::{
     get_puffin_metadata_and_close, PuffinBlobMetadataProxy,
 };
@@ -61,6 +61,7 @@ static MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
 static RETRY_DELAY_FACTOR: f32 = 1.5;
 static MAX_RETRY_COUNT: usize = 5;
 
+// opendal requires local filesystem directory to end with "/".
 fn normalize_directory(mut path: PathBuf) -> String {
     let mut os_string = path.as_mut_os_str().to_os_string();
     if os_string.to_str().unwrap().ends_with("/") {
@@ -123,7 +124,6 @@ pub struct FileCatalog {
 }
 
 impl FileCatalog {
-    #[allow(dead_code)]
     pub fn new(warehouse_location: String, config: CatalogConfig) -> Self {
         let file_io = create_file_io(&config);
         Self {
@@ -136,7 +136,7 @@ impl FileCatalog {
     }
 
     /// Get IO operator from the catalog.
-    async fn get_operator(&self) -> IcebergResult<&Operator> {
+    pub(crate) async fn get_operator(&self) -> IcebergResult<&Operator> {
         let retry_layer = RetryLayer::new()
             .with_max_times(MAX_RETRY_COUNT)
             .with_jitter()
@@ -288,12 +288,9 @@ impl FileCatalog {
         &self,
         objects_to_delete: Vec<String>,
     ) -> Result<(), Box<dyn Error>> {
-        let futures = objects_to_delete.into_iter().map(|object| {
-            async move {
-                // TODO(hjiang): Better error handling.
-                let op = self.get_operator().await.unwrap().clone();
-                op.delete(&object).await
-            }
+        let futures = objects_to_delete.into_iter().map(|object| async move {
+            let op = self.get_operator().await.unwrap().clone();
+            op.delete(&object).await
         });
 
         let results = join_all(futures).await;
@@ -350,16 +347,14 @@ impl FileCatalog {
 }
 
 #[async_trait]
-impl DeletionVectorWrite for FileCatalog {
+impl PuffinWrite for FileCatalog {
     async fn record_puffin_metadata_and_close(
         &mut self,
         puffin_filepath: String,
         puffin_writer: PuffinWriter,
     ) -> IcebergResult<()> {
-        self.puffin_blobs.insert(
-            puffin_filepath,
-            get_puffin_metadata_and_close(puffin_writer).await?,
-        );
+        let puffin_metadata = get_puffin_metadata_and_close(puffin_writer).await?;
+        self.puffin_blobs.insert(puffin_filepath, puffin_metadata);
         Ok(())
     }
 
@@ -694,6 +689,9 @@ impl Catalog for FileCatalog {
                 } => {
                     builder = builder.set_ref(ref_name, reference.clone())?;
                 }
+                TableUpdate::SetProperties { updates } => {
+                    builder = builder.set_properties(updates.clone())?;
+                }
                 _ => {
                     unreachable!("Only snapshot updates are expected in this implementation");
                 }
@@ -722,7 +720,9 @@ impl Catalog for FileCatalog {
 
         // Manifest files and manifest list has persisted into storage, make modifications based on puffin blobs.
         //
-        // TODO(hjiang): Add unit test for update and check manifest population.
+        // TODO(hjiang):
+        // 1. Add unit test for update and check manifest population.
+        // 2. Here for possible deletion vector and hash index, we potentially rewrite manifest file for data files for twice.
         for (puffin_filepath, puffin_blob_metadata) in self.puffin_blobs.iter() {
             append_puffin_metadata_and_rewrite(
                 &metadata,

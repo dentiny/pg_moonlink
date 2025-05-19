@@ -1,9 +1,9 @@
 use super::data_batches::{create_batch_from_rows, InMemoryBatch};
 use super::delete_vector::BatchDeletionVector;
-use super::{Snapshot, SnapshotTask, TableMetadata};
+use super::{Snapshot, SnapshotTask, TableConfig, TableMetadata};
 use crate::error::Result;
 use crate::storage::iceberg::iceberg_table_manager::{
-    IcebergOperation, IcebergTableManager, IcebergTableManagerConfig,
+    IcebergOperation, IcebergTableConfig, IcebergTableManager,
 };
 use crate::storage::index::Index;
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
@@ -11,10 +11,15 @@ use crate::storage::mooncake_table::MoonlinkRow;
 use crate::storage::storage_utils::RawDeletionRecord;
 use crate::storage::storage_utils::{ProcessedDeletionRecord, RecordLocation};
 use parquet::arrow::ArrowWriter;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::mem::take;
+use std::path::PathBuf;
 use std::sync::Arc;
+
 pub(crate) struct SnapshotTableState {
+    /// Mooncake table config.
+    mooncake_table_config: TableConfig,
+
     /// Current snapshot
     current_snapshot: Snapshot,
 
@@ -38,7 +43,7 @@ pub(crate) struct SnapshotTableState {
     /// Iceberg table manager, used to sync snapshot to the corresponding iceberg table.
     ///
     /// TODO(hjiang): Figure out a way to store dynamic trait for mock-based unit test.
-    iceberg_table_manager: Option<IcebergTableManager>,
+    iceberg_table_manager: IcebergTableManager,
 }
 
 pub struct ReadOutput {
@@ -48,20 +53,23 @@ pub struct ReadOutput {
 }
 
 impl SnapshotTableState {
-    pub(super) fn new(
+    pub(super) async fn new(
         metadata: Arc<TableMetadata>,
-        iceberg_table_config: Option<IcebergTableManagerConfig>,
+        iceberg_table_config: IcebergTableConfig,
     ) -> Self {
         let mut batches = BTreeMap::new();
         batches.insert(0, InMemoryBatch::new(metadata.config.batch_size));
 
-        let mut iceberg_table_manager = None;
-        if iceberg_table_config.is_some() {
-            iceberg_table_manager = Some(IcebergTableManager::new(iceberg_table_config.unwrap()));
-        }
+        let mut iceberg_table_manager =
+            IcebergTableManager::new(metadata.clone(), iceberg_table_config);
+        let snapshot = iceberg_table_manager
+            .load_snapshot_from_table()
+            .await
+            .unwrap();
 
         Self {
-            current_snapshot: Snapshot::new(metadata),
+            mooncake_table_config: metadata.config.clone(),
+            current_snapshot: snapshot,
             batches,
             rows: None,
             last_commit: RecordLocation::MemoryBatch(0, 0),
@@ -71,13 +79,50 @@ impl SnapshotTableState {
         }
     }
 
+    /// Update data file flush LSN.
+    pub(crate) fn update_flush_lsn(&mut self, lsn: u64) {
+        self.current_snapshot.data_file_flush_lsn = Some(lsn)
+    }
+
+    /// Aggregate committed deletion logs to flush point.
+    fn aggregate_ondisk_committed_deletion_logs(&self) -> HashMap<PathBuf, BatchDeletionVector> {
+        let mut aggregated_deletion_logs = std::collections::HashMap::new();
+        if self.current_snapshot.data_file_flush_lsn.is_none() {
+            return aggregated_deletion_logs;
+        }
+
+        let flush_point_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
+        for cur_deletion_log in self.committed_deletion_log.iter() {
+            assert!(
+                cur_deletion_log.lsn <= self.current_snapshot.snapshot_version,
+                "Committed deletion log {:?} is later than current snapshot LSN {}",
+                cur_deletion_log,
+                self.current_snapshot.snapshot_version
+            );
+            if cur_deletion_log.lsn > flush_point_lsn {
+                continue;
+            }
+            if let RecordLocation::DiskFile(file_id, row_idx) = &cur_deletion_log.pos {
+                let filepath = (*file_id.0).clone();
+                let deletion_vector = aggregated_deletion_logs
+                    .entry(filepath)
+                    .or_insert_with(|| BatchDeletionVector::new(1000));
+                assert!(deletion_vector.delete_row(*row_idx));
+            }
+        }
+        aggregated_deletion_logs
+    }
+
     pub(super) async fn update_snapshot(&mut self, mut task: SnapshotTask) -> u64 {
+        // To reduce iceberg write frequency, only create new iceberg snapshot when there're new data files.
+        let new_data_files = task.get_new_data_files();
+
         self.merge_mem_indices(&mut task);
         self.finalize_batches(&mut task);
         self.integrate_disk_slices(&mut task);
 
         self.rows = take(&mut task.new_rows);
-        Self::process_deletion_log(self, &mut task);
+        self.process_deletion_log(&mut task).await;
 
         if task.new_lsn != 0 {
             self.current_snapshot.snapshot_version = task.new_lsn;
@@ -86,13 +131,31 @@ impl SnapshotTableState {
             self.last_commit = cp;
         }
 
-        // Sync the latest change to iceberg.
+        // Sync the latest change to iceberg, only triggered when there're new data files generated.
+        // To reduce iceberg persistence overhead, we only snapshot when (1) there're persisted data files, or (2) accumulated unflushed deletion vector exceeds threshold.
+        // To achieve consistency between data files and deletion vectors, we only consider those with persisted data files.
+        //
         // TODO(hjiang): Error handling for snapshot sync-up.
-        if self.iceberg_table_manager.is_some() {
+        // TODO(hjiang): Need to prune committed deletion logs, will finish in the next PR.
+        // TODO(hjiang): Should also trigger when there're large number of new deletions.
+        //
+        // TODO(hjiang): Add unit test where there're no new disk files.
+        if self.current_snapshot.data_file_flush_lsn.is_some()
+            && new_data_files.len()
+                >= self
+                    .mooncake_table_config
+                    .iceberg_snapshot_new_data_file_count()
+        {
+            let flush_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
+            let aggregated_committed_deletion_logs =
+                self.aggregate_ondisk_committed_deletion_logs();
             self.iceberg_table_manager
-                .as_mut()
-                .unwrap()
-                .sync_snapshot(self.current_snapshot.disk_files.clone())
+                .sync_snapshot(
+                    flush_lsn,
+                    new_data_files,
+                    aggregated_committed_deletion_logs,
+                    self.current_snapshot.get_file_indices(),
+                )
                 .await
                 .unwrap();
         }
@@ -163,9 +226,11 @@ impl SnapshotTableState {
                 .for_each(|d| slice.remap_deletion_if_needed(d));
 
             // swap indices and drop in-memory batches that were flushed
-            self.current_snapshot
-                .indices
-                .insert_file_index(slice.take_index().unwrap());
+            if let Some(on_disk_index) = slice.take_index() {
+                self.current_snapshot
+                    .indices
+                    .insert_file_index(on_disk_index);
+            }
             self.current_snapshot
                 .indices
                 .delete_memory_index(slice.old_index());
@@ -176,7 +241,10 @@ impl SnapshotTableState {
         }
     }
 
-    fn process_delete_record(&mut self, deletion: RawDeletionRecord) -> ProcessedDeletionRecord {
+    async fn process_delete_record(
+        &mut self,
+        deletion: RawDeletionRecord,
+    ) -> ProcessedDeletionRecord {
         // Fast-path: The row we are deleting was in the mem slice so we already have the position
         if let Some(pos) = deletion.pos {
             return Self::build_processed_deletion(deletion, pos.into());
@@ -187,7 +255,6 @@ impl SnapshotTableState {
             .current_snapshot
             .indices
             .find_record(&deletion)
-            .expect("record not found in indices")
             .into_iter()
             .filter(|loc| !self.is_deleted(loc))
             .collect();
@@ -202,12 +269,15 @@ impl SnapshotTableState {
                     .as_ref()
                     .expect("row_identity required when multiple matches");
 
-                let pos = candidates
-                    .into_iter()
-                    .find(|loc| self.matches_identity(loc, identity))
-                    .expect("can't find valid record to delete");
-
-                Self::build_processed_deletion(deletion, pos)
+                let mut target_position: Option<RecordLocation> = None;
+                for loc in candidates.into_iter() {
+                    let matches = self.matches_identity(&loc, identity).await;
+                    if matches {
+                        target_position = Some(loc);
+                        break;
+                    }
+                }
+                Self::build_processed_deletion(deletion, target_position.unwrap())
             }
         }
     }
@@ -244,7 +314,7 @@ impl SnapshotTableState {
     }
 
     /// Verifies that `loc` matches the provided `identity`.
-    fn matches_identity(&self, loc: &RecordLocation, identity: &MoonlinkRow) -> bool {
+    async fn matches_identity(&self, loc: &RecordLocation, identity: &MoonlinkRow) -> bool {
         match loc {
             RecordLocation::MemoryBatch(batch_id, row_id) => {
                 let batch = self.batches.get(batch_id).expect("missing batch");
@@ -256,11 +326,13 @@ impl SnapshotTableState {
             }
             RecordLocation::DiskFile(file_name, row_id) => {
                 let name = file_name.0.to_string_lossy();
-                identity.equals_parquet_at_offset(
-                    &name,
-                    *row_id,
-                    &self.current_snapshot.metadata.identity,
-                )
+                identity
+                    .equals_parquet_at_offset(
+                        &name,
+                        *row_id,
+                        &self.current_snapshot.metadata.identity,
+                    )
+                    .await
             }
         }
     }
@@ -271,7 +343,6 @@ impl SnapshotTableState {
             RecordLocation::MemoryBatch(batch_id, row_id) => {
                 if self.batches.contains_key(batch_id) {
                     // Possible we deleted an in memory row that was flushed
-
                     let res = self
                         .batches
                         .get_mut(batch_id)
@@ -294,9 +365,9 @@ impl SnapshotTableState {
         self.committed_deletion_log.push(deletion);
     }
 
-    fn process_deletion_log(&mut self, task: &mut SnapshotTask) {
+    async fn process_deletion_log(&mut self, task: &mut SnapshotTask) {
         self.advance_pending_deletions(task);
-        self.apply_new_deletions(task);
+        self.apply_new_deletions(task).await;
     }
 
     /// Update, commit, or re-queue previously seen deletions.
@@ -307,7 +378,7 @@ impl SnapshotTableState {
             let deletion = entry.take().unwrap();
 
             if deletion.lsn <= task.new_lsn {
-                Self::commit_deletion(self, deletion);
+                self.commit_deletion(deletion);
             } else {
                 still_uncommitted.push(Some(deletion));
             }
@@ -318,9 +389,9 @@ impl SnapshotTableState {
 
     /// Convert raw deletions discovered by the snapshot task and either commit
     /// them or defer until their LSN becomes visible.
-    fn apply_new_deletions(&mut self, task: &mut SnapshotTask) {
+    async fn apply_new_deletions(&mut self, task: &mut SnapshotTask) {
         for raw in take(&mut task.new_deletions) {
-            let processed = Self::process_delete_record(self, raw);
+            let processed = self.process_delete_record(raw).await;
             if processed.lsn <= task.new_lsn {
                 Self::commit_deletion(self, processed);
             } else {

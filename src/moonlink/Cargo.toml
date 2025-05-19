@@ -14,6 +14,7 @@ bincode = { workspace = true }
 bitstream-io = { workspace = true }
 crc32fast = { workspace = true }
 futures = { workspace = true }
+hashbrown = { workspace = true }
 iceberg = { workspace = true }
 memmap2 = "0.9"
 multimap = { workspace = true }
@@ -21,9 +22,11 @@ opendal = { workspace = true }
 parquet = { workspace = true }
 randomizer = "0.1"
 roaring = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-bitstream-io = { workspace = true }
 tokio-retry2 = { version = "0.5", default-features = false, features = ["jitter"] }
 typed-builder = "0.18"
 url = { workspace = true }

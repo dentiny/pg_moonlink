@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::row::ColumnArrayBuilder;
-use crate::row::Identity;
+use crate::row::IdentityProp;
 use crate::row::MoonlinkRow;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 use crate::storage::mooncake_table::shared_array::SharedRowBuffer;
@@ -72,7 +72,7 @@ impl ColumnStoreBuffer {
         let current_batch_builder = schema
             .fields()
             .iter()
-            .map(|field| ColumnArrayBuilder::new(field.data_type().clone(), max_rows_per_buffer))
+            .map(|field| ColumnArrayBuilder::new(field.data_type(), max_rows_per_buffer, false))
             .collect();
 
         Self {
@@ -125,7 +125,7 @@ impl ColumnStoreBuffer {
         }
 
         // Convert the current rows into a RecordBatch
-        let columns: Vec<ArrayRef> = self
+        let columns = self
             .current_batch_builder
             .iter_mut()
             .zip(self.schema.fields())
@@ -156,7 +156,7 @@ impl ColumnStoreBuffer {
         record: &RawDeletionRecord,
         batch: &InMemoryBatch,
         offset: usize,
-        identity: &Identity,
+        identity: &IdentityProp,
     ) -> bool {
         if record.row_identity.is_some() {
             if let Some(batch) = &batch.data {
@@ -181,7 +181,7 @@ impl ColumnStoreBuffer {
         &self,
         record: &RawDeletionRecord,
         record_location: &RecordLocation,
-        identity: &Identity,
+        identity: &IdentityProp,
     ) -> Option<(u64, usize)> {
         if let RecordLocation::MemoryBatch(batch_id, row_offset) = record_location {
             let idx = self
@@ -209,7 +209,7 @@ impl ColumnStoreBuffer {
         &mut self,
         record: &RawDeletionRecord,
         record_location: &RecordLocation,
-        identity: &Identity,
+        identity: &IdentityProp,
     ) -> Option<(u64, usize)> {
         if let RecordLocation::MemoryBatch(batch_id, row_offset) = record_location {
             let idx = self
@@ -271,8 +271,9 @@ pub(super) fn create_batch_from_rows(
         .iter()
         .map(|field| {
             Box::new(ColumnArrayBuilder::new(
-                field.data_type().clone(),
+                field.data_type(),
                 rows.len(),
+                false,
             ))
         })
         .collect();

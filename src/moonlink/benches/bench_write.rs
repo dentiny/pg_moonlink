@@ -1,9 +1,11 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use moonlink::row::{Identity, MoonlinkRow, RowValue};
-use moonlink::MooncakeTable;
+use moonlink::row::{IdentityProp, MoonlinkRow, RowValue};
+use moonlink::{IcebergTableConfig, MooncakeTable, TableConfig};
+use std::collections::HashMap;
 use tempfile::tempdir;
 use tokio::runtime::Runtime;
+
 fn create_test_row(id: i32) -> MoonlinkRow {
     MoonlinkRow::new(vec![
         RowValue::Int32(id),
@@ -23,9 +25,18 @@ fn bench_write(c: &mut Criterion) {
 
     let temp_dir = tempdir().unwrap();
     let schema = Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("name", DataType::Utf8, true),
-        Field::new("age", DataType::Int32, false),
+        Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "1".to_string(),
+        )])),
+        Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "2".to_string(),
+        )])),
+        Field::new("age", DataType::Int32, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "3".to_string(),
+        )])),
     ]);
 
     let batches = generate_batches(1000000);
@@ -35,14 +46,22 @@ fn bench_write(c: &mut Criterion) {
     group.bench_function("write_1m_rows", |b| {
         b.iter(|| {
             rt.block_on(async {
+                // Create a temporary warehouse location for each benchmark suite, otherwise iceberg table manager loads previous states.
+                let temp_warehouse_dir = tempdir().unwrap();
+                let temp_warehouse_uri = temp_warehouse_dir.path().to_str().unwrap().to_string();
+                let iceberg_table_config = IcebergTableConfig::builder()
+                    .warehouse_uri(temp_warehouse_uri)
+                    .build();
                 let mut table = MooncakeTable::new(
                     schema.clone(),
                     "test_table".to_string(),
                     1,
                     temp_dir.path().to_path_buf(),
-                    Identity::SinglePrimitiveKey(0),
-                    None,
-                );
+                    IdentityProp::SinglePrimitiveKey(0),
+                    iceberg_table_config,
+                    TableConfig::new(),
+                )
+                .await;
                 for row in batches.iter() {
                     let _ = table.append(MoonlinkRow {
                         values: row.values.clone(),
@@ -57,14 +76,22 @@ fn bench_write(c: &mut Criterion) {
     group.bench_function("stream_write_1m_rows", |b| {
         b.iter(|| {
             rt.block_on(async {
+                // Create a temporary warehouse location for each benchmark suite, otherwise iceberg table manager loads previous states.
+                let temp_warehouse_dir = tempdir().unwrap();
+                let temp_warehouse_uri = temp_warehouse_dir.path().to_str().unwrap().to_string();
+                let iceberg_table_config = IcebergTableConfig::builder()
+                    .warehouse_uri(temp_warehouse_uri)
+                    .build();
                 let mut table = MooncakeTable::new(
                     schema.clone(),
                     "test_table".to_string(),
                     1,
                     temp_dir.path().to_path_buf(),
-                    Identity::SinglePrimitiveKey(0),
-                    None,
-                );
+                    IdentityProp::SinglePrimitiveKey(0),
+                    iceberg_table_config,
+                    TableConfig::new(),
+                )
+                .await;
                 for row in batches.iter() {
                     let _ = table.append_in_stream_batch(
                         MoonlinkRow {
@@ -82,24 +109,31 @@ fn bench_write(c: &mut Criterion) {
     group.bench_function("stream_delete_1m_rows", |b| {
         b.iter_batched(
             || {
-                let mut table = MooncakeTable::new(
+                // Create a temporary warehouse location for each benchmark suite, otherwise iceberg table manager loads previous states.
+                let temp_warehouse_dir = tempdir().unwrap();
+                let temp_warehouse_uri = temp_warehouse_dir.path().to_str().unwrap().to_string();
+                let iceberg_table_config = IcebergTableConfig::builder()
+                    .warehouse_uri(temp_warehouse_uri)
+                    .build();
+                let mut table = rt.block_on(MooncakeTable::new(
                     schema.clone(),
                     "test_table".to_string(),
                     1,
                     temp_dir.path().to_path_buf(),
-                    Identity::SinglePrimitiveKey(0),
-                    None,
-                );
-                for row in batches.iter() {
-                    let _ = table.append_in_stream_batch(
-                        MoonlinkRow {
-                            values: row.values.clone(),
-                        },
-                        1,
-                    );
-                }
+                    IdentityProp::SinglePrimitiveKey(0),
+                    iceberg_table_config,
+                    TableConfig::new(),
+                ));
                 rt.block_on(async {
-                    let handle = table.flush_transaction_stream(1, 100000);
+                    for row in batches.iter() {
+                        let _ = table.append_in_stream_batch(
+                            MoonlinkRow {
+                                values: row.values.clone(),
+                            },
+                            1,
+                        );
+                    }
+                    let handle = table.flush_transaction_stream(1);
                     let _ = handle.await.unwrap();
                 });
                 table
@@ -114,10 +148,10 @@ fn bench_write(c: &mut Criterion) {
                             1,
                         );
                     }
-                    let handle = table.flush_transaction_stream(1, 10000);
+                    let handle = table.flush_transaction_stream(1);
                     let _ = handle.await.unwrap();
-                    let handle = table.create_snapshot();
-                    let _ = handle.unwrap().await.unwrap();
+                    //let handle = table.create_snapshot();
+                    //let _ = handle.unwrap().await.unwrap();
                 });
             },
             BatchSize::PerIteration,

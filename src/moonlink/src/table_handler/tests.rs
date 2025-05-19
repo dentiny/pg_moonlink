@@ -2,7 +2,7 @@ use super::test_utils::*;
 
 #[tokio::test]
 async fn test_table_handler() {
-    let mut env = TestEnvironment::new();
+    let mut env = TestEnvironment::new().await;
 
     env.append_row(1, "John", 30, None).await;
     env.commit(1).await;
@@ -17,7 +17,7 @@ async fn test_table_handler() {
 
 #[tokio::test]
 async fn test_table_handler_flush() {
-    let mut env = TestEnvironment::new();
+    let mut env = TestEnvironment::new().await;
 
     let rows_data = vec![(1, "Alice", 25), (2, "Bob", 30), (3, "Charlie", 35)];
     for (id, name, age) in rows_data {
@@ -36,7 +36,7 @@ async fn test_table_handler_flush() {
 
 #[tokio::test]
 async fn test_streaming_append_and_commit() {
-    let mut env = TestEnvironment::new();
+    let mut env = TestEnvironment::new().await;
     let xact_id = 101;
 
     env.append_row(10, "Transaction-User", 25, Some(xact_id))
@@ -51,7 +51,7 @@ async fn test_streaming_append_and_commit() {
 
 #[tokio::test]
 async fn test_streaming_delete() {
-    let mut env = TestEnvironment::new();
+    let mut env = TestEnvironment::new().await;
     let xact_id = 101;
 
     env.append_row(10, "Transaction-User1", 25, Some(xact_id))
@@ -72,7 +72,7 @@ async fn test_streaming_delete() {
 
 #[tokio::test]
 async fn test_streaming_abort() {
-    let mut env = TestEnvironment::new();
+    let mut env = TestEnvironment::new().await;
 
     // Baseline data
     let baseline_xact_id = 100;
@@ -99,7 +99,7 @@ async fn test_streaming_abort() {
 
 #[tokio::test]
 async fn test_concurrent_streaming_transactions() {
-    let mut env = TestEnvironment::new();
+    let mut env = TestEnvironment::new().await;
     let xact_id_1 = 103; // Will be committed
     let xact_id_2 = 104; // Will be aborted
 
@@ -119,7 +119,7 @@ async fn test_concurrent_streaming_transactions() {
 
 #[tokio::test]
 async fn test_stream_delete_unflushed_non_streamed_row() {
-    let mut env = TestEnvironment::new();
+    let mut env = TestEnvironment::new().await;
 
     // Define LSNs and transaction ID for clarity
     let initial_insert_lsn = 10; // LSN for the non-streaming insert
@@ -189,7 +189,7 @@ async fn test_stream_delete_unflushed_non_streamed_row() {
 
 #[tokio::test]
 async fn test_streaming_transaction_periodic_flush() {
-    let mut env = TestEnvironment::new();
+    let mut env = TestEnvironment::new().await;
     let xact_id = 201;
     let commit_lsn = 20; // LSN at which the transaction will eventually commit
     let initial_read_lsn_target = commit_lsn; // For verifying no data pre-commit
@@ -230,7 +230,7 @@ async fn test_streaming_transaction_periodic_flush() {
 
 #[tokio::test]
 async fn test_stream_delete_previously_flushed_row_same_xact() {
-    let mut env = TestEnvironment::new();
+    let mut env = TestEnvironment::new().await;
     let xact_id = 401;
     let stream_commit_lsn = 40;
 
@@ -263,7 +263,7 @@ async fn test_stream_delete_previously_flushed_row_same_xact() {
 
 #[tokio::test]
 async fn test_stream_delete_from_stream_memslice_row() {
-    let mut env = TestEnvironment::new();
+    let mut env = TestEnvironment::new().await;
     let xact_id = 402;
     let stream_commit_lsn = 41;
 
@@ -295,7 +295,7 @@ async fn test_stream_delete_from_stream_memslice_row() {
 
 #[tokio::test]
 async fn test_stream_delete_from_main_disk_row() {
-    let mut env = TestEnvironment::new();
+    let mut env = TestEnvironment::new().await;
     let main_commit_lsn_flushed = 5; // LSN for the row that will be on disk
     let xact_id = 403;
     let stream_commit_lsn = 42;
@@ -334,7 +334,7 @@ async fn test_stream_delete_from_main_disk_row() {
 
 #[tokio::test]
 async fn test_streaming_transaction_periodic_flush_then_abort() {
-    let mut env = TestEnvironment::new();
+    let mut env = TestEnvironment::new().await;
     let baseline_xact_id = 500; // For baseline data
     let baseline_commit_lsn = 50;
     let aborted_xact_id = 501;

@@ -5,12 +5,13 @@ mod mem_slice;
 mod shared_array;
 mod snapshot;
 
-use super::iceberg::iceberg_table_manager::IcebergTableManagerConfig;
-use super::index::{MemIndex, MooncakeIndex};
+use super::iceberg::iceberg_table_manager::IcebergTableConfig;
+use super::index::{FileIndex, MemIndex, MooncakeIndex};
 use super::storage_utils::{RawDeletionRecord, RecordLocation};
 use crate::error::{Error, Result};
-use crate::row::{Identity, MoonlinkRow};
+use crate::row::{IdentityProp, MoonlinkRow};
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
+use futures::executor::block_on;
 use std::collections::HashMap;
 use std::mem::take;
 use std::path::{Path, PathBuf};
@@ -22,34 +23,52 @@ use delete_vector::BatchDeletionVector;
 pub(crate) use disk_slice::DiskSliceWriter;
 use mem_slice::MemSlice;
 pub(crate) use snapshot::SnapshotTableState;
-use tokio::spawn;
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 
-#[derive(Debug)]
-pub(crate) struct TableConfig {
-    /// mem slice size
-    ///
-    _mem_slice_size: usize,
-    batch_size: usize,
+#[derive(Clone, Debug)]
+pub struct TableConfig {
+    /// Number of batch records which decides when to flush records from MemSlice to disk.
+    pub mem_slice_size: usize,
+    /// Max number of rows in MemSlice.
+    pub batch_size: usize,
+    /// Number of new data files to trigger an iceberg snapshot.
+    pub iceberg_snapshot_new_data_file_count: usize,
+}
+
+impl Default for TableConfig {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TableConfig {
     #[cfg(debug_assertions)]
-    const DEFAULT_MEM_SLICE_SIZE: usize = 2048 * 2;
+    const DEFAULT_MEM_SLICE_SIZE: usize = 4 * 16;
     #[cfg(debug_assertions)]
     const DEFAULT_BATCH_SIZE: usize = 4;
+    #[cfg(debug_assertions)]
+    const DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT: usize = 1;
 
     #[cfg(not(debug_assertions))]
     const DEFAULT_MEM_SLICE_SIZE: usize = 2048 * 16;
     #[cfg(not(debug_assertions))]
     const DEFAULT_BATCH_SIZE: usize = 2048;
+    #[cfg(not(debug_assertions))]
+    const DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT: usize = 1;
 
     pub fn new() -> Self {
         Self {
-            _mem_slice_size: Self::DEFAULT_MEM_SLICE_SIZE,
+            mem_slice_size: Self::DEFAULT_MEM_SLICE_SIZE,
             batch_size: Self::DEFAULT_BATCH_SIZE,
+            iceberg_snapshot_new_data_file_count: Self::DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT,
         }
+    }
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
+    }
+    pub fn iceberg_snapshot_new_data_file_count(&self) -> usize {
+        self.iceberg_snapshot_new_data_file_count
     }
 }
 
@@ -66,7 +85,7 @@ pub struct TableMetadata {
     /// storage path
     pub(crate) path: PathBuf,
     /// function to get lookup key from row
-    pub(crate) identity: Identity,
+    pub(crate) identity: IdentityProp,
 }
 
 /// Snapshot contains state of the table at a given time.
@@ -76,11 +95,22 @@ pub struct Snapshot {
     /// table metadata
     pub(crate) metadata: Arc<TableMetadata>,
     /// datafile and their deletion vectors
+    /// TODO(hjiang): Use `String` as key.
     pub(crate) disk_files: HashMap<PathBuf, BatchDeletionVector>,
-    /// Current snapshot version
-    snapshot_version: u64,
+    /// Current snapshot version, which is the mooncake table commit point.
+    pub(crate) snapshot_version: u64,
+    /// LSN which last data file flush operation happens.
+    ///
+    /// There're two important time points: commit and flush.
+    /// - Data files are persisted at flush point, which could span across multiple commit points;
+    /// - Batch deletion vector, which is the value for `Snapshot::disk_files` updates at commit points.
+    ///   So likely they are not consistent from LSN's perspective.
+    ///
+    /// At iceberg snapshot creation, we should only dump consistent data files and deletion logs.
+    /// Data file flush LSN is recorded here, to get corresponding deletion logs from "committed deletion logs".
+    pub(crate) data_file_flush_lsn: Option<u64>,
     /// indices
-    indices: MooncakeIndex,
+    pub(crate) indices: MooncakeIndex,
 }
 
 impl Snapshot {
@@ -89,8 +119,14 @@ impl Snapshot {
             metadata,
             disk_files: HashMap::new(),
             snapshot_version: 0,
+            data_file_flush_lsn: None,
             indices: MooncakeIndex::new(),
         }
+    }
+
+    /// Get file indices for the current snapshot.
+    pub(crate) fn get_file_indices(&self) -> &[FileIndex] {
+        self.indices.file_indices.as_slice()
     }
 
     pub fn get_name_for_inmemory_file(&self) -> PathBuf {
@@ -135,6 +171,21 @@ impl SnapshotTask {
     pub fn should_create_snapshot(&self) -> bool {
         self.new_lsn > 0 || !self.new_disk_slices.is_empty() || self.new_deletions.len() > 1000
     }
+
+    /// Get newly created data files.
+    pub(crate) fn get_new_data_files(&self) -> Vec<PathBuf> {
+        let mut new_files = vec![];
+        for cur_disk_slice in self.new_disk_slices.iter() {
+            new_files.extend(
+                cur_disk_slice
+                    .output_files()
+                    .iter()
+                    .map(|(p, _)| p.clone())
+                    .collect::<Vec<_>>(),
+            );
+        }
+        new_files
+    }
 }
 
 /// Used to track the state of a streamed transaction
@@ -146,9 +197,9 @@ struct TransactionStreamState {
 }
 
 impl TransactionStreamState {
-    fn new(schema: Arc<Schema>, batch_size: usize) -> Self {
+    fn new(schema: Arc<Schema>, batch_size: usize, identity: IdentityProp) -> Self {
         Self {
-            mem_slice: MemSlice::new(schema, batch_size),
+            mem_slice: MemSlice::new(schema, batch_size, identity),
             new_deletions: Vec::new(),
             new_disk_slices: Vec::new(),
         }
@@ -186,15 +237,15 @@ pub struct MooncakeTable {
 impl MooncakeTable {
     /// foreground functions
     ///
-    pub fn new(
+    pub async fn new(
         schema: Schema,
         name: String,
         version: u64,
         base_path: PathBuf,
-        identity: Identity,
-        iceberg_table_config: Option<IcebergTableManagerConfig>,
+        identity: IdentityProp,
+        iceberg_table_config: IcebergTableConfig,
+        table_config: TableConfig,
     ) -> Self {
-        let table_config = TableConfig::new();
         let schema = Arc::new(schema);
         let metadata = Arc::new(TableMetadata {
             name,
@@ -206,12 +257,15 @@ impl MooncakeTable {
         });
         let (table_snapshot_watch_sender, table_snapshot_watch_receiver) = watch::channel(0);
         Self {
-            mem_slice: MemSlice::new(metadata.schema.clone(), metadata.config.batch_size),
+            mem_slice: MemSlice::new(
+                metadata.schema.clone(),
+                metadata.config.batch_size,
+                metadata.identity.clone(),
+            ),
             metadata: metadata.clone(),
-            snapshot: Arc::new(RwLock::new(SnapshotTableState::new(
-                metadata,
-                iceberg_table_config,
-            ))),
+            snapshot: Arc::new(RwLock::new(
+                SnapshotTableState::new(metadata, iceberg_table_config).await,
+            )),
             next_snapshot_task: SnapshotTask::new(),
             transaction_stream_states: HashMap::new(),
             table_snapshot_watch_sender,
@@ -230,7 +284,8 @@ impl MooncakeTable {
 
     pub fn append(&mut self, row: MoonlinkRow) -> Result<()> {
         let lookup_key = self.metadata.identity.get_lookup_key(&row);
-        if let Some(batch) = self.mem_slice.append(lookup_key, row)? {
+        let identity_for_key = self.metadata.identity.extract_identity_for_key(&row);
+        if let Some(batch) = self.mem_slice.append(lookup_key, row, identity_for_key)? {
             self.next_snapshot_task.new_record_batches.push(batch);
         }
         Ok(())
@@ -255,7 +310,7 @@ impl MooncakeTable {
     }
 
     pub fn should_flush(&self) -> bool {
-        self.mem_slice.get_num_rows() >= self.metadata.config.batch_size
+        self.mem_slice.get_num_rows() >= self.metadata.config.mem_slice_size
     }
 
     fn get_or_create_stream_state<'a>(
@@ -264,7 +319,11 @@ impl MooncakeTable {
         xact_id: u32,
     ) -> &'a mut TransactionStreamState {
         transaction_stream_states.entry(xact_id).or_insert_with(|| {
-            TransactionStreamState::new(metadata.schema.clone(), metadata.config.batch_size)
+            TransactionStreamState::new(
+                metadata.schema.clone(),
+                metadata.config.batch_size,
+                metadata.identity.clone(),
+            )
         })
     }
 
@@ -278,14 +337,17 @@ impl MooncakeTable {
     }
 
     pub fn append_in_stream_batch(&mut self, row: MoonlinkRow, xact_id: u32) -> Result<()> {
-        let lookup_key = self.metadata.identity.get_lookup_key(&row);
         let stream_state = Self::get_or_create_stream_state(
             &mut self.transaction_stream_states,
             &self.metadata,
             xact_id,
         );
 
-        stream_state.mem_slice.append(lookup_key, row)?;
+        let lookup_key = self.metadata.identity.get_lookup_key(&row);
+        let identity_for_key = self.metadata.identity.extract_identity_for_key(&row);
+        stream_state
+            .mem_slice
+            .append(lookup_key, row, identity_for_key)?;
 
         Ok(())
     }
@@ -341,7 +403,7 @@ impl MooncakeTable {
         mem_slice: &mut MemSlice,
         snapshot_task: &mut SnapshotTask,
         metadata: &Arc<TableMetadata>,
-        lsn: Option<u64>,
+        lsn: u64,
     ) -> Result<DiskSliceWriter> {
         // Finalize the current batch (if needed)
         let (new_batch, batches, index) = mem_slice.drain().unwrap();
@@ -361,10 +423,10 @@ impl MooncakeTable {
                 metadata_clone.schema.clone(),
                 path_clone,
                 batches,
-                lsn,
+                Some(lsn),
                 index,
             );
-            disk_slice.write()?;
+            block_on(disk_slice.write())?;
             Ok(disk_slice)
         });
 
@@ -391,7 +453,7 @@ impl MooncakeTable {
             index,
         );
         // TODO(nbiscaro): Find longer term solution that allows aysnc write
-        disk_slice.write()?;
+        block_on(disk_slice.write())?;
         Ok(disk_slice)
     }
 
@@ -448,15 +510,23 @@ impl MooncakeTable {
     // UNDONE(BATCH_INSERT):
     // flush uncommitted batches from big batch insert
     pub async fn flush(&mut self, lsn: u64) -> Result<()> {
+        // Marks a checkpoint for iceberg snapshot creation.
+        self.snapshot.write().await.update_flush_lsn(lsn);
+
+        if self.mem_slice.is_empty() {
+            return Ok(());
+        }
+
         // Flush data files into iceberb table.
         let disk_slice = Self::inner_flush_data_files(
             &mut self.mem_slice,
             &mut self.next_snapshot_task,
             &self.metadata,
-            Some(lsn),
+            lsn,
         )
         .await?;
         self.next_snapshot_task.new_disk_slices.push(disk_slice);
+
         Ok(())
     }
 
@@ -468,7 +538,7 @@ impl MooncakeTable {
         }
         self.next_snapshot_task.new_rows = Some(self.mem_slice.get_latest_rows());
         let next_snapshot_task = take(&mut self.next_snapshot_task);
-        Some(spawn(Self::create_snapshot_async(
+        Some(tokio::task::spawn(Self::create_snapshot_async(
             self.snapshot.clone(),
             next_snapshot_task,
         )))

@@ -22,3 +22,6 @@ tokio = { workspace = true }
 tokio-postgres = { workspace = true }
 tracing = { version = "0.1", default-features = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+iceberg = { workspace = true }

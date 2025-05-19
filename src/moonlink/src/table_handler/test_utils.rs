@@ -1,19 +1,32 @@
-use crate::row::{Identity, MoonlinkRow, RowValue};
+use crate::row::{IdentityProp, MoonlinkRow, RowValue};
+use crate::storage::IcebergTableConfig;
 use crate::storage::{verify_files_and_deletions, MooncakeTable};
 use crate::table_handler::{TableEvent, TableHandler}; // Ensure this path is correct
 use crate::union_read::{decode_read_state_for_testing, ReadStateManager};
+use crate::TableConfig;
 
-use arrow::datatypes::{DataType, Field, Schema};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
+
+use arrow::datatypes::{DataType, Field, Schema};
 use tokio::sync::{mpsc, watch};
 
 /// Creates a default schema for testing.
 pub fn default_schema() -> Schema {
     Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("name", DataType::Utf8, true),
-        Field::new("age", DataType::Int32, false),
+        Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "1".to_string(),
+        )])),
+        Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "2".to_string(),
+        )])),
+        Field::new("age", DataType::Int32, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "3".to_string(),
+        )])),
     ])
 }
 
@@ -38,19 +51,28 @@ pub struct TestEnvironment {
 
 impl TestEnvironment {
     /// Creates a new test environment with default settings.
-    pub fn new() -> Self {
+    pub async fn new() -> Self {
         let schema = default_schema();
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().to_path_buf();
 
+        // TODO(hjiang): Hard-code iceberg table namespace and table name.
+        let table_name = "table_name";
+        let iceberg_table_config = IcebergTableConfig {
+            warehouse_uri: path.to_str().unwrap().to_string(),
+            namespace: vec!["default".to_string()],
+            table_name: table_name.to_string(),
+        };
         let mooncake_table = MooncakeTable::new(
             schema,
-            "test_table".to_string(),
+            table_name.to_string(),
             1,
             path,
-            Identity::Keys(vec![0]),
-            /*iceberg_table_config=*/ None,
-        );
+            IdentityProp::Keys(vec![0]),
+            iceberg_table_config,
+            TableConfig::new(),
+        )
+        .await;
 
         let (replication_tx, replication_rx) = watch::channel(0u64);
         let (table_commit_tx, table_commit_rx) = watch::channel(0u64);

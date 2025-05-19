@@ -5,14 +5,12 @@ use crate::storage::index::{FileIndex, MemIndex};
 use crate::storage::storage_utils::{FileId, ProcessedDeletionRecord, RecordLocation};
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
-use parquet::arrow::ArrowWriter;
+use parquet::arrow::AsyncArrowWriter;
 use std::collections::HashMap;
-use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
-// TODO(hjiang): Split into two structs, DiskSliceWriter and DiskSlice.
 pub(crate) struct DiskSliceWriter {
     /// The schema of the DiskSlice.
     ///
@@ -66,7 +64,7 @@ impl DiskSliceWriter {
     }
 
     /// Apply deletion vector to in-memory batches, write to parquet files and remap index.
-    pub(super) fn write(&mut self) -> Result<()> {
+    pub(super) async fn write(&mut self) -> Result<()> {
         let mut filtered_batches = Vec::new();
         let mut id = 0;
         for entry in self.batches.iter() {
@@ -85,8 +83,8 @@ impl DiskSliceWriter {
                 id += 1;
             }
         }
-        self.write_batch_to_parquet(&filtered_batches)?;
-        self.remap_index()?;
+        self.write_batch_to_parquet(&filtered_batches).await?;
+        self.remap_index().await?;
         Ok(())
     }
 
@@ -112,7 +110,7 @@ impl DiskSliceWriter {
 
     /// Write record batches to parquet files in synchronous mode.
     /// TODO(hjiang): Parallelize the parquet file write operations.
-    fn write_batch_to_parquet(
+    async fn write_batch_to_parquet(
         &mut self,
         record_batches: &Vec<(usize, RecordBatch, Vec<usize>)>,
     ) -> Result<()> {
@@ -128,9 +126,11 @@ impl DiskSliceWriter {
                 // Create the file
                 let file_name = format!("{}.parquet", Uuid::new_v4());
                 file_path = Some(dir_path.join(file_name));
-                let file = File::create(file_path.as_ref().unwrap()).map_err(Error::Io)?;
+                let file = tokio::fs::File::create(file_path.as_ref().unwrap())
+                    .await
+                    .map_err(Error::Io)?;
                 out_file_idx = files.len();
-                writer = Some(ArrowWriter::try_new(file, self.schema.clone(), None)?);
+                writer = Some(AsyncArrowWriter::try_new(file, self.schema.clone(), None)?);
                 out_row_idx = 0;
             }
             for row_idx in row_indices {
@@ -138,36 +138,31 @@ impl DiskSliceWriter {
                 out_row_idx += 1;
             }
             // Write the batch
-            writer.as_mut().unwrap().write(batch)?;
+            writer.as_mut().unwrap().write(batch).await?;
             if writer.as_ref().unwrap().memory_size() > Self::PARQUET_FILE_SIZE {
                 // Finalize the writer
-                writer.unwrap().close()?;
+                writer.unwrap().close().await?;
                 writer = None;
                 files.push((file_path.unwrap(), out_row_idx));
                 file_path = None;
             }
         }
         if let Some(writer) = writer {
-            writer.close()?;
+            writer.close().await?;
             files.push((file_path.unwrap(), out_row_idx));
         }
         self.files = files;
         Ok(())
     }
 
-    fn remap_index(&mut self) -> Result<()> {
+    async fn remap_index(&mut self) -> Result<()> {
+        if self.old_index().is_empty() {
+            return Ok(());
+        }
         let list = self
             .old_index
-            .iter()
-            .filter_map(|(key, value)| {
-                let RecordLocation::MemoryBatch(batch_id, row_idx) = value else {
-                    panic!("Invalid record location");
-                };
-                let old_location = (*self.batch_id_to_idx.get(batch_id).unwrap(), *row_idx);
-                let new_location = self.row_offset_mapping[old_location.0][old_location.1];
-                new_location.map(|new_location| (*key, new_location.0, new_location.1))
-            })
-            .collect::<Vec<_>>();
+            .remap_into_vec(&self.batch_id_to_idx, &self.row_offset_mapping);
+
         let mut index_builder = GlobalIndexBuilder::new();
         index_builder.set_files(
             self.files
@@ -176,7 +171,7 @@ impl DiskSliceWriter {
                 .collect(),
         );
         index_builder.set_directory(self.dir_path.clone());
-        self.new_index = Some(index_builder.build_from_flush(list));
+        self.new_index = Some(index_builder.build_from_flush(list).await);
         Ok(())
     }
 
@@ -204,20 +199,18 @@ impl DiskSliceWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::row::{Identity, MoonlinkRow, RowValue};
+    use crate::row::{IdentityProp, MoonlinkRow, RowValue};
     use crate::storage::mooncake_table::mem_slice::MemSlice;
     use crate::storage::storage_utils::RawDeletionRecord;
     use arrow::datatypes::{DataType, Field};
+    use arrow_array::{Int32Array, StringArray};
     use arrow_schema::Schema;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use tempfile::tempdir;
 
-    #[test]
-    fn test_disk_slice_builder() -> Result<()> {
-        // Create a temporary directory for the test
-        let temp_dir = tempdir().map_err(Error::Io)?;
-        // Create a schema for testing
-        let schema = Arc::new(Schema::new(vec![
+    /// Util function to create test schema.
+    fn get_test_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
                 "PARQUET:field_id".to_string(),
                 "1".to_string(),
@@ -226,10 +219,19 @@ mod tests {
                 "PARQUET:field_id".to_string(),
                 "2".to_string(),
             )])),
-        ]));
+        ]))
+    }
 
+    #[tokio::test]
+    async fn test_disk_slice_builder() -> Result<()> {
+        // Create a temporary directory for the test
+        let temp_dir = tempdir().map_err(Error::Io)?;
+        // Create a schema for testing
+        let schema = get_test_schema();
+
+        let identity = IdentityProp::SinglePrimitiveKey(0);
         // Create a MemSlice with test data
-        let mut mem_slice = MemSlice::new(schema.clone(), 100);
+        let mut mem_slice = MemSlice::new(schema.clone(), 100, identity);
 
         // Add some test rows
         let row1 = MoonlinkRow::new(vec![
@@ -241,34 +243,40 @@ mod tests {
             RowValue::ByteArray("Bob".as_bytes().to_vec()),
         ]);
 
-        mem_slice.append(1, row1)?;
-        mem_slice.append(2, row2)?;
-        let (_new_batch, entries, _index) = mem_slice.drain().unwrap();
-        let mut old_index = MemIndex::new();
-        old_index.insert(1, RecordLocation::MemoryBatch(0, 0));
-        old_index.insert(2, RecordLocation::MemoryBatch(0, 1));
+        mem_slice.append(1, row1, None)?;
+        mem_slice.append(2, row2, None)?;
+        let (_new_batch, entries, old_index) = mem_slice.drain().unwrap();
 
         let mut disk_slice = DiskSliceWriter::new(
-            schema,
+            schema.clone(),
             temp_dir.path().to_path_buf(),
             entries,
             Some(1),
             Arc::new(old_index),
         );
-        disk_slice.write()?;
+        disk_slice.write().await?;
+
         // Verify files were created
         assert!(!disk_slice.output_files().is_empty());
-        println!("Files: {:?}", disk_slice.output_files());
 
         // Read the files and verify the data
         for (file, _rows) in disk_slice.output_files() {
-            let file = File::open(file).map_err(Error::Io)?;
+            let file = std::fs::File::open(file).map_err(Error::Io)?;
             let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-            println!("Converted arrow schema is: {}", builder.schema());
+            let actual_schema = builder.schema();
+            assert_eq!(*actual_schema, schema);
 
             let mut reader = builder.build().unwrap();
             let record_batch = reader.next().unwrap().unwrap();
-            println!("{:?}", record_batch);
+            let expected_record_batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2])),
+                    Arc::new(StringArray::from(vec!["Alice", "Bob"])),
+                ],
+            )
+            .unwrap();
+            assert_eq!(record_batch, expected_record_batch);
         }
         // Clean up temporary directory
         temp_dir.close().map_err(Error::Io)?;
@@ -276,25 +284,18 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_index_remapping() -> Result<()> {
+    #[tokio::test]
+    async fn test_index_remapping() -> Result<()> {
         // Create a temporary directory for the test
         let temp_dir = tempdir().map_err(Error::Io)?;
 
         // Create a schema for testing
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
-                "PARQUET:field_id".to_string(),
-                "1".to_string(),
-            )])),
-            Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
-                "PARQUET:field_id".to_string(),
-                "2".to_string(),
-            )])),
-        ]));
+        let schema = get_test_schema();
+
+        let identity = IdentityProp::SinglePrimitiveKey(0);
 
         // Create a MemSlice with test data - more rows this time
-        let mut mem_slice = MemSlice::new(schema.clone(), 3);
+        let mut mem_slice = MemSlice::new(schema.clone(), 3, identity);
 
         // Add several test rows
         let rows = [
@@ -326,7 +327,7 @@ mod tests {
                 RowValue::Int32(v) => v as u64,
                 _ => panic!("Expected i32"),
             };
-            mem_slice.append(key, row)?;
+            mem_slice.append(key, row, None)?;
         }
 
         // Delete a couple of rows to test that only active rows are mapped
@@ -337,7 +338,7 @@ mod tests {
                 pos: Some((0, 1)),
                 lsn: 1,
             },
-            &Identity::SinglePrimitiveKey(0),
+            &IdentityProp::SinglePrimitiveKey(0),
         ); // Delete Bob (ID 2)
         mem_slice.delete(
             &RawDeletionRecord {
@@ -346,7 +347,7 @@ mod tests {
                 pos: Some((0, 3)),
                 lsn: 1,
             },
-            &Identity::SinglePrimitiveKey(0),
+            &IdentityProp::SinglePrimitiveKey(0),
         ); // Delete David (ID 4)
 
         let (_new_batch, entries, index) = mem_slice.drain().unwrap();
@@ -360,11 +361,10 @@ mod tests {
         );
 
         // Write the disk slice
-        disk_slice.write()?;
+        disk_slice.write().await?;
 
         // Verify files were created
         assert!(!disk_slice.output_files().is_empty());
-        println!("Files created: {:?}", disk_slice.output_files());
 
         // Get the remapped index and verify it
         let new_index = disk_slice.take_index().unwrap();
