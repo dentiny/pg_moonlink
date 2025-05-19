@@ -61,6 +61,7 @@ static MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
 static RETRY_DELAY_FACTOR: f32 = 1.5;
 static MAX_RETRY_COUNT: usize = 5;
 
+// opendal requires local filesystem directory to end with "/".
 fn normalize_directory(mut path: PathBuf) -> String {
     let mut os_string = path.as_mut_os_str().to_os_string();
     if os_string.to_str().unwrap().ends_with("/") {
@@ -287,12 +288,9 @@ impl FileCatalog {
         &self,
         objects_to_delete: Vec<String>,
     ) -> Result<(), Box<dyn Error>> {
-        let futures = objects_to_delete.into_iter().map(|object| {
-            async move {
-                // TODO(hjiang): Better error handling.
-                let op = self.get_operator().await.unwrap().clone();
-                op.delete(&object).await
-            }
+        let futures = objects_to_delete.into_iter().map(|object| async move {
+            let op = self.get_operator().await.unwrap().clone();
+            op.delete(&object).await
         });
 
         let results = join_all(futures).await;

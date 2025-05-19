@@ -1,12 +1,12 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use criterion::{criterion_group, criterion_main, Criterion};
-use futures::executor::block_on;
 use moonlink::row::{IdentityProp, MoonlinkRow, RowValue};
 use moonlink::IcebergTableConfig;
 use moonlink::{MooncakeTable, TableConfig};
 use std::collections::HashMap;
 use std::time::Duration;
 use tempfile::tempdir;
+use tokio::runtime::Runtime;
 
 fn create_test_row(id: i32) -> MoonlinkRow {
     MoonlinkRow::new(vec![
@@ -52,7 +52,8 @@ fn bench_write_mooncake_table(c: &mut Criterion) {
         namespace: vec!["default".to_string()],
         table_name: table_name.to_string(),
     };
-    let mut table = block_on(MooncakeTable::new(
+    let rt = Runtime::new().unwrap();
+    let mut table = rt.block_on(MooncakeTable::new(
         schema,
         table_name.to_string(),
         1,

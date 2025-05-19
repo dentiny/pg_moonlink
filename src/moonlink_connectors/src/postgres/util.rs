@@ -349,64 +349,280 @@ mod tests {
             table_id: 1,
             column_schemas: vec![
                 ColumnSchema {
-                    name: "id".to_string(),
+                    name: "bool_field".to_string(),
+                    typ: Type::BOOL,
+                    modifier: 0,
+                    nullable: false,
+                },
+                ColumnSchema {
+                    name: "int2_field".to_string(),
+                    typ: Type::INT2,
+                    modifier: 0,
+                    nullable: true,
+                },
+                ColumnSchema {
+                    name: "int4_field".to_string(),
                     typ: Type::INT4,
                     modifier: 0,
                     nullable: false,
                 },
                 ColumnSchema {
-                    name: "name".to_string(),
+                    name: "int8_field".to_string(),
+                    typ: Type::INT8,
+                    modifier: 0,
+                    nullable: true,
+                },
+                ColumnSchema {
+                    name: "float4_field".to_string(),
+                    typ: Type::FLOAT4,
+                    modifier: 0,
+                    nullable: true,
+                },
+                ColumnSchema {
+                    name: "float8_field".to_string(),
+                    typ: Type::FLOAT8,
+                    modifier: 0,
+                    nullable: true,
+                },
+                ColumnSchema {
+                    name: "numeric_field".to_string(),
+                    typ: Type::NUMERIC,
+                    modifier: 0,
+                    nullable: true,
+                },
+                ColumnSchema {
+                    name: "varchar_field".to_string(),
+                    typ: Type::VARCHAR,
+                    modifier: 0,
+                    nullable: true,
+                },
+                ColumnSchema {
+                    name: "text_field".to_string(),
                     typ: Type::TEXT,
                     modifier: 0,
                     nullable: true,
                 },
                 ColumnSchema {
-                    name: "created_at".to_string(),
+                    name: "bpchar_field".to_string(),
+                    typ: Type::BPCHAR,
+                    modifier: 0,
+                    nullable: true,
+                },
+                ColumnSchema {
+                    name: "char_field".to_string(),
+                    typ: Type::CHAR,
+                    modifier: 0,
+                    nullable: true,
+                },
+                ColumnSchema {
+                    name: "name_field".to_string(),
+                    typ: Type::NAME,
+                    modifier: 0,
+                    nullable: true,
+                },
+                ColumnSchema {
+                    name: "date_field".to_string(),
+                    typ: Type::DATE,
+                    modifier: 0,
+                    nullable: true,
+                },
+                ColumnSchema {
+                    name: "timestamp_field".to_string(),
                     typ: Type::TIMESTAMP,
                     modifier: 0,
                     nullable: true,
                 },
                 ColumnSchema {
-                    name: "array".to_string(),
+                    name: "timestamptz_field".to_string(),
+                    typ: Type::TIMESTAMPTZ,
+                    modifier: 0,
+                    nullable: true,
+                },
+                ColumnSchema {
+                    name: "time_field".to_string(),
+                    typ: Type::TIME,
+                    modifier: 0,
+                    nullable: true,
+                },
+                ColumnSchema {
+                    name: "timetz_field".to_string(),
+                    typ: Type::TIMETZ,
+                    modifier: 0,
+                    nullable: true,
+                },
+                ColumnSchema {
+                    name: "uuid_field".to_string(),
+                    typ: Type::UUID,
+                    modifier: 0,
+                    nullable: true,
+                },
+                ColumnSchema {
+                    name: "json_field".to_string(),
+                    typ: Type::JSON,
+                    modifier: 0,
+                    nullable: true,
+                },
+                ColumnSchema {
+                    name: "jsonb_field".to_string(),
+                    typ: Type::JSONB,
+                    modifier: 0,
+                    nullable: true,
+                },
+                ColumnSchema {
+                    name: "bytea_field".to_string(),
+                    typ: Type::BYTEA,
+                    modifier: 0,
+                    nullable: true,
+                },
+                // Array type.
+                ColumnSchema {
+                    name: "bool_array_field".to_string(),
                     typ: Type::BOOL_ARRAY,
                     modifier: 0,
                     nullable: true,
                 },
+                // TODO(hjiang): Add composite type handling.
             ],
             lookup_key: LookupKey::Key {
-                name: "id".to_string(),
-                columns: vec!["id".to_string()],
+                name: "uuid_field".to_string(),
+                columns: vec!["uuid_field".to_string()],
             },
         };
 
         let (arrow_schema, identity) = postgres_schema_to_moonlink_schema(&table_schema);
+        assert_eq!(arrow_schema.fields().len(), 22);
 
-        assert_eq!(arrow_schema.fields().len(), 4);
-        assert_eq!(arrow_schema.field(0).name(), "id");
-        assert_eq!(arrow_schema.field(0).data_type(), &DataType::Int32);
+        assert_eq!(arrow_schema.field(0).name(), "bool_field");
+        assert_eq!(arrow_schema.field(0).data_type(), &DataType::Boolean);
         assert!(!arrow_schema.field(0).is_nullable());
 
-        assert_eq!(arrow_schema.field(1).name(), "name");
-        assert_eq!(arrow_schema.field(1).data_type(), &DataType::Utf8);
+        assert_eq!(arrow_schema.field(1).name(), "int2_field");
+        assert_eq!(arrow_schema.field(1).data_type(), &DataType::Int16);
         assert!(arrow_schema.field(1).is_nullable());
 
-        assert_eq!(arrow_schema.field(2).name(), "created_at");
+        assert_eq!(arrow_schema.field(2).name(), "int4_field");
+        assert_eq!(arrow_schema.field(2).data_type(), &DataType::Int32);
+        assert!(!arrow_schema.field(2).is_nullable());
+
+        assert_eq!(arrow_schema.field(3).name(), "int8_field");
+        assert_eq!(arrow_schema.field(3).data_type(), &DataType::Int64);
+        assert!(arrow_schema.field(3).is_nullable());
+
+        assert_eq!(arrow_schema.field(4).name(), "float4_field");
+        assert_eq!(arrow_schema.field(4).data_type(), &DataType::Float32);
+
+        assert_eq!(arrow_schema.field(5).name(), "float8_field");
+        assert_eq!(arrow_schema.field(5).data_type(), &DataType::Float64);
+
+        assert_eq!(arrow_schema.field(6).name(), "numeric_field");
         assert!(matches!(
-            arrow_schema.field(2).data_type(),
+            arrow_schema.field(6).data_type(),
+            DataType::Decimal128(_, _)
+        ));
+
+        assert_eq!(arrow_schema.field(7).name(), "varchar_field");
+        assert_eq!(arrow_schema.field(7).data_type(), &DataType::Utf8);
+
+        assert_eq!(arrow_schema.field(8).name(), "text_field");
+        assert_eq!(arrow_schema.field(8).data_type(), &DataType::Utf8);
+
+        assert_eq!(arrow_schema.field(9).name(), "bpchar_field");
+        assert_eq!(arrow_schema.field(9).data_type(), &DataType::Utf8);
+
+        assert_eq!(arrow_schema.field(10).name(), "char_field");
+        assert_eq!(arrow_schema.field(10).data_type(), &DataType::Utf8);
+
+        assert_eq!(arrow_schema.field(11).name(), "name_field");
+        assert_eq!(arrow_schema.field(11).data_type(), &DataType::Utf8);
+
+        assert_eq!(arrow_schema.field(12).name(), "date_field");
+        assert_eq!(arrow_schema.field(12).data_type(), &DataType::Date32);
+
+        assert_eq!(arrow_schema.field(13).name(), "timestamp_field");
+        assert!(matches!(
+            arrow_schema.field(13).data_type(),
             DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
         ));
-        assert!(arrow_schema.field(2).is_nullable());
 
-        assert_eq!(identity, IdentityProp::SinglePrimitiveKey(0));
+        assert_eq!(arrow_schema.field(14).name(), "timestamptz_field");
+        assert!(matches!(
+            arrow_schema.field(14).data_type(),
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, Some(_))
+        ));
 
-        // Convert from arrow schema to iceberg schema, and verify with no conversion issue.
+        assert_eq!(arrow_schema.field(15).name(), "time_field");
+        assert_eq!(
+            arrow_schema.field(15).data_type(),
+            &DataType::Time64(arrow::datatypes::TimeUnit::Microsecond)
+        );
+
+        assert_eq!(arrow_schema.field(16).name(), "timetz_field");
+        assert_eq!(
+            arrow_schema.field(16).data_type(),
+            &DataType::Time64(arrow::datatypes::TimeUnit::Microsecond)
+        );
+
+        assert_eq!(arrow_schema.field(17).name(), "uuid_field");
+        assert_eq!(
+            arrow_schema.field(17).data_type(),
+            &DataType::FixedSizeBinary(16)
+        );
+
+        assert_eq!(arrow_schema.field(18).name(), "json_field");
+        assert_eq!(arrow_schema.field(18).data_type(), &DataType::Utf8);
+
+        assert_eq!(arrow_schema.field(19).name(), "jsonb_field");
+        assert_eq!(arrow_schema.field(19).data_type(), &DataType::Utf8);
+
+        assert_eq!(arrow_schema.field(20).name(), "bytea_field");
+        assert_eq!(arrow_schema.field(20).data_type(), &DataType::Binary);
+
+        assert_eq!(arrow_schema.field(21).name(), "bool_array_field");
+        let mut expected_field = Field::new("item", DataType::Boolean, /*nullable=*/ false);
+        let mut field_metadata = HashMap::new();
+        field_metadata.insert("PARQUET:field_id".to_string(), "22".to_string());
+        expected_field.set_metadata(field_metadata);
+        assert_eq!(
+            arrow_schema.field(21).data_type(),
+            &DataType::List(expected_field.into()),
+        );
+
+        // Check identity property.
+        assert_eq!(identity, IdentityProp::Keys(vec![17]));
+
+        // Convert Arrow schema to Iceberg schema and check field id/name mapping.
         let iceberg_arrow = IcebergArrow::arrow_schema_to_schema(&arrow_schema).unwrap();
-        assert_eq!(iceberg_arrow.name_by_field_id(1).unwrap(), "id");
-        assert_eq!(iceberg_arrow.name_by_field_id(2).unwrap(), "name");
-        assert_eq!(iceberg_arrow.name_by_field_id(3).unwrap(), "created_at");
-        assert_eq!(iceberg_arrow.name_by_field_id(4).unwrap(), "array.element");
-        assert_eq!(iceberg_arrow.name_by_field_id(5).unwrap(), "array");
-        assert!(iceberg_arrow.name_by_field_id(6).is_none());
+        for (field_id, expected_name) in [
+            (1, "bool_field"),
+            (2, "int2_field"),
+            (3, "int4_field"),
+            (4, "int8_field"),
+            (5, "float4_field"),
+            (6, "float8_field"),
+            (7, "numeric_field"),
+            (8, "varchar_field"),
+            (9, "text_field"),
+            (10, "bpchar_field"),
+            (11, "char_field"),
+            (12, "name_field"),
+            (13, "date_field"),
+            (14, "timestamp_field"),
+            (15, "timestamptz_field"),
+            (16, "time_field"),
+            (17, "timetz_field"),
+            (18, "uuid_field"),
+            (19, "json_field"),
+            (20, "jsonb_field"),
+            (21, "bytea_field"),
+            (22, "bool_array_field.element"),
+            (23, "bool_array_field"),
+        ] {
+            assert_eq!(
+                iceberg_arrow.name_by_field_id(field_id).unwrap(),
+                expected_name
+            );
+        }
+        assert!(iceberg_arrow.name_by_field_id(24).is_none());
     }
 
     #[test]

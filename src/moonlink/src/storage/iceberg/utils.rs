@@ -2,6 +2,7 @@ use crate::storage::iceberg::file_catalog::{CatalogConfig, FileCatalog};
 use crate::storage::iceberg::moonlink_catalog::MoonlinkCatalog;
 #[cfg(feature = "storage-s3")]
 use crate::storage::iceberg::s3_test_utils;
+use crate::storage::iceberg::table_property;
 
 use futures::TryStreamExt;
 use std::collections::HashMap;
@@ -27,7 +28,6 @@ use iceberg::{
 };
 use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 use parquet::file::properties::WriterProperties;
-use tokio::fs::File;
 
 /// Return whether the given manifest entry represents data files.
 pub fn is_data_file_entry(entry: &ManifestEntry) -> bool {
@@ -109,6 +109,20 @@ pub fn create_catalog(warehouse_uri: &str) -> IcebergResult<Box<dyn MoonlinkCata
     todo!("Need to take secrets from client side and create object storage catalog.")
 }
 
+// Create iceberg table properties from table config.
+fn create_iceberg_table_properties() -> HashMap<String, String> {
+    let mut props = HashMap::with_capacity(3);
+    props.insert(
+        table_property::PARQUET_COMPRESSION.to_string(),
+        table_property::PARQUET_COMPRESSION_DEFAULT.to_string(),
+    );
+    props.insert(
+        table_property::METADATA_COMPRESSION.to_string(),
+        table_property::METADATA_COMPRESSION_DEFAULT.to_string(),
+    );
+    props
+}
+
 // Get or create an iceberg table in the given catalog from the given namespace and table name.
 pub(crate) async fn get_or_create_iceberg_table<C: MoonlinkCatalog + ?Sized>(
     catalog: &C,
@@ -140,7 +154,7 @@ pub(crate) async fn get_or_create_iceberg_table<C: MoonlinkCatalog + ?Sized>(
                     table_name
                 ))
                 .schema(iceberg_schema)
-                .properties(HashMap::new())
+                .properties(create_iceberg_table_properties())
                 .build();
             let table = catalog
                 .create_table(&table_ident.namespace, tbl_creation)
@@ -157,20 +171,6 @@ pub(crate) async fn get_or_create_iceberg_table<C: MoonlinkCatalog + ?Sized>(
 // The reason we keep the dummy style, instead of copying the file directly to target is we need the `DataFile` struct,
 // which is used when upload to iceberg table.
 // One way to resolve is to use DataFileWrite on local write, and remember the `DataFile` returned.
-//
-// 2. A few data file properties need to respect and consider.
-// Reference:
-// - https://iceberg.apache.org/docs/latest/configuration/#table-properties
-// - https://iceberg.apache.org/docs/latest/configuration/#table-behavior-properties
-//
-// - write.parquet.row-group-size-bytes
-// - write.parquet.page-size-bytes
-// - write.parquet.page-row-limit
-// - write.parquet.dict-size-bytes
-// - write.parquet.compression-codec
-// - write.parquet.compression-level
-// - write.parquet.bloom-filter-max-bytes
-// - write.metadata.compression-codec
 pub(crate) async fn write_record_batch_to_iceberg(
     table: &IcebergTable,
     parquet_filepath: &PathBuf,
@@ -198,7 +198,7 @@ pub(crate) async fn write_record_batch_to_iceberg(
     );
     let mut data_file_writer = data_file_writer_builder.build().await?;
 
-    let local_file = File::open(parquet_filepath).await?;
+    let local_file = tokio::fs::File::open(parquet_filepath).await?;
     let mut read_stream = ParquetRecordBatchStreamBuilder::new(local_file)
         .await?
         .build()?;

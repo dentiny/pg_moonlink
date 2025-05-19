@@ -9,6 +9,8 @@ pub enum Error {
     PostgresSource(#[from] PostgresSourceError),
     #[error("Moonlink error: {0}")]
     Moonlink(#[from] moonlink::Error),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 pub type Result<T> = result::Result<T, Error>;

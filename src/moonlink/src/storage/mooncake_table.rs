@@ -116,7 +116,7 @@ pub struct Snapshot {
     ///   So likely they are not consistent from LSN's perspective.
     ///
     /// At iceberg snapshot creation, we should only dump consistent data files and deletion logs.
-    /// Data file flush LSN is recorded here, to get correponding deletion logs from "committed deletion logs".
+    /// Data file flush LSN is recorded here, to get corresponding deletion logs from "committed deletion logs".
     pub(crate) data_file_flush_lsn: Option<u64>,
     /// indices
     pub(crate) indices: MooncakeIndex,

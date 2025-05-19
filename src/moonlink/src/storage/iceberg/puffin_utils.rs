@@ -20,7 +20,7 @@ pub(crate) struct PuffinBlobRef {
 /// Get puffin writer with the given file io.
 pub(crate) async fn create_puffin_writer(
     file_io: &FileIO,
-    puffin_filepath: String,
+    puffin_filepath: &str,
 ) -> IcebergResult<PuffinWriter> {
     let out_file = file_io.new_output(puffin_filepath)?;
     let puffin_writer = PuffinWriter::new(
