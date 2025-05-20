@@ -327,7 +327,7 @@ impl MooncakeTable {
         Ok(())
     }
 
-    pub fn delete(&mut self, row: MoonlinkRow, lsn: u64) {
+    pub async fn delete(&mut self, row: MoonlinkRow, lsn: u64) {
         let lookup_key = self.metadata.identity.get_lookup_key(&row);
         let mut record = RawDeletionRecord {
             lookup_key,
@@ -335,7 +335,10 @@ impl MooncakeTable {
             pos: None,
             row_identity: self.metadata.identity.extract_identity_columns(row),
         };
-        let pos = self.mem_slice.delete(&record, &self.metadata.identity);
+        let pos = self
+            .mem_slice
+            .delete(&record, &self.metadata.identity)
+            .await;
         record.pos = pos;
         self.next_snapshot_task.new_deletions.push(record);
     }
@@ -388,7 +391,7 @@ impl MooncakeTable {
         Ok(())
     }
 
-    pub fn delete_in_stream_batch(&mut self, row: MoonlinkRow, xact_id: u32) {
+    pub async fn delete_in_stream_batch(&mut self, row: MoonlinkRow, xact_id: u32) {
         let lookup_key = self.metadata.identity.get_lookup_key(&row);
         let mut record = RawDeletionRecord {
             lookup_key,
@@ -405,6 +408,7 @@ impl MooncakeTable {
         if let Some(pos) = stream_state
             .mem_slice
             .delete(&record, &self.metadata.identity)
+            .await
         {
             record.pos = Some(pos);
         } else {
@@ -413,7 +417,8 @@ impl MooncakeTable {
             // [https://github.com/Mooncake-Labs/moonlink/issues/126]
             record.pos = self
                 .mem_slice
-                .find_non_deleted_position(&record, &self.metadata.identity);
+                .find_non_deleted_position(&record, &self.metadata.identity)
+                .await;
             // NOTE: There is still a remaining edge case that is not yet supported:
             // In the event that we have two identical, rows A and B, with no primary key (using full row as
             // identifier). We may have a situation where we delete A during some streaming

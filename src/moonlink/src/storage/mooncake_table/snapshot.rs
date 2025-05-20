@@ -307,6 +307,7 @@ impl SnapshotTableState {
             .current_snapshot
             .indices
             .find_record(&deletion)
+            .await
             .into_iter()
             .filter(|loc| !self.is_deleted(loc))
             .collect();

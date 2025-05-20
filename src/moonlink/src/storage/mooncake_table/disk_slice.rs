@@ -332,24 +332,28 @@ mod tests {
         }
 
         // Delete a couple of rows to test that only active rows are mapped
-        mem_slice.delete(
-            &RawDeletionRecord {
-                lookup_key: 2,
-                row_identity: None,
-                pos: Some((0, 1)),
-                lsn: 1,
-            },
-            &IdentityProp::SinglePrimitiveKey(0),
-        ); // Delete Bob (ID 2)
-        mem_slice.delete(
-            &RawDeletionRecord {
-                lookup_key: 4,
-                row_identity: None,
-                pos: Some((0, 3)),
-                lsn: 1,
-            },
-            &IdentityProp::SinglePrimitiveKey(0),
-        ); // Delete David (ID 4)
+        mem_slice
+            .delete(
+                &RawDeletionRecord {
+                    lookup_key: 2,
+                    row_identity: None,
+                    pos: Some((0, 1)),
+                    lsn: 1,
+                },
+                &IdentityProp::SinglePrimitiveKey(0),
+            )
+            .await; // Delete Bob (ID 2)
+        mem_slice
+            .delete(
+                &RawDeletionRecord {
+                    lookup_key: 4,
+                    row_identity: None,
+                    pos: Some((0, 3)),
+                    lsn: 1,
+                },
+                &IdentityProp::SinglePrimitiveKey(0),
+            )
+            .await; // Delete David (ID 4)
 
         let (_new_batch, entries, index) = mem_slice.drain().unwrap();
 
@@ -373,7 +377,7 @@ mod tests {
         // Verify each key has been remapped to a disk location
         for key in [1, 3, 5] {
             // These should exist (undeleted rows)
-            let locations = new_index.search(&key);
+            let locations = new_index.search(&key).await;
             assert!(
                 !locations.is_empty(),
                 "Key {key} should exist in the remapped index"
@@ -400,7 +404,7 @@ mod tests {
         // Check that deleted rows are not in the index
         for key in [2, 4] {
             // These should not exist (deleted rows)
-            let locations = new_index.search(&key);
+            let locations = new_index.search(&key).await;
             assert!(
                 locations.is_empty(),
                 "Deleted key {key} should not exist in the remapped index"

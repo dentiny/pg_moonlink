@@ -117,8 +117,8 @@ impl TableHandler {
                         }
                         TableEvent::Delete { row, lsn, xact_id } => {
                             match xact_id {
-                                Some(xact_id) => table.delete_in_stream_batch(row, xact_id),
-                                None => table.delete(row, lsn),
+                                Some(xact_id) => table.delete_in_stream_batch(row, xact_id).await,
+                                None => table.delete(row, lsn).await,
                             };
                         }
                         TableEvent::Commit { lsn } => {

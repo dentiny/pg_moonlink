@@ -2,7 +2,7 @@ use crate::row::IdentityProp;
 use crate::storage::index::*;
 
 impl Index for MemIndex {
-    fn find_record(&self, raw_record: &RawDeletionRecord) -> Vec<RecordLocation> {
+    async fn find_record(&self, raw_record: &RawDeletionRecord) -> Vec<RecordLocation> {
         match self {
             MemIndex::SinglePrimitive(map) => {
                 if let Some(entry) = map.find(raw_record.lookup_key, |_| true) {

@@ -1,6 +1,6 @@
 use crate::storage::index::file_index_id::get_next_file_index_id;
 use crate::storage::storage_utils::{FileId, RecordLocation};
-use bitstream_io::{BigEndian, BitRead, BitReader};
+use futures::executor::block_on;
 use memmap2::Mmap;
 use std::collections::BinaryHeap;
 use std::fmt;
@@ -13,7 +13,8 @@ use tokio::fs::File as AsyncFile;
 use tokio::io::BufWriter as AsyncBufWriter;
 use tokio::sync::OnceCell;
 use tokio_bitstream_io::{
-    BigEndian as AsyncBigEndian, BitWrite as AsyncBitWrite, BitWriter as AsyncBitWriter,
+    BigEndian as AsyncBigEndian, BitRead as AsyncBitRead, BitReader as AsyncBitReader,
+    BitWrite as AsyncBitWrite, BitWriter as AsyncBitWriter,
 };
 
 // Constants
@@ -89,45 +90,36 @@ impl IndexBlock {
     }
 
     #[inline]
-    fn read_bucket(
+    async fn read_bucket(
         &self,
         bucket_idx: u32,
-        reader: &mut BitReader<Cursor<&[u8]>, BigEndian>,
+        reader: &mut AsyncBitReader<Cursor<&[u8]>, AsyncBigEndian>,
         metadata: &GlobalIndex,
     ) -> (u32, u32) {
         reader
             .seek_bits(SeekFrom::Start(
                 (bucket_idx * metadata.bucket_bits) as u64 + self.bucket_start_offset,
             ))
+            .await
             .unwrap();
-        let start = reader
-            .read_unsigned_var::<u32>(metadata.bucket_bits)
-            .unwrap();
-        let end = reader
-            .read_unsigned_var::<u32>(metadata.bucket_bits)
-            .unwrap();
+        let start = reader.read::<u32>(metadata.bucket_bits).await.unwrap();
+        let end = reader.read::<u32>(metadata.bucket_bits).await.unwrap();
         (start, end)
     }
 
     #[inline]
-    fn read_entry(
+    async fn read_entry(
         &self,
-        reader: &mut BitReader<Cursor<&[u8]>, BigEndian>,
+        reader: &mut AsyncBitReader<Cursor<&[u8]>, AsyncBigEndian>,
         metadata: &GlobalIndex,
     ) -> (u64, usize, usize) {
-        let hash = reader
-            .read_unsigned_var::<u64>(metadata.hash_lower_bits)
-            .unwrap();
-        let seg_idx = reader
-            .read_unsigned_var::<u32>(metadata.seg_id_bits)
-            .unwrap();
-        let row_idx = reader
-            .read_unsigned_var::<u32>(metadata.row_id_bits)
-            .unwrap();
+        let hash = reader.read::<u64>(metadata.hash_lower_bits).await.unwrap();
+        let seg_idx = reader.read::<u32>(metadata.seg_id_bits).await.unwrap();
+        let row_idx = reader.read::<u32>(metadata.row_id_bits).await.unwrap();
         (hash, seg_idx as usize, row_idx as usize)
     }
 
-    fn read(
+    async fn read(
         &self,
         target_lower_hash: u64,
         bucket_idx: u32,
@@ -135,9 +127,9 @@ impl IndexBlock {
     ) -> Vec<RecordLocation> {
         assert!(bucket_idx >= self.bucket_start_idx && bucket_idx < self.bucket_end_idx);
         let cursor = Cursor::new(self.data.as_ref().unwrap().as_ref());
-        let mut reader = BitReader::endian(cursor, BigEndian);
+        let mut reader = AsyncBitReader::endian(cursor, AsyncBigEndian);
         let mut entry_reader = reader.clone();
-        let (entry_start, entry_end) = self.read_bucket(bucket_idx, &mut reader, metadata);
+        let (entry_start, entry_end) = self.read_bucket(bucket_idx, &mut reader, metadata).await;
         if entry_start != entry_end {
             let mut results = Vec::new();
             entry_reader
@@ -146,9 +138,10 @@ impl IndexBlock {
                         * (metadata.hash_lower_bits + metadata.seg_id_bits + metadata.row_id_bits)
                             as u64,
                 ))
+                .await
                 .unwrap();
             for _i in entry_start..entry_end {
-                let (hash, seg_idx, row_idx) = self.read_entry(&mut entry_reader, metadata);
+                let (hash, seg_idx, row_idx) = self.read_entry(&mut entry_reader, metadata).await;
                 if hash == target_lower_hash {
                     results.push(RecordLocation::DiskFile(
                         FileId(metadata.files[seg_idx].clone()),
@@ -164,13 +157,13 @@ impl IndexBlock {
 }
 
 impl GlobalIndex {
-    pub fn search(&self, value: &u64) -> Vec<RecordLocation> {
+    pub async fn search(&self, value: &u64) -> Vec<RecordLocation> {
         let target_hash = splitmix64(*value);
         let lower_hash = target_hash & ((1 << self.hash_lower_bits) - 1);
         let bucket_idx = (target_hash >> self.hash_lower_bits) as u32;
         for block in self.index_blocks.iter() {
             if bucket_idx >= block.bucket_start_idx && bucket_idx < block.bucket_end_idx {
-                return block.read(lower_hash, bucket_idx, self);
+                return block.read(lower_hash, bucket_idx, self).await;
             }
         }
         vec![]
@@ -386,8 +379,8 @@ struct IndexBlockIterator<'a> {
     current_bucket_entry_end: u32,
     current_entry: u32,
     current_upper_hash: u64,
-    bucket_reader: BitReader<Cursor<&'a [u8]>, BigEndian>,
-    entry_reader: BitReader<Cursor<&'a [u8]>, BigEndian>,
+    bucket_reader: AsyncBitReader<Cursor<&'a [u8]>, AsyncBigEndian>,
+    entry_reader: AsyncBitReader<Cursor<&'a [u8]>, AsyncBigEndian>,
     file_id_remap: &'a Vec<u32>,
 }
 
@@ -397,20 +390,15 @@ impl<'a> IndexBlockIterator<'a> {
         metadata: &'a GlobalIndex,
         file_id_remap: &'a Vec<u32>,
     ) -> Self {
-        let mut bucket_reader = BitReader::endian(
+        let mut bucket_reader = AsyncBitReader::endian(
             Cursor::new(collection.data.as_ref().unwrap().as_ref()),
-            BigEndian,
+            AsyncBigEndian,
         );
         let entry_reader = bucket_reader.clone();
-        bucket_reader
-            .seek_bits(SeekFrom::Start(collection.bucket_start_offset))
-            .unwrap();
-        let _ = bucket_reader
-            .read_unsigned_var::<u32>(metadata.bucket_bits)
-            .unwrap();
-        let current_bucket_entry_end = bucket_reader
-            .read_unsigned_var::<u32>(metadata.bucket_bits)
-            .unwrap();
+        block_on(bucket_reader.seek_bits(SeekFrom::Start(collection.bucket_start_offset))).unwrap();
+        let _ = block_on(bucket_reader.read::<u32>(metadata.bucket_bits)).unwrap();
+        let current_bucket_entry_end =
+            block_on(bucket_reader.read::<u32>(metadata.bucket_bits)).unwrap();
         Self {
             collection,
             metadata,
@@ -438,15 +426,14 @@ impl Iterator for IndexBlockIterator<'_> {
                 if self.current_bucket == self.collection.bucket_end_idx - 1 {
                     return None;
                 }
-                self.current_bucket_entry_end = self
-                    .bucket_reader
-                    .read_unsigned_var::<u32>(self.metadata.bucket_bits)
-                    .unwrap();
+                self.current_bucket_entry_end =
+                    block_on(self.bucket_reader.read::<u32>(self.metadata.bucket_bits)).unwrap();
                 self.current_upper_hash += 1 << self.metadata.hash_lower_bits;
             }
-            let (lower_hash, seg_idx, row_idx) = self
-                .collection
-                .read_entry(&mut self.entry_reader, self.metadata);
+            let (lower_hash, seg_idx, row_idx) = block_on(
+                self.collection
+                    .read_entry(&mut self.entry_reader, self.metadata),
+            );
             self.current_entry += 1;
             if *self.file_id_remap.get(seg_idx).unwrap() != INVALID_FILE_ID {
                 return Some((lower_hash + self.current_upper_hash, seg_idx, row_idx));
@@ -568,22 +555,18 @@ impl IndexBlock {
             self.bucket_start_idx, self.bucket_end_idx
         )?;
         let cursor = Cursor::new(self.data.as_ref().unwrap().as_ref());
-        let mut reader = BitReader::endian(cursor, BigEndian);
+        let mut reader = AsyncBitReader::endian(cursor, AsyncBigEndian);
         write!(f, "\n   Buckets: ")?;
         let mut num = 0;
-        reader
-            .seek_bits(SeekFrom::Start(self.bucket_start_offset))
-            .unwrap();
+        block_on(reader.seek_bits(SeekFrom::Start(self.bucket_start_offset))).unwrap();
         for _i in 0..self.bucket_end_idx {
-            num = reader
-                .read_unsigned_var::<u32>(metadata.bucket_bits)
-                .unwrap();
+            num = block_on(reader.read::<u32>(metadata.bucket_bits)).unwrap();
             write!(f, "{} ", num)?;
         }
         write!(f, "\n   Entries: ")?;
-        reader.seek_bits(SeekFrom::Start(0)).unwrap();
+        block_on(reader.seek_bits(SeekFrom::Start(0))).unwrap();
         for _i in 0..num {
-            let (hash, seg_idx, row_idx) = self.read_entry(&mut reader, metadata);
+            let (hash, seg_idx, row_idx) = block_on(self.read_entry(&mut reader, metadata));
             write!(f, "\n     {} {} {}", hash, seg_idx, row_idx)?;
         }
         write!(f, "\n}}")?;
@@ -639,7 +622,7 @@ mod tests {
         for (hash, seg_idx, row_idx) in hash_entries.iter() {
             let expected_record_loc =
                 RecordLocation::DiskFile(data_file_ids[*seg_idx].clone(), *row_idx);
-            assert_eq!(index.search(hash), vec![expected_record_loc]);
+            assert_eq!(index.search(hash).await, vec![expected_record_loc]);
         }
 
         let mut hash_entry_num = 0;
@@ -682,7 +665,7 @@ mod tests {
         let merged = builder._build_from_merge(vec![index1, index2]).await;
 
         for i in 0u64..100u64 {
-            let ret = merged.search(&i);
+            let ret = merged.search(&i).await;
             let record_location = ret.first().unwrap();
             let RecordLocation::DiskFile(FileId(file_id), _) = record_location else {
                 panic!("No record location found for {}", i);

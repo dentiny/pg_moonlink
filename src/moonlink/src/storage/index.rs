@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 pub trait Index: Send + Sync {
-    fn find_record(&self, raw_record: &RawDeletionRecord) -> Vec<RecordLocation>;
+    async fn find_record(&self, raw_record: &RawDeletionRecord) -> Vec<RecordLocation>;
 }
 
 pub struct MooncakeIndex {

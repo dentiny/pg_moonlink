@@ -31,17 +31,17 @@ impl MooncakeIndex {
 }
 
 impl Index for MooncakeIndex {
-    fn find_record(&self, raw_record: &RawDeletionRecord) -> Vec<RecordLocation> {
+    async fn find_record(&self, raw_record: &RawDeletionRecord) -> Vec<RecordLocation> {
         let mut res: Vec<RecordLocation> = Vec::new();
 
         // Check in-memory indices
         for index in self.in_memory_index.iter() {
-            res.extend(index.0.find_record(raw_record));
+            res.extend(index.0.find_record(raw_record).await);
         }
 
         // Check file indices
         for file_index_meta in &self.file_indices {
-            let locations = file_index_meta.search(&raw_record.lookup_key);
+            let locations = file_index_meta.search(&raw_record.lookup_key).await;
             res.extend(locations);
         }
         res
@@ -52,8 +52,8 @@ impl Index for MooncakeIndex {
 mod tests {
     use super::*;
     use crate::row::IdentityProp;
-    #[test]
-    fn test_in_memory_index_basic() {
+    #[tokio::test]
+    async fn test_in_memory_index_basic() {
         let mut index = MooncakeIndex::new();
 
         let identity = IdentityProp::SinglePrimitiveKey(0);
@@ -72,7 +72,7 @@ mod tests {
         };
 
         // Test the Index trait implementation
-        let trait_locations = index.find_record(&record);
+        let trait_locations = index.find_record(&record).await;
         assert_eq!(trait_locations.len(), 1);
     }
 }

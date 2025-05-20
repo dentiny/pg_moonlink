@@ -425,7 +425,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         )
     })?;
     // First deletion of row2, which happens in MemSlice.
-    table.delete(row1.clone(), /*flush_lsn=*/ 100);
+    table.delete(row1.clone(), /*flush_lsn=*/ 100).await;
     table.flush(/*flush_lsn=*/ 200).await.map_err(|e| {
         IcebergError::new(
             iceberg::ErrorKind::Unexpected,
@@ -494,7 +494,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
     // --------------------------------------
     // Operation series 2: no more additional rows appended, only to delete the first row in the table.
     // Expects to see a new deletion vector, because its corresponding data file has been persisted.
-    table.delete(row2.clone(), /*flush_lsn=*/ 300);
+    table.delete(row2.clone(), /*flush_lsn=*/ 300).await;
     table.flush(/*flush_lsn=*/ 300).await.map_err(|e| {
         IcebergError::new(
             iceberg::ErrorKind::Unexpected,
@@ -558,7 +558,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
     // --------------------------------------
     // Operation series 3: no more additional rows appended, only to delete the last row in the table.
     // Expects to see the existing deletion vector updated, because its corresponding data file has been persisted.
-    table.delete(row3.clone(), /*flush_lsn=*/ 400);
+    table.delete(row3.clone(), /*flush_lsn=*/ 400).await;
     table.flush(/*flush_lsn=*/ 400).await.map_err(|e| {
         IcebergError::new(
             iceberg::ErrorKind::Unexpected,
@@ -1023,7 +1023,7 @@ async fn test_state_1_2() -> IcebergResult<()> {
     ]);
     table.append(row.clone()).unwrap();
     // Prepate deletion log pre-requisite.
-    table.delete(row.clone(), /*lsn=*/ 1);
+    table.delete(row.clone(), /*lsn=*/ 1).await;
 
     // Request to create snapshot.
     assert!(table.create_snapshot().is_none());
@@ -1047,7 +1047,7 @@ async fn test_state_1_3() -> IcebergResult<()> {
     // Prepare environment setup.
     let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite.
-    table.delete(old_row.clone(), /*lsn=*/ 200);
+    table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
@@ -1079,7 +1079,7 @@ async fn test_state_1_4() -> IcebergResult<()> {
     // Prepare environment setup.
     let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
-    table.delete(old_row.clone(), /*lsn=*/ 200);
+    table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
@@ -1089,7 +1089,7 @@ async fn test_state_1_4() -> IcebergResult<()> {
     ]);
     table.append(row.clone()).unwrap();
     // Prepare deletion pre-requisite (uncommitted deletion record).
-    table.delete(row.clone(), /*lsn=*/ 400);
+    table.delete(row.clone(), /*lsn=*/ 400).await;
 
     // Request to create snapshot.
     table.create_snapshot().unwrap().await.unwrap();
@@ -1147,7 +1147,7 @@ async fn test_state_2_2() -> IcebergResult<()> {
     table.append(row.clone()).unwrap();
     table.commit(/*lsn=*/ 100);
     // Prepate deletion log pre-requisite.
-    table.delete(row.clone(), /*lsn=*/ 200);
+    table.delete(row.clone(), /*lsn=*/ 200).await;
 
     // Request to create snapshot.
     table.create_snapshot().unwrap().await.unwrap();
@@ -1171,7 +1171,7 @@ async fn test_state_2_3() -> IcebergResult<()> {
     // Prepare environment setup.
     let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite.
-    table.delete(old_row.clone(), /*lsn=*/ 200);
+    table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
@@ -1204,7 +1204,7 @@ async fn test_state_2_4() -> IcebergResult<()> {
     // Prepare environment setup.
     let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
-    table.delete(old_row.clone(), /*lsn=*/ 200);
+    table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
@@ -1215,7 +1215,7 @@ async fn test_state_2_4() -> IcebergResult<()> {
     table.append(row.clone()).unwrap();
     table.commit(/*lsn=*/ 400);
     // Prepare deletion pre-requisite (uncommitted deletion record).
-    table.delete(row.clone(), /*lsn=*/ 500);
+    table.delete(row.clone(), /*lsn=*/ 500).await;
 
     // Request to create snapshot.
     table.create_snapshot().unwrap().await.unwrap();
@@ -1275,7 +1275,7 @@ async fn test_state_3_2() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 100);
     table.flush(/*lsn=*/ 200).await.unwrap();
     // Prepate deletion log pre-requisite.
-    table.delete(row.clone(), /*lsn=*/ 300);
+    table.delete(row.clone(), /*lsn=*/ 300).await;
 
     // Request to create snapshot.
     table.create_snapshot().unwrap().await.unwrap();
@@ -1299,7 +1299,7 @@ async fn test_state_3_3_deletion_before_flush() -> IcebergResult<()> {
     // Prepare environment setup.
     let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
-    table.delete(old_row.clone(), /*lsn=*/ 200);
+    table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
@@ -1347,7 +1347,7 @@ async fn test_state_3_3_deletion_after_flush() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 200);
     table.flush(/*lsn=*/ 300).await.unwrap();
     // Prepare deletion pre-requisite (committed deletion record).
-    table.delete(old_row.clone(), /*lsn=*/ 400);
+    table.delete(old_row.clone(), /*lsn=*/ 400).await;
     table.commit(/*lsn=*/ 500);
 
     // Request to create snapshot.
@@ -1377,7 +1377,7 @@ async fn test_state_3_4_committed_deletion_before_flush() -> IcebergResult<()> {
     // Prepare environment setup.
     let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
-    table.delete(old_row.clone(), /*lsn=*/ 200);
+    table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
@@ -1389,7 +1389,7 @@ async fn test_state_3_4_committed_deletion_before_flush() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 400);
     table.flush(/*lsn=*/ 500).await.unwrap();
     // Prepare deletion pre-requisite (uncommitted deletion record).
-    table.delete(row.clone(), /*lsn=*/ 600);
+    table.delete(row.clone(), /*lsn=*/ 600).await;
 
     // Request to create snapshot.
     table.create_snapshot().unwrap().await.unwrap();
@@ -1427,10 +1427,10 @@ async fn test_state_3_4_committed_deletion_after_flush() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 200);
     table.flush(/*lsn=*/ 300).await.unwrap();
     // Prepare deletion pre-requisite (committed deletion record).
-    table.delete(old_row.clone(), /*lsn=*/ 400);
+    table.delete(old_row.clone(), /*lsn=*/ 400).await;
     table.commit(/*lsn=*/ 500);
     // Prepare deletion pre-requisite (uncommitted deletion record).
-    table.delete(row.clone(), /*lsn=*/ 600);
+    table.delete(row.clone(), /*lsn=*/ 600).await;
 
     // Request to create snapshot.
     table.create_snapshot().unwrap().await.unwrap();
@@ -1500,7 +1500,7 @@ async fn test_state_4_2() -> IcebergResult<()> {
     table.append(row.clone()).unwrap();
     table.commit(/*lsn=*/ 100);
     // Prepate deletion log pre-requisite.
-    table.delete(row.clone(), /*lsn=*/ 200);
+    table.delete(row.clone(), /*lsn=*/ 200).await;
     // Prepare uncommitted record batch.
     let row = MoonlinkRow::new(vec![
         RowValue::Int32(3),
@@ -1531,7 +1531,7 @@ async fn test_state_4_3() -> IcebergResult<()> {
     // Prepare environment setup.
     let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed record batch).
-    table.delete(old_row.clone(), /*lsn=*/ 200);
+    table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
@@ -1571,7 +1571,7 @@ async fn test_state_4_4() -> IcebergResult<()> {
     // Prepare environment setup.
     let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
-    table.delete(old_row.clone(), /*lsn=*/ 200);
+    table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
@@ -1582,7 +1582,7 @@ async fn test_state_4_4() -> IcebergResult<()> {
     table.append(row.clone()).unwrap();
     table.commit(/*lsn=*/ 400);
     // Prepare deletion pre-requisite (uncommitted deletion record).
-    table.delete(row.clone(), /*lsn=*/ 500);
+    table.delete(row.clone(), /*lsn=*/ 500).await;
     // Prepare uncommitted record batch.
     let row = MoonlinkRow::new(vec![
         RowValue::Int32(3),
@@ -1657,7 +1657,7 @@ async fn test_state_5_2() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 100);
     table.flush(/*lsn=*/ 200).await.unwrap();
     // Prepate deletion log pre-requisite.
-    table.delete(row.clone(), /*lsn=*/ 300);
+    table.delete(row.clone(), /*lsn=*/ 300).await;
     // Prepare committed but unflushed record batch.
     let row = MoonlinkRow::new(vec![
         RowValue::Int32(3),
@@ -1689,7 +1689,7 @@ async fn test_state_5_3_deletion_before_flush() -> IcebergResult<()> {
     // Prepare environment setup.
     let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
-    table.delete(old_row.clone(), /*lsn=*/ 200);
+    table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
@@ -1745,7 +1745,7 @@ async fn test_state_5_3_deletion_after_flush() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 200);
     table.flush(/*lsn=*/ 300).await.unwrap();
     // Prepare deletion pre-requisite (committed deletion record).
-    table.delete(old_row.clone(), /*lsn=*/ 400);
+    table.delete(old_row.clone(), /*lsn=*/ 400).await;
     table.commit(/*lsn=*/ 500);
     // Prepare committed but unflushed record batch.
     let row = MoonlinkRow::new(vec![
@@ -1783,7 +1783,7 @@ async fn test_state_5_4_committed_deletion_before_flush() -> IcebergResult<()> {
     // Prepare environment setup.
     let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
-    table.delete(old_row.clone(), /*lsn=*/ 200);
+    table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
@@ -1795,7 +1795,7 @@ async fn test_state_5_4_committed_deletion_before_flush() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 400);
     table.flush(/*lsn=*/ 500).await.unwrap();
     // Prepare deletion pre-requisite (uncommitted deletion record).
-    table.delete(row.clone(), /*lsn=*/ 600);
+    table.delete(row.clone(), /*lsn=*/ 600).await;
     // Prepare committed but unflushed record batch.
     let row = MoonlinkRow::new(vec![
         RowValue::Int32(3),
@@ -1841,10 +1841,10 @@ async fn test_state_5_4_committed_deletion_after_flush() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 200);
     table.flush(/*lsn=*/ 300).await.unwrap();
     // Prepare deletion pre-requisite (committed deletion record).
-    table.delete(old_row.clone(), /*lsn=*/ 400);
+    table.delete(old_row.clone(), /*lsn=*/ 400).await;
     table.commit(/*lsn=*/ 500);
     // Prepare deletion pre-requisite (uncommitted deletion record).
-    table.delete(row.clone(), /*lsn=*/ 600);
+    table.delete(row.clone(), /*lsn=*/ 600).await;
     // Prepare committed but unflushed record batch.
     let row = MoonlinkRow::new(vec![
         RowValue::Int32(3),
@@ -1932,7 +1932,7 @@ async fn test_state_6_2() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 100);
     table.flush(/*lsn=*/ 200).await.unwrap();
     // Prepate deletion log pre-requisite.
-    table.delete(row.clone(), /*lsn=*/ 300);
+    table.delete(row.clone(), /*lsn=*/ 300).await;
     // Prepare committed but unflushed record batch.
     let row = MoonlinkRow::new(vec![
         RowValue::Int32(3),
@@ -1971,7 +1971,7 @@ async fn test_state_6_3_deletion_before_flush() -> IcebergResult<()> {
     // Prepare environment setup.
     let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
-    table.delete(old_row.clone(), /*lsn=*/ 200);
+    table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
@@ -2034,7 +2034,7 @@ async fn test_state_6_3_deletion_after_flush() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 200);
     table.flush(/*lsn=*/ 300).await.unwrap();
     // Prepare deletion pre-requisite (committed deletion record).
-    table.delete(old_row.clone(), /*lsn=*/ 400);
+    table.delete(old_row.clone(), /*lsn=*/ 400).await;
     table.commit(/*lsn=*/ 500);
     // Prepare committed but unflushed record batch.
     let row = MoonlinkRow::new(vec![
@@ -2079,7 +2079,7 @@ async fn test_state_6_4_committed_deletion_before_flush() -> IcebergResult<()> {
     // Prepare environment setup.
     let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
-    table.delete(old_row.clone(), /*lsn=*/ 200);
+    table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
@@ -2091,7 +2091,7 @@ async fn test_state_6_4_committed_deletion_before_flush() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 400);
     table.flush(/*lsn=*/ 500).await.unwrap();
     // Prepare deletion pre-requisite (uncommitted deletion record).
-    table.delete(row.clone(), /*lsn=*/ 600);
+    table.delete(row.clone(), /*lsn=*/ 600).await;
     // Prepare committed but unflushed record batch.
     let row = MoonlinkRow::new(vec![
         RowValue::Int32(3),
@@ -2144,10 +2144,10 @@ async fn test_state_6_4_committed_deletion_after_flush() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 200);
     table.flush(/*lsn=*/ 300).await.unwrap();
     // Prepare deletion pre-requisite (committed deletion record).
-    table.delete(old_row.clone(), /*lsn=*/ 400);
+    table.delete(old_row.clone(), /*lsn=*/ 400).await;
     table.commit(/*lsn=*/ 500);
     // Prepare deletion pre-requisite (uncommitted deletion record).
-    table.delete(row.clone(), /*lsn=*/ 600);
+    table.delete(row.clone(), /*lsn=*/ 600).await;
     // Prepare committed but unflushed record batch.
     let row = MoonlinkRow::new(vec![
         RowValue::Int32(3),
