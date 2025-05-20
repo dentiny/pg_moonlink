@@ -451,9 +451,6 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
             .unwrap()
             .write_manifest_file()
             .await?;
-
-        println!("write deletion vector manifest : {:?}", deletion_vector_manifest);
-
         manifest_list_writer.add_manifests(std::iter::once(deletion_vector_manifest))?;
     }
 

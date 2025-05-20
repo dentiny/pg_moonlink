@@ -437,8 +437,6 @@ async fn test_iceberg_snapshot_creation() {
     env.initiate_snapshot().await;
     env.sync_snapshot_completion().await;
     
-    println!("====\n\n\n\n");
-
     // Load from iceberg snapshot manager and make sure both data file and deletion vector.
     let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
     let snapshot = iceberg_table_manager

@@ -1,19 +1,23 @@
 use crate::row::IdentityProp as RowIdentity;
 use crate::row::MoonlinkRow;
 use crate::row::RowValue;
+use crate::storage::iceberg::deletion_vector::DeletionVector;
 use crate::storage::iceberg::iceberg_table_manager::IcebergTableManager;
 use crate::storage::iceberg::iceberg_table_manager::*;
+use crate::storage::iceberg::puffin_utils;
 #[cfg(feature = "storage-s3")]
 use crate::storage::iceberg::s3_test_utils;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 use crate::storage::mooncake_table::Snapshot;
 use crate::storage::mooncake_table::{
-    TableConfig as MooncakeTableConfig, TableMetadata as MooncakeTableMetadata,
+    DiskFileDeletionVector, TableConfig as MooncakeTableConfig,
+    TableMetadata as MooncakeTableMetadata,
 };
 
 use crate::storage::index::MooncakeIndex;
 use crate::storage::MooncakeTable;
 
+use iceberg::io::FileIOBuilder;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::PathBuf;
@@ -159,6 +163,40 @@ fn get_file_indices_filepath_and_data_filepaths(
     }
 
     (data_files, index_files)
+}
+
+/// Test util function to check consistency for snapshot batch deletion vector and deletion puffin blob.
+async fn check_deletion_vector_consistency(disk_dv_entry: &DiskFileDeletionVector) {
+    if disk_dv_entry.puffin_deletion_blob.is_none() {
+        assert!(disk_dv_entry
+            .batch_deletion_vector
+            .collect_deleted_rows()
+            .is_empty());
+        return;
+    }
+
+    let local_fileio = FileIOBuilder::new_fs_io().build().unwrap();
+    let blob = puffin_utils::load_blob_from_puffin_file(
+        local_fileio,
+        &disk_dv_entry
+            .puffin_deletion_blob
+            .as_ref()
+            .unwrap()
+            .puffin_filepath,
+    )
+    .await
+    .unwrap();
+    let iceberg_deletion_vector = DeletionVector::deserialize(blob).unwrap();
+    let batch_deletion_vector = iceberg_deletion_vector
+        .take_as_batch_delete_vector(MooncakeTableConfig::default().batch_size());
+    assert_eq!(batch_deletion_vector, disk_dv_entry.batch_deletion_vector);
+}
+
+/// Test util function to check deletion vector consistency for the given snapshot.
+async fn check_deletion_vector_consistency_for_snapshot(snapshot: &Snapshot) {
+    for disk_deletion_vector in snapshot.disk_files.values() {
+        check_deletion_vector_consistency(disk_deletion_vector).await;
+    }
 }
 
 /// Test snapshot store and load for different types of catalogs based on the given warehouse.
@@ -423,6 +461,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
     );
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 200);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     // Check the loaded data file is of the expected format and content.
     let file_io = iceberg_table_manager
@@ -494,6 +533,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
     );
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 300);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     // Check the loaded data file is of the expected format and content.
     let file_io = iceberg_table_manager
@@ -554,6 +594,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
     );
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 400);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     // Check the loaded data file is of the expected format and content.
     let file_io = iceberg_table_manager
@@ -965,6 +1006,7 @@ async fn test_state_1_1() -> IcebergResult<()> {
     assert!(snapshot.disk_files.is_empty());
     assert!(snapshot.indices.file_indices.is_empty());
     assert!(snapshot.data_file_flush_lsn.is_none());
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -993,6 +1035,7 @@ async fn test_state_1_2() -> IcebergResult<()> {
     assert!(snapshot.disk_files.is_empty());
     assert!(snapshot.indices.file_indices.is_empty());
     assert!(snapshot.data_file_flush_lsn.is_none());
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1024,6 +1067,7 @@ async fn test_state_1_3() -> IcebergResult<()> {
     check_prev_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ false).await;
     assert_eq!(snapshot.indices.file_indices.len(), 1);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 100);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1057,6 +1101,7 @@ async fn test_state_1_4() -> IcebergResult<()> {
     check_prev_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ false).await;
     assert_eq!(snapshot.indices.file_indices.len(), 1);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 100);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1084,6 +1129,7 @@ async fn test_state_2_1() -> IcebergResult<()> {
     assert!(snapshot.disk_files.is_empty());
     assert!(snapshot.indices.file_indices.is_empty());
     assert!(snapshot.data_file_flush_lsn.is_none());
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1113,6 +1159,7 @@ async fn test_state_2_2() -> IcebergResult<()> {
     assert!(snapshot.disk_files.is_empty());
     assert!(snapshot.indices.file_indices.is_empty());
     assert!(snapshot.data_file_flush_lsn.is_none());
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1145,6 +1192,7 @@ async fn test_state_2_3() -> IcebergResult<()> {
     check_prev_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ false).await;
     assert_eq!(snapshot.indices.file_indices.len(), 1);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 100);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1179,6 +1227,7 @@ async fn test_state_2_4() -> IcebergResult<()> {
     check_prev_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ false).await;
     assert_eq!(snapshot.indices.file_indices.len(), 1);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 100);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1207,6 +1256,7 @@ async fn test_state_3_1() -> IcebergResult<()> {
     check_new_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ false).await;
     assert_eq!(snapshot.indices.file_indices.len(), 1);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 200);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1237,6 +1287,7 @@ async fn test_state_3_2() -> IcebergResult<()> {
     check_new_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ false).await;
     assert_eq!(snapshot.indices.file_indices.len(), 1);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 200);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1275,6 +1326,7 @@ async fn test_state_3_3_deletion_before_flush() -> IcebergResult<()> {
     .await;
     assert_eq!(snapshot.indices.file_indices.len(), 2);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 500);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1313,6 +1365,7 @@ async fn test_state_3_3_deletion_after_flush() -> IcebergResult<()> {
     .await;
     assert_eq!(snapshot.indices.file_indices.len(), 2);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 300);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1353,6 +1406,7 @@ async fn test_state_3_4_committed_deletion_before_flush() -> IcebergResult<()> {
     .await;
     assert_eq!(snapshot.indices.file_indices.len(), 2);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 500);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1393,6 +1447,7 @@ async fn test_state_3_4_committed_deletion_after_flush() -> IcebergResult<()> {
     .await;
     assert_eq!(snapshot.indices.file_indices.len(), 2);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 300);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1427,6 +1482,7 @@ async fn test_state_4_1() -> IcebergResult<()> {
     assert!(snapshot.disk_files.is_empty());
     assert!(snapshot.indices.file_indices.is_empty());
     assert!(snapshot.data_file_flush_lsn.is_none());
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1463,6 +1519,7 @@ async fn test_state_4_2() -> IcebergResult<()> {
     assert!(snapshot.disk_files.is_empty());
     assert!(snapshot.indices.file_indices.is_empty());
     assert!(snapshot.data_file_flush_lsn.is_none());
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1502,6 +1559,7 @@ async fn test_state_4_3() -> IcebergResult<()> {
     check_prev_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ false).await;
     assert_eq!(snapshot.indices.file_indices.len(), 1);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 100);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1543,6 +1601,7 @@ async fn test_state_4_4() -> IcebergResult<()> {
     check_prev_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ false).await;
     assert_eq!(snapshot.indices.file_indices.len(), 1);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 100);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1579,6 +1638,7 @@ async fn test_state_5_1() -> IcebergResult<()> {
     check_new_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ false).await;
     assert_eq!(snapshot.indices.file_indices.len(), 1);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 200);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1617,6 +1677,7 @@ async fn test_state_5_2() -> IcebergResult<()> {
     check_new_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ false).await;
     assert_eq!(snapshot.indices.file_indices.len(), 1);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 200);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1663,6 +1724,7 @@ async fn test_state_5_3_deletion_before_flush() -> IcebergResult<()> {
     .await;
     assert_eq!(snapshot.indices.file_indices.len(), 2);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 500);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1709,6 +1771,7 @@ async fn test_state_5_3_deletion_after_flush() -> IcebergResult<()> {
     .await;
     assert_eq!(snapshot.indices.file_indices.len(), 2);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 300);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1757,6 +1820,7 @@ async fn test_state_5_4_committed_deletion_before_flush() -> IcebergResult<()> {
     .await;
     assert_eq!(snapshot.indices.file_indices.len(), 2);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 500);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1805,6 +1869,7 @@ async fn test_state_5_4_committed_deletion_after_flush() -> IcebergResult<()> {
     .await;
     assert_eq!(snapshot.indices.file_indices.len(), 2);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 300);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1848,6 +1913,7 @@ async fn test_state_6_1() -> IcebergResult<()> {
     check_new_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ false).await;
     assert_eq!(snapshot.indices.file_indices.len(), 1);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 200);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1893,6 +1959,7 @@ async fn test_state_6_2() -> IcebergResult<()> {
     check_new_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ false).await;
     assert_eq!(snapshot.indices.file_indices.len(), 1);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 200);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1946,6 +2013,7 @@ async fn test_state_6_3_deletion_before_flush() -> IcebergResult<()> {
     .await;
     assert_eq!(snapshot.indices.file_indices.len(), 2);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 500);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -1999,6 +2067,7 @@ async fn test_state_6_3_deletion_after_flush() -> IcebergResult<()> {
     .await;
     assert_eq!(snapshot.indices.file_indices.len(), 2);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 300);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -2054,6 +2123,7 @@ async fn test_state_6_4_committed_deletion_before_flush() -> IcebergResult<()> {
     .await;
     assert_eq!(snapshot.indices.file_indices.len(), 2);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 500);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
@@ -2109,6 +2179,7 @@ async fn test_state_6_4_committed_deletion_after_flush() -> IcebergResult<()> {
     .await;
     assert_eq!(snapshot.indices.file_indices.len(), 2);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 300);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
 }
