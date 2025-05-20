@@ -1,10 +1,11 @@
 /// This module interacts with iceberg snapshot status.
 use tokio::sync::mpsc;
 
+/// At most one outstanding snapshot request is allowed.
 pub struct IcebergSnapshotStateManager {
-    /// Used to nofity the initiation for an iceberg snapshot event.
+    /// Used to initiate an iceberg snapshot event.
     snapshot_initiation_sender: mpsc::Sender<()>,
-    /// Used to listen to the initiation for an iceberg snapshot event.
+    /// Used to subscribe to the initiation for an iceberg snapshot event.
     snapshot_initiation_receiver: Option<mpsc::Receiver<()>>,
     /// Used to notify the completion of an iceberg snapshot.
     snapshot_completion_sender: mpsc::Sender<()>,
@@ -30,6 +31,7 @@ impl IcebergSnapshotStateManager {
         }
     }
 
+    /// Get snapshot completion event sender.
     pub fn get_snapshot_completion_sender(&self) -> mpsc::Sender<()> {
         self.snapshot_completion_sender.clone()
     }
@@ -39,10 +41,12 @@ impl IcebergSnapshotStateManager {
         self.snapshot_completion_receiver.recv().await.unwrap()
     }
 
+    /// Initiate an iceberg snapshot event.
     pub async fn initiate_snapshot(&mut self) {
         self.snapshot_initiation_sender.send(()).await.unwrap()
     }
 
+    /// Take the ownership for snapshot initiate receiver.
     pub fn take_snapshot_initiation_receiver(&mut self) -> Option<mpsc::Receiver<()>> {
         self.snapshot_initiation_receiver.take()
     }

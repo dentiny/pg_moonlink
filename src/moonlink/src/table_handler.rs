@@ -39,10 +39,6 @@ pub struct TableHandler {
 
     /// Sender for the event queue
     event_sender: Sender<TableEvent>,
-    // /// Receiver for iceberg snaphot initiation event.
-    // iceberg_snapshot_initiation_receiver: Receiver<()>,
-    // /// Sender for iceberg snapshot completion event.
-    // iceberg_snapshot_completion_sender: Sender<()>,
 }
 
 impl TableHandler {
@@ -161,7 +157,7 @@ impl TableHandler {
                 Some(()) = iceberg_snapshot_initiation_receiver.recv() => {
                     assert!(!has_outstanding_iceberg_snapshot_request, "There should be at most one outstanding iceberg snapshot request for one table!");
                     has_outstanding_iceberg_snapshot_request = true;
-                    // Only create a periodic snapshot if there isn't already one in progress
+                    // Only create a snapshot if there isn't already one in progress
                     if snapshot_handle.is_none() {
                         snapshot_handle = table.create_snapshot();
                     }
@@ -174,6 +170,7 @@ impl TableHandler {
                                 table.notify_snapshot_reader(lsn);
                                 if has_outstanding_iceberg_snapshot_request {
                                     iceberg_snaphot_completion_sender.send(()).await.unwrap();
+                                    has_outstanding_iceberg_snapshot_request = false;
                                 }
                             }
                             Err(e) => {

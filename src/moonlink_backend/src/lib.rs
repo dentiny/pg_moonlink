@@ -90,6 +90,8 @@ impl<T: Eq + Hash + Clone> MoonlinkBackend<T> {
         Ok(read_state)
     }
 
+    /// Create an iceberg snapshot at best effort (i.e. if there's no new data files created it won't be created).
+    /// Return when the snapshot dump finishes.
     pub async fn create_iceberg_snapshot(&self, table_id: &T) -> Result<()> {
         let mut iceberg_snapshot_managers = self.iceberg_snapshot_managers.write().await;
         let writer = iceberg_snapshot_managers.get_mut(table_id).unwrap();
@@ -125,11 +127,11 @@ mod tests {
             .await
             .unwrap();
         client
-            .simple_query("INSERT INTO test  VALUES (1 ,'foo');")
+            .simple_query("INSERT INTO test VALUES (1 ,'foo');")
             .await
             .unwrap();
         client
-            .simple_query("INSERT INTO test  VALUES (2 ,'bar');")
+            .simple_query("INSERT INTO test VALUES (2 ,'bar');")
             .await
             .unwrap();
         let old = service.scan_table(&"test", None).await.unwrap();
