@@ -237,6 +237,8 @@ impl IcebergTableManager {
             return Ok(());
         }
 
+        println!("load deletion vector from manifest enrey!!");
+
         let data_file = entry.data_file();
         let referenced_path_buf: PathBuf = data_file.referenced_data_file().unwrap().into();
         let data_file_entry = self.persisted_data_files.get_mut(&referenced_path_buf);
@@ -309,6 +311,8 @@ impl IcebergTableManager {
         data_file: String,
         deletion_vector: BatchDeletionVector,
     ) -> IcebergResult<PuffinBlobRef> {
+        println!("write deletion vector = {:?}", deletion_vector.collect_deleted_rows());
+
         let deleted_rows = deletion_vector.collect_deleted_rows();
         assert!(!deleted_rows.is_empty());
 
@@ -511,6 +515,9 @@ impl IcebergOperation for IcebergTableManager {
 
         // There's nothing stored in iceberg table (aka, first time initialization).
         if table_metadata.current_snapshot().is_none() {
+
+            println!("when load, no current snapshot!");
+
             return Ok(MooncakeSnapshot::new(self.mooncake_table_metadata.clone()));
         }
 
@@ -526,8 +533,6 @@ impl IcebergOperation for IcebergTableManager {
         let file_io = self.iceberg_table.as_ref().unwrap().file_io().clone();
         let mut loaded_file_indices = vec![];
         for manifest_file in manifest_list.entries().iter() {
-            // All files (i.e. data files, deletion vector, manifest files) under the same snapshot are assigned with the same sequence number.
-            // Reference: https://iceberg.apache.org/spec/?h=content#sequence-numbers
             let manifest = manifest_file.load_manifest(&file_io).await?;
             let (manifest_entries, _) = manifest.into_parts();
             assert!(
@@ -537,6 +542,9 @@ impl IcebergOperation for IcebergTableManager {
 
             // On load, we do two pass on all entries, to check whether all deletion vector has a corresponding data file.
             for entry in manifest_entries.iter() {
+
+                println!("\n\nmanifest entry = {:?}", entry);
+
                 self.load_data_file_from_manifest_entry(entry.as_ref())
                     .await?;
                 let file_indices = self
