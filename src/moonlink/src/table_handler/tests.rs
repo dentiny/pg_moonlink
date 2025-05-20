@@ -1,14 +1,6 @@
 use super::test_utils::*;
-use crate::row::IdentityProp;
-use crate::storage::mooncake_table::TableMetadata as MooncakeTableMetadata;
-use crate::{
-    storage::mooncake_table::TableConfig as MooncakeTableConfig, IcebergOperation,
-    IcebergTableManager,
-};
-
-use iceberg::{spec::TableMetadata, table};
-
-use std::sync::Arc;
+use crate::storage::mooncake_table::TableConfig as MooncakeTableConfig;
+use crate::storage::IcebergOperation;
 
 #[tokio::test]
 async fn test_table_handler() {
