@@ -83,7 +83,17 @@ impl FileIndex {
 
     /// Transfer the ownership and convert into [storage::index::FileIndex].
     /// The file index id is generated on-the-fly.
-    pub(crate) fn as_mooncake_file_index(&mut self) -> MooncakeFileIndex {
+    pub(crate) async fn as_mooncake_file_index(&mut self) -> MooncakeFileIndex {
+        let index_block_futures = self.index_block_files.iter().map(|cur_index_block| {
+            MooncakeIndexBlock::new(
+                cur_index_block.bucket_start_idx,
+                cur_index_block.bucket_end_idx,
+                cur_index_block.bucket_start_offset,
+                cur_index_block.filepath.clone(),
+            )
+        });
+        let index_blocks = futures::future::join_all(index_block_futures).await;
+
         MooncakeFileIndex {
             global_index_id: get_next_file_index_id(),
             files: self
@@ -98,19 +108,7 @@ impl FileIndex {
             seg_id_bits: self.seg_id_bits,
             row_id_bits: self.row_id_bits,
             bucket_bits: self.bucket_bits,
-            index_blocks: self
-                .index_block_files
-                .iter()
-                .map(|cur_index_block| {
-                    // TODO(hjiang): Need to figure out the remote path download and mmap.
-                    MooncakeIndexBlock::new(
-                        cur_index_block.bucket_start_idx,
-                        cur_index_block.bucket_end_idx,
-                        cur_index_block.bucket_start_offset,
-                        cur_index_block.filepath.clone(),
-                    )
-                })
-                .collect(),
+            index_blocks,
         }
     }
 }
@@ -208,8 +206,8 @@ mod tests {
     use crate::storage::index::persisted_bucket_hash_map::IndexBlock as MooncakeIndexBlock;
     use crate::storage::index::FileIndex as MooncakeFileIndex;
 
-    #[test]
-    fn test_hash_index_v1_serde() {
+    #[tokio::test]
+    async fn test_hash_index_v1_serde() {
         // Fill in meaningless random bytes, mainly to verify the correctness of serde.
         let temp_data_file = NamedTempFile::new().unwrap();
         let temp_local_index_file = NamedTempFile::new().unwrap();
@@ -228,12 +226,15 @@ mod tests {
             row_id_bits: 3,
             bucket_bits: 5,
             files: vec![Arc::new(PathBuf::from(temp_data_file.path()))],
-            index_blocks: vec![MooncakeIndexBlock::new(
-                /*bucket_start_idx=*/ 0,
-                /*bucket_end_idx=*/ 3,
-                /*bucket_start_offset=*/ 10,
-                /*filepath=*/ local_index_filepath.clone(),
-            )],
+            index_blocks: vec![
+                MooncakeIndexBlock::new(
+                    /*bucket_start_idx=*/ 0,
+                    /*bucket_end_idx=*/ 3,
+                    /*bucket_start_offset=*/ 10,
+                    /*filepath=*/ local_index_filepath.clone(),
+                )
+                .await,
+            ],
         };
 
         // Serialization.
@@ -251,7 +252,7 @@ mod tests {
         let mut deserialized_file_index_blob = FileIndexBlob::from_blob(blob).unwrap();
         assert_eq!(deserialized_file_index_blob.file_indices.len(), 1);
         let mut file_index = std::mem::take(&mut deserialized_file_index_blob.file_indices[0]);
-        let mooncake_file_index = file_index.as_mooncake_file_index();
+        let mooncake_file_index = file_index.as_mooncake_file_index().await;
 
         // Check global index are equal before and after serde.
         assert_eq!(

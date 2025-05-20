@@ -184,16 +184,15 @@ impl IcebergTableManager {
 
         let mut file_index_blob =
             FileIndexBlob::load_from_index_blob(file_io.clone(), entry.data_file()).await?;
-        let mut file_indices = Vec::with_capacity(file_index_blob.file_indices.len());
-        file_index_blob
+        let file_index_futures = file_index_blob
             .file_indices
             .iter_mut()
-            .for_each(|cur_file_index| {
-                let mooncake_file_index = cur_file_index.as_mooncake_file_index();
-                self.persisted_file_index_ids
-                    .insert(mooncake_file_index.global_index_id);
-                file_indices.push(mooncake_file_index);
-            });
+            .map(|cur_file_index| cur_file_index.as_mooncake_file_index());
+        let file_indices = futures::future::join_all(file_index_futures).await;
+        for mooncake_file_index in file_indices.iter() {
+            self.persisted_file_index_ids
+                .insert(mooncake_file_index.global_index_id);
+        }
 
         Ok(file_indices)
     }

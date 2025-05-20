@@ -5,7 +5,6 @@ use memmap2::Mmap;
 use std::collections::BinaryHeap;
 use std::fmt;
 use std::fmt::Debug;
-use std::fs::File;
 use std::io::Cursor;
 use std::io::SeekFrom;
 use std::path::PathBuf;
@@ -64,13 +63,13 @@ pub(crate) struct IndexBlock {
 }
 
 impl IndexBlock {
-    pub(crate) fn new(
+    pub(crate) async fn new(
         bucket_start_idx: u32,
         bucket_end_idx: u32,
         bucket_start_offset: u64,
         file_path: String,
     ) -> Self {
-        let file = File::open(file_path.clone()).unwrap();
+        let file = tokio::fs::File::open(file_path.clone()).await.unwrap();
         let data = unsafe { Mmap::map(&file).unwrap() };
         Self {
             bucket_start_idx,
@@ -281,6 +280,7 @@ impl IndexBlockBuilder {
             bucket_start_offset,
             self.file_path.to_str().unwrap().to_string(),
         )
+        .await
     }
 }
 
