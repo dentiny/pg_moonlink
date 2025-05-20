@@ -1,4 +1,5 @@
 use crate::row::MoonlinkRow;
+use crate::storage::IcebergSnapshotStateManager;
 use crate::storage::MooncakeTable;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
@@ -38,17 +39,36 @@ pub struct TableHandler {
 
     /// Sender for the event queue
     event_sender: Sender<TableEvent>,
+    // /// Receiver for iceberg snaphot initiation event.
+    // iceberg_snapshot_initiation_receiver: Receiver<()>,
+    // /// Sender for iceberg snapshot completion event.
+    // iceberg_snapshot_completion_sender: Sender<()>,
 }
 
 impl TableHandler {
     /// Create a new TableHandler for the given schema and table name
-    pub fn new(table: MooncakeTable) -> Self {
+    pub fn new(
+        table: MooncakeTable,
+        iceberg_snapshot_state_manager: &mut IcebergSnapshotStateManager,
+    ) -> Self {
         // Create channel for events
         let (event_sender, event_receiver) = mpsc::channel(100);
 
+        let iceberg_snapshot_initiation_receiver = iceberg_snapshot_state_manager
+            .take_snapshot_initiation_receiver()
+            .unwrap();
+        let iceberg_snapshot_completion_sender =
+            iceberg_snapshot_state_manager.get_snapshot_completion_sender();
+
         // Spawn the task with the oneshot receiver
         let event_handle = Some(tokio::spawn(async move {
-            Self::event_loop(event_receiver, table).await;
+            Self::event_loop(
+                iceberg_snapshot_initiation_receiver,
+                iceberg_snapshot_completion_sender,
+                event_receiver,
+                table,
+            )
+            .await;
         }));
 
         // Create the handler
@@ -64,9 +84,15 @@ impl TableHandler {
     }
 
     /// Main event processing loop
-    async fn event_loop(mut event_receiver: Receiver<TableEvent>, mut table: MooncakeTable) {
+    async fn event_loop(
+        mut iceberg_snapshot_initiation_receiver: Receiver<()>,
+        iceberg_snaphot_completion_sender: Sender<()>,
+        mut event_receiver: Receiver<TableEvent>,
+        mut table: MooncakeTable,
+    ) {
         let mut snapshot_handle: Option<JoinHandle<u64>> = None;
         let mut periodic_snapshot_interval = time::interval(Duration::from_millis(500));
+        let mut has_outstanding_iceberg_snapshot_request = false;
 
         // Process events until the receiver is closed or a Shutdown event is received
         loop {
@@ -131,12 +157,24 @@ impl TableHandler {
                         }
                     }
                 }
+                // wait for iceberg snapshot requests.
+                Some(()) = iceberg_snapshot_initiation_receiver.recv() => {
+                    assert!(!has_outstanding_iceberg_snapshot_request, "There should be at most one outstanding iceberg snapshot request for one table!");
+                    has_outstanding_iceberg_snapshot_request = true;
+                    // Only create a periodic snapshot if there isn't already one in progress
+                    if snapshot_handle.is_none() {
+                        snapshot_handle = table.create_snapshot();
+                    }
+                }
                 // wait for the snapshot to complete
                 Some(()) = async {
                     if let Some(handle) = &mut snapshot_handle {
                         match handle.await {
                             Ok(lsn) => {
                                 table.notify_snapshot_reader(lsn);
+                                if has_outstanding_iceberg_snapshot_request {
+                                    iceberg_snaphot_completion_sender.send(()).await.unwrap();
+                                }
                             }
                             Err(e) => {
                                 println!("Snapshot task was cancelled: {}", e);

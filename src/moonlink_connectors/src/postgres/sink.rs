@@ -9,6 +9,7 @@ use crate::pg_replicate::{
 use crate::postgres::util::postgres_schema_to_moonlink_schema;
 use crate::postgres::util::PostgresTableRow;
 use async_trait::async_trait;
+use moonlink::IcebergSnapshotStateManager;
 use moonlink::IcebergTableConfig;
 use moonlink::ReadStateManager;
 use moonlink::{MooncakeTable, TableConfig, TableEvent, TableHandler};
@@ -32,23 +33,28 @@ pub struct Sink {
     streaming_transactions_state: HashMap<u32, TransactionState>,
     transaction_state: TransactionState,
     reader_notifier: Sender<ReadStateManager>,
+    iceberg_snapshot_notifier: Sender<IcebergSnapshotStateManager>,
     base_path: PathBuf,
     replication_state: Arc<PipelineReplicationState>,
 }
 
 impl Sink {
-    pub fn new(reader_notifier: Sender<ReadStateManager>, base_path: PathBuf) -> Self {
-        let event_senders = HashMap::new();
+    pub fn new(
+        reader_notifier: Sender<ReadStateManager>,
+        iceberg_snapshot_notifier: Sender<IcebergSnapshotStateManager>,
+        base_path: PathBuf,
+    ) -> Self {
         Self {
             table_handlers: HashMap::new(),
             last_committed_lsn_per_table: HashMap::new(),
-            event_senders,
+            event_senders: HashMap::new(),
             streaming_transactions_state: HashMap::new(),
             transaction_state: TransactionState {
                 final_lsn: 0,
                 touched_tables: HashSet::new(),
             },
             reader_notifier,
+            iceberg_snapshot_notifier,
             base_path,
             replication_state: PipelineReplicationState::new(),
         }
@@ -96,10 +102,15 @@ impl BatchSink for Sink {
                 .insert(table_id, table_commit_tx);
             let read_state_manager =
                 ReadStateManager::new(&table, self.replication_state.subscribe(), table_commit_rx);
-            let table_handler = TableHandler::new(table);
+            let mut iceberg_snapshot_state_manager = IcebergSnapshotStateManager::new();
+            let table_handler = TableHandler::new(table, &mut iceberg_snapshot_state_manager);
             self.event_senders
                 .insert(table_id, table_handler.get_event_sender());
             self.reader_notifier.send(read_state_manager).await.unwrap();
+            self.iceberg_snapshot_notifier
+                .send(iceberg_snapshot_state_manager)
+                .await
+                .unwrap();
             table_handlers.insert(table_id, table_handler);
         }
         Ok(())

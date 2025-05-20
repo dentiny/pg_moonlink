@@ -1,5 +1,5 @@
 pub use moonlink::ReadState;
-use moonlink::ReadStateManager;
+use moonlink::{IcebergSnapshotStateManager, ReadStateManager};
 mod error;
 
 pub use error::Error;
@@ -17,20 +17,22 @@ pub struct MoonlinkBackend<T: Eq + Hash> {
     moonlink_table_base_path: String,
     ingest_sources: RwLock<Vec<MoonlinkPostgresSource>>,
     table_readers: RwLock<HashMap<T, ReadStateManager>>,
+    iceberg_snapshot_managers: RwLock<HashMap<T, IcebergSnapshotStateManager>>,
 }
 
-impl<T: Eq + Hash> Default for MoonlinkBackend<T> {
+impl<T: Eq + Hash + Clone> Default for MoonlinkBackend<T> {
     fn default() -> Self {
         Self::new(DEFAULT_MOONLINK_TABLE_BASE_PATH.to_string())
     }
 }
 
-impl<T: Eq + Hash> MoonlinkBackend<T> {
+impl<T: Eq + Hash + Clone> MoonlinkBackend<T> {
     pub fn new(base_path: String) -> Self {
         Self {
             moonlink_table_base_path: base_path,
             ingest_sources: RwLock::new(Vec::new()),
             table_readers: RwLock::new(HashMap::new()),
+            iceberg_snapshot_managers: RwLock::new(HashMap::new()),
         }
     }
 
@@ -38,11 +40,16 @@ impl<T: Eq + Hash> MoonlinkBackend<T> {
         let mut ingest_sources = self.ingest_sources.write().await;
         for ingest_source in ingest_sources.iter_mut() {
             if ingest_source.check_table_belongs_to_source(uri) {
-                let reader_state_manager = ingest_source.add_table(table_name).await?;
+                let (reader_state_manager, iceberg_snapshot_manager) =
+                    ingest_source.add_table(table_name).await?;
                 self.table_readers
                     .write()
                     .await
-                    .insert(table_id, reader_state_manager);
+                    .insert(table_id.clone(), reader_state_manager);
+                self.iceberg_snapshot_managers
+                    .write()
+                    .await
+                    .insert(table_id, iceberg_snapshot_manager);
                 return Ok(());
             }
         }
@@ -56,12 +63,17 @@ impl<T: Eq + Hash> MoonlinkBackend<T> {
             canonicalized_base_path.to_str().unwrap().to_string(),
         )
         .await?;
-        let reader_state_manager = ingest_source.add_table(table_name).await?;
+        let (reader_state_manager, iceberg_snapshot_manager) =
+            ingest_source.add_table(table_name).await?;
         ingest_sources.push(ingest_source);
         self.table_readers
             .write()
             .await
-            .insert(table_id, reader_state_manager);
+            .insert(table_id.clone(), reader_state_manager);
+        self.iceberg_snapshot_managers
+            .write()
+            .await
+            .insert(table_id, iceberg_snapshot_manager);
         Ok(())
     }
 
@@ -76,6 +88,14 @@ impl<T: Eq + Hash> MoonlinkBackend<T> {
             .expect("try to scan a table that does not exist");
         let read_state = reader.try_read(lsn).await?;
         Ok(read_state)
+    }
+
+    pub async fn create_iceberg_snapshot(&self, table_id: &T) -> Result<()> {
+        let mut iceberg_snapshot_managers = self.iceberg_snapshot_managers.write().await;
+        let writer = iceberg_snapshot_managers.get_mut(table_id).unwrap();
+        writer.initiate_snapshot().await;
+        writer.sync_snapshot_completion().await;
+        Ok(())
     }
 }
 

@@ -3,7 +3,7 @@ use crate::storage::IcebergTableConfig;
 use crate::storage::{verify_files_and_deletions, MooncakeTable};
 use crate::table_handler::{TableEvent, TableHandler}; // Ensure this path is correct
 use crate::union_read::{decode_read_state_for_testing, ReadStateManager};
-use crate::TableConfig;
+use crate::{IcebergSnapshotStateManager, TableConfig};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -83,7 +83,7 @@ impl TestEnvironment {
             table_commit_rx,
         ));
 
-        let handler = TableHandler::new(mooncake_table);
+        let handler = TableHandler::new(mooncake_table, &mut IcebergSnapshotStateManager::new());
         let event_sender = handler.get_event_sender();
 
         Self {

@@ -1,5 +1,6 @@
 pub(super) mod deletion_vector;
 pub(super) mod file_catalog;
+pub(super) mod iceberg_snapshot_state_manager;
 pub(super) mod iceberg_table_manager;
 pub(super) mod index;
 pub(super) mod moonlink_catalog;
