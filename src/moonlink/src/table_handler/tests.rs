@@ -422,7 +422,10 @@ async fn test_iceberg_snapshot_creation() {
     assert_eq!(snapshot.disk_files.len(), 1);
     let (cur_data_file, cur_deletion_vector) = snapshot.disk_files.into_iter().next().unwrap();
     assert!(tokio::fs::metadata(cur_data_file).await.is_ok());
-    assert!(cur_deletion_vector.batch_deletion_vector.collect_deleted_rows().is_empty());
+    assert!(cur_deletion_vector
+        .batch_deletion_vector
+        .collect_deleted_rows()
+        .is_empty());
     assert!(cur_deletion_vector.puffin_deletion_blob.is_none());
 
     // Perform a delete operation.
@@ -436,7 +439,7 @@ async fn test_iceberg_snapshot_creation() {
     // Attempt an iceberg snapshot.
     env.initiate_snapshot().await;
     env.sync_snapshot_completion().await;
-    
+
     // Load from iceberg snapshot manager and make sure both data file and deletion vector.
     let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
     let snapshot = iceberg_table_manager
@@ -446,7 +449,21 @@ async fn test_iceberg_snapshot_creation() {
     assert_eq!(snapshot.disk_files.len(), 1);
     let (cur_data_file, cur_deletion_vector) = snapshot.disk_files.into_iter().next().unwrap();
     assert!(tokio::fs::metadata(cur_data_file).await.is_ok());
-    assert_eq!(cur_deletion_vector.batch_deletion_vector.collect_deleted_rows(), vec![0]);
+    assert_eq!(
+        cur_deletion_vector
+            .batch_deletion_vector
+            .collect_deleted_rows(),
+        vec![0]
+    );
     assert!(cur_deletion_vector.puffin_deletion_blob.is_some());
-    assert!(tokio::fs::metadata(cur_deletion_vector.puffin_deletion_blob.as_ref().unwrap().puffin_filepath.clone()).await.is_ok());
+    assert!(tokio::fs::metadata(
+        cur_deletion_vector
+            .puffin_deletion_blob
+            .as_ref()
+            .unwrap()
+            .puffin_filepath
+            .clone()
+    )
+    .await
+    .is_ok());
 }
