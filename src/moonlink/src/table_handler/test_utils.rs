@@ -3,7 +3,7 @@ use crate::storage::IcebergTableConfig;
 use crate::storage::{verify_files_and_deletions, MooncakeTable};
 use crate::table_handler::{TableEvent, TableHandler}; // Ensure this path is correct
 use crate::union_read::{decode_read_state_for_testing, ReadStateManager};
-use crate::{IcebergSnapshotStateManager, TableConfig};
+use crate::{IcebergSnapshotStateManager, TableConfig as MooncakeTableConfig};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -46,12 +46,18 @@ pub struct TestEnvironment {
     read_state_manager: Arc<ReadStateManager>,
     replication_tx: watch::Sender<u64>,
     table_commit_tx: watch::Sender<u64>,
+    iceberg_snapshot_manager: IcebergSnapshotStateManager,
     _temp_dir: TempDir,
 }
 
 impl TestEnvironment {
+    /// Creates a default test environment with default settings.
+    pub async fn default() -> Self {
+        Self::new(MooncakeTableConfig::default()).await
+    }
+
     /// Creates a new test environment with default settings.
-    pub async fn new() -> Self {
+    pub async fn new(mooncake_table_config: MooncakeTableConfig) -> Self {
         let schema = default_schema();
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().to_path_buf();
@@ -70,7 +76,7 @@ impl TestEnvironment {
             path,
             IdentityProp::Keys(vec![0]),
             iceberg_table_config,
-            TableConfig::new(),
+            mooncake_table_config,
         )
         .await;
 
@@ -92,6 +98,7 @@ impl TestEnvironment {
             read_state_manager,
             replication_tx,
             table_commit_tx,
+            iceberg_snapshot_manager: IcebergSnapshotStateManager::new(),
             _temp_dir: temp_dir,
         }
     }
@@ -101,6 +108,20 @@ impl TestEnvironment {
             .send(event)
             .await
             .expect("Failed to send event");
+    }
+
+    // --- Util functions for iceberg snapshot creation ---
+
+    /// Initiate an iceberg snapshot event at best effort.
+    pub async fn initiate_snapshot(&mut self) {
+        self.iceberg_snapshot_manager.initiate_snapshot().await
+    }
+
+    /// Wait iceberg snapshot creation completion.
+    pub async fn sync_snapshot_completion(&mut self) {
+        self.iceberg_snapshot_manager
+            .sync_snapshot_completion()
+            .await
     }
 
     // --- Operation Helpers ---

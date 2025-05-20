@@ -13,8 +13,10 @@ use crate::error::{Error, Result};
 use crate::row::{IdentityProp, MoonlinkRow};
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 use futures::executor::block_on;
+use iceberg::table::Table;
 use std::collections::HashMap;
 use std::mem::take;
+use std::net::UdpSocket;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -31,10 +33,14 @@ use tokio::task::JoinHandle;
 pub struct TableConfig {
     /// Number of batch records which decides when to flush records from MemSlice to disk.
     pub mem_slice_size: usize,
+    /// Number of new deletion records which decided whether to create a new mooncake table snapshot.
+    pub snapshot_deletion_record_count: usize,
     /// Max number of rows in MemSlice.
     pub batch_size: usize,
     /// Number of new data files to trigger an iceberg snapshot.
     pub iceberg_snapshot_new_data_file_count: usize,
+    /// Number of unpersisted committed delete logs to trigger an iceberg snapshot.
+    pub iceberg_snapshot_new_committed_deletion_log: usize,
 }
 
 impl Default for TableConfig {
@@ -45,24 +51,35 @@ impl Default for TableConfig {
 
 impl TableConfig {
     #[cfg(debug_assertions)]
-    const DEFAULT_MEM_SLICE_SIZE: usize = 4 * 16;
+    pub(crate) const DEFAULT_MEM_SLICE_SIZE: usize = 4 * 16;
     #[cfg(debug_assertions)]
-    const DEFAULT_BATCH_SIZE: usize = 4;
+    pub(super) const DEFAULT_SNAPSHOT_DELETION_RECORD_COUNT: usize = 1000;
     #[cfg(debug_assertions)]
-    const DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT: usize = 1;
+    pub(crate) const DEFAULT_BATCH_SIZE: usize = 4;
+    #[cfg(debug_assertions)]
+    pub(crate) const DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT: usize = 1;
+    #[cfg(debug_assertions)]
+    pub(crate) const DEFAULT_ICEBERG_SNAPSHOT_NEW_COMMITTED_DELETION_LOG: usize = 1000;
 
     #[cfg(not(debug_assertions))]
-    const DEFAULT_MEM_SLICE_SIZE: usize = 2048 * 16;
+    pub(crate) const DEFAULT_MEM_SLICE_SIZE: usize = 2048 * 16;
     #[cfg(not(debug_assertions))]
-    const DEFAULT_BATCH_SIZE: usize = 2048;
+    pub(super) const DEFAULT_SNAPSHOT_DELETION_RECORD_COUNT: usize = 1000;
     #[cfg(not(debug_assertions))]
-    const DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT: usize = 1;
+    pub(crate) const DEFAULT_BATCH_SIZE: usize = 2048;
+    #[cfg(not(debug_assertions))]
+    pub(crate) const DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT: usize = 1;
+    #[cfg(not(debug_assertions))]
+    pub(crate) const DEFAULT_ICEBERG_SNAPSHOT_NEW_COMMITTED_DELETION_LOG: usize = 1000;
 
     pub fn new() -> Self {
         Self {
             mem_slice_size: Self::DEFAULT_MEM_SLICE_SIZE,
+            snapshot_deletion_record_count: Self::DEFAULT_SNAPSHOT_DELETION_RECORD_COUNT,
             batch_size: Self::DEFAULT_BATCH_SIZE,
             iceberg_snapshot_new_data_file_count: Self::DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT,
+            iceberg_snapshot_new_committed_deletion_log:
+                Self::DEFAULT_ICEBERG_SNAPSHOT_NEW_COMMITTED_DELETION_LOG,
         }
     }
     pub fn batch_size(&self) -> usize {
@@ -70,6 +87,12 @@ impl TableConfig {
     }
     pub fn iceberg_snapshot_new_data_file_count(&self) -> usize {
         self.iceberg_snapshot_new_data_file_count
+    }
+    pub fn snapshot_deletion_record_count(&self) -> usize {
+        self.snapshot_deletion_record_count
+    }
+    pub fn iceberg_snapshot_new_committed_deletion_log(&self) -> usize {
+        self.iceberg_snapshot_new_committed_deletion_log
     }
 }
 
@@ -151,6 +174,8 @@ impl Snapshot {
 
 #[derive(Default)]
 pub struct SnapshotTask {
+    /// Mooncake table config.
+    mooncake_table_config: TableConfig,
     /// Current task
     ///
     new_disk_slices: Vec<DiskSliceWriter>,
@@ -165,8 +190,9 @@ pub struct SnapshotTask {
 }
 
 impl SnapshotTask {
-    pub fn new() -> Self {
+    pub fn new(mooncake_table_config: TableConfig) -> Self {
         Self {
+            mooncake_table_config,
             new_disk_slices: Vec::new(),
             new_deletions: Vec::new(),
             new_record_batches: Vec::new(),
@@ -178,7 +204,10 @@ impl SnapshotTask {
     }
 
     pub fn should_create_snapshot(&self) -> bool {
-        self.new_lsn > 0 || !self.new_disk_slices.is_empty() || self.new_deletions.len() > 1000
+        self.new_lsn > 0
+            || !self.new_disk_slices.is_empty()
+            || self.new_deletions.len()
+                > self.mooncake_table_config.snapshot_deletion_record_count()
     }
 
     /// Get newly created data files.
@@ -260,7 +289,7 @@ impl MooncakeTable {
             name,
             id: version,
             schema,
-            config: table_config,
+            config: table_config.clone(),
             path: base_path,
             identity,
         });
@@ -275,7 +304,7 @@ impl MooncakeTable {
             snapshot: Arc::new(RwLock::new(
                 SnapshotTableState::new(metadata, iceberg_table_config).await,
             )),
-            next_snapshot_task: SnapshotTask::new(),
+            next_snapshot_task: SnapshotTask::new(table_config),
             transaction_stream_states: HashMap::new(),
             table_snapshot_watch_sender,
             table_snapshot_watch_receiver,
