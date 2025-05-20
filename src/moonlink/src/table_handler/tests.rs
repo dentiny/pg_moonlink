@@ -1,6 +1,14 @@
 use super::test_utils::*;
+use crate::row::IdentityProp;
+use crate::storage::mooncake_table::TableMetadata as MooncakeTableMetadata;
+use crate::{
+    storage::mooncake_table::TableConfig as MooncakeTableConfig, IcebergOperation,
+    IcebergTableManager,
+};
 
-use crate::storage::mooncake_table::TableConfig as MooncakeTableConfig;
+use iceberg::{spec::TableMetadata, table};
+
+use std::sync::Arc;
 
 #[tokio::test]
 async fn test_table_handler() {
@@ -392,7 +400,7 @@ async fn test_iceberg_snapshot_creation() {
         // Create iceberg snapshot as long as there's new committed deletion logs.
         iceberg_snapshot_new_committed_deletion_log: 0,
     };
-    let mut env = TestEnvironment::new(mooncake_table_config).await;
+    let mut env = TestEnvironment::new(mooncake_table_config.clone()).await;
 
     // Append a new row to the mooncake table.
     env.append_row(
@@ -404,6 +412,14 @@ async fn test_iceberg_snapshot_creation() {
     // Attempt an iceberg snapshot.
     env.initiate_snapshot().await;
     env.sync_snapshot_completion().await;
+
+    // Load from iceberg table manager to make sure data file exists.
+    let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
+    let snapshot = iceberg_table_manager
+        .load_snapshot_from_table()
+        .await
+        .unwrap();
+    assert_eq!(snapshot.disk_files.len(), 1);
 
     // Perform a delete operation.
     env.delete_row(

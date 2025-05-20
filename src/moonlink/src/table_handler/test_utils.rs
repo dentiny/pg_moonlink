@@ -1,9 +1,10 @@
 use crate::row::{IdentityProp, MoonlinkRow, RowValue};
+use crate::storage::mooncake_table::TableMetadata as MooncakeTableMetadata;
 use crate::storage::IcebergTableConfig;
 use crate::storage::{verify_files_and_deletions, MooncakeTable};
 use crate::table_handler::{TableEvent, TableHandler}; // Ensure this path is correct
 use crate::union_read::{decode_read_state_for_testing, ReadStateManager};
-use crate::{IcebergSnapshotStateManager, TableConfig as MooncakeTableConfig};
+use crate::{IcebergSnapshotStateManager, IcebergTableManager, TableConfig as MooncakeTableConfig};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -39,6 +40,15 @@ pub fn create_row(id: i32, name: &str, age: i32) -> MoonlinkRow {
     ])
 }
 
+/// Get iceberg table manager config.
+pub fn get_iceberg_manager_config(table_name: String, warehouse_uri: String) -> IcebergTableConfig {
+    IcebergTableConfig {
+        warehouse_uri,
+        namespace: vec!["default".to_string()],
+        table_name,
+    }
+}
+
 /// Holds the common environment components for table handler tests.
 pub struct TestEnvironment {
     pub handler: TableHandler,
@@ -47,7 +57,7 @@ pub struct TestEnvironment {
     replication_tx: watch::Sender<u64>,
     table_commit_tx: watch::Sender<u64>,
     iceberg_snapshot_manager: IcebergSnapshotStateManager,
-    _temp_dir: TempDir,
+    pub(crate) temp_dir: TempDir,
 }
 
 impl TestEnvironment {
@@ -64,11 +74,8 @@ impl TestEnvironment {
 
         // TODO(hjiang): Hard-code iceberg table namespace and table name.
         let table_name = "table_name";
-        let iceberg_table_config = IcebergTableConfig {
-            warehouse_uri: path.to_str().unwrap().to_string(),
-            namespace: vec!["default".to_string()],
-            table_name: table_name.to_string(),
-        };
+        let iceberg_table_config =
+            get_iceberg_manager_config(table_name.to_string(), path.to_str().unwrap().to_string());
         let mooncake_table = MooncakeTable::new(
             schema,
             table_name.to_string(),
@@ -100,8 +107,29 @@ impl TestEnvironment {
             replication_tx,
             table_commit_tx,
             iceberg_snapshot_manager,
-            _temp_dir: temp_dir,
+            temp_dir,
         }
+    }
+
+    /// Create iceberg table manager.
+    pub fn create_iceberg_table_manager(
+        &self,
+        mooncake_table_config: MooncakeTableConfig,
+    ) -> IcebergTableManager {
+        let table_name = "table_name";
+        let mooncake_table_metadata = Arc::new(MooncakeTableMetadata {
+            name: table_name.to_string(),
+            id: 0,
+            schema: Arc::new(default_schema()),
+            config: mooncake_table_config.clone(),
+            path: self.temp_dir.path().to_path_buf(),
+            identity: IdentityProp::Keys(vec![0]),
+        });
+        let iceberg_table_config = get_iceberg_manager_config(
+            table_name.to_string(),
+            self.temp_dir.path().to_str().unwrap().to_string(),
+        );
+        IcebergTableManager::new(mooncake_table_metadata, iceberg_table_config)
     }
 
     async fn send_event(&self, event: TableEvent) {
