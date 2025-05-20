@@ -31,7 +31,7 @@ use tokio::task::JoinHandle;
 pub struct TableConfig {
     /// Number of batch records which decides when to flush records from MemSlice to disk.
     pub mem_slice_size: usize,
-    /// Number of new deletion records which decided whether to create a new mooncake table snapshot.
+    /// Number of new deletion records which decides whether to create a new mooncake table snapshot.
     pub snapshot_deletion_record_count: usize,
     /// Max number of rows in MemSlice.
     pub batch_size: usize,

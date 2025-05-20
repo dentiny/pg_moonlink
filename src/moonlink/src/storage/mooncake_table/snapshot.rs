@@ -176,7 +176,7 @@ impl SnapshotTableState {
                 .mooncake_table_config
                 .iceberg_snapshot_new_data_file_count();
         let flush_by_deletion_logs = self.committed_deletion_log.len()
-            >= self
+            > self
                 .mooncake_table_config
                 .iceberg_snapshot_new_committed_deletion_log();
         if self.current_snapshot.data_file_flush_lsn.is_some()

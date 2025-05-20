@@ -37,7 +37,7 @@ use tempfile::TempDir;
 
 /// Create test batch deletion vector.
 fn test_committed_deletion_log_1(data_filepath: PathBuf) -> HashMap<PathBuf, BatchDeletionVector> {
-    let mut deletion_vector = BatchDeletionVector::new(MooncakeTableConfig::new().batch_size());
+    let mut deletion_vector = BatchDeletionVector::new(MooncakeTableConfig::DEFAULT_BATCH_SIZE);
     deletion_vector.delete_row(0);
 
     let mut deletion_log = HashMap::new();
@@ -46,7 +46,7 @@ fn test_committed_deletion_log_1(data_filepath: PathBuf) -> HashMap<PathBuf, Bat
 }
 /// Test deletion vector 2 includes deletion vector 1, used to mimic new data file rows deletion situation.
 fn test_committed_deletion_log_2(data_filepath: PathBuf) -> HashMap<PathBuf, BatchDeletionVector> {
-    let mut deletion_vector = BatchDeletionVector::new(MooncakeTableConfig::new().batch_size());
+    let mut deletion_vector = BatchDeletionVector::new(MooncakeTableConfig::DEFAULT_BATCH_SIZE);
     deletion_vector.delete_row(1);
     deletion_vector.delete_row(2);
 

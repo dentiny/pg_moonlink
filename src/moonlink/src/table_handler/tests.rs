@@ -394,6 +394,7 @@ async fn test_iceberg_snapshot_creation() {
     };
     let mut env = TestEnvironment::new(mooncake_table_config.clone()).await;
 
+    // ---- Create snapshot after new records appended ----
     // Append a new row to the mooncake table.
     env.append_row(
         /*id=*/ 1, /*name=*/ "John", /*age=*/ 30, /*xact_id=*/ None,
@@ -420,6 +421,7 @@ async fn test_iceberg_snapshot_creation() {
         .is_empty());
     assert!(cur_deletion_vector.puffin_deletion_blob.is_none());
 
+    // ---- Create snapshot after records deleted ----
     // Perform a delete operation.
     env.delete_row(
         /*id=*/ 1, /*name=*/ "John", /*age=*/ 30, /*lsn=*/ 100,
