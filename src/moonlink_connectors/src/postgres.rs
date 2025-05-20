@@ -75,12 +75,11 @@ impl MoonlinkPostgresSource {
         .await?;
         // Use channel to blockingly asynchronously create and get ReadStateManager and IcebergSnapshotStateManager.
         let (reader_notifier, mut reader_notifier_receiver) = mpsc::channel(1);
-        let (iceberg_snapshot_state_notifier, mut iceberg_snapshot_state_notifier_receiver) =
-            mpsc::channel(1);
+        let (iceberg_snapshot_notifier, mut iceberg_snapshot_notifier_receiver) = mpsc::channel(1);
 
         let sink = Sink::new(
             reader_notifier,
-            iceberg_snapshot_state_notifier,
+            iceberg_snapshot_notifier,
             PathBuf::from(self.table_base_path.clone()),
         );
         let batch_config = BatchConfig::new(1000, Duration::from_secs(1));
@@ -92,7 +91,7 @@ impl MoonlinkPostgresSource {
         self.handle = Some(pipeline_handle);
 
         let read_state_manager = reader_notifier_receiver.recv().await;
-        let iceberg_snapshot_manager = iceberg_snapshot_state_notifier_receiver.recv().await;
+        let iceberg_snapshot_manager = iceberg_snapshot_notifier_receiver.recv().await;
         Ok((
             read_state_manager.unwrap(),
             iceberg_snapshot_manager.unwrap(),
