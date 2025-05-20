@@ -205,7 +205,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
     use arrow_array::{Int32Array, StringArray};
     use arrow_schema::Schema;
-    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
     use tempfile::tempdir;
 
     /// Util function to create test schema.
@@ -261,13 +261,14 @@ mod tests {
 
         // Read the files and verify the data
         for (file, _rows) in disk_slice.output_files() {
-            let file = std::fs::File::open(file).map_err(Error::Io)?;
-            let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+            let file = tokio::fs::File::open(file).await?;
+            let builder = ParquetRecordBatchStreamBuilder::new(file).await?;
             let actual_schema = builder.schema();
             assert_eq!(*actual_schema, schema);
 
             let mut reader = builder.build().unwrap();
-            let record_batch = reader.next().unwrap().unwrap();
+            let mut record_batch_reader = reader.next_row_group().await.unwrap().unwrap();
+            let record_batch = record_batch_reader.next().unwrap().unwrap();
             let expected_record_batch = RecordBatch::try_new(
                 schema.clone(),
                 vec![
