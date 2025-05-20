@@ -293,7 +293,7 @@ mod tests {
 
     use arrow::record_batch::RecordBatch;
     use arrow_array::{Int32Array, Int64Array};
-    use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
+    use parquet::{arrow::AsyncArrowWriter, file::properties::WriterProperties};
     use tempfile::tempdir;
 
     impl Clone for MoonlinkRow {
@@ -413,14 +413,14 @@ mod tests {
 
         let tmp_dir = tempdir().unwrap();
         let file_path = tmp_dir.path().join("output.parquet");
-        let file = std::fs::File::create(&file_path).unwrap();
+        let file = tokio::fs::File::create(&file_path).await.unwrap();
         let props = WriterProperties::builder()
             .set_compression(parquet::basic::Compression::UNCOMPRESSED)
             .build();
 
-        let mut writer = ArrowWriter::try_new(file, schema, Some(props)).unwrap();
-        writer.write(&record_batch).unwrap();
-        writer.close().unwrap();
+        let mut writer = AsyncArrowWriter::try_new(file, schema, Some(props)).unwrap();
+        writer.write(&record_batch).await.unwrap();
+        writer.close().await.unwrap();
 
         // Create moonlink row to match against, which matches the second row in the parquet file.
         let row = MoonlinkRow::new(vec![RowValue::Int32(2), RowValue::Int64(20)]);
