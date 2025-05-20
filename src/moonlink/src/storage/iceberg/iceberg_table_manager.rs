@@ -50,9 +50,8 @@ pub struct IcebergTableConfig {
     pub table_name: String,
 }
 
-#[allow(dead_code)]
 #[cfg_attr(test, automock)]
-pub(crate) trait IcebergOperation {
+pub trait IcebergOperation {
     /// Write a new snapshot to iceberg table.
     /// It could be called for multiple times to write and commit multiple snapshots.
     ///
@@ -70,6 +69,7 @@ pub(crate) trait IcebergOperation {
     ///
     /// TODO(hjiang): We're storing the iceberg table status in two places, one for iceberg table manager, another at snapshot.
     /// Provide delta change interface, so snapshot doesn't need to store everything.
+    #[allow(async_fn_in_trait)]
     async fn sync_snapshot(
         &mut self,
         flush_lsn: u64,
@@ -80,6 +80,7 @@ pub(crate) trait IcebergOperation {
 
     /// Load latest snapshot from iceberg table. Used for recovery and initialization.
     /// Notice this function is supposed to call **only once**.
+    #[allow(async_fn_in_trait)]
     async fn load_snapshot_from_table(&mut self) -> IcebergResult<MooncakeSnapshot>
     where
         Self: Sized;

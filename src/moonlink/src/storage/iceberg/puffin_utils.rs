@@ -8,7 +8,7 @@ use iceberg::{Error as IcebergError, Result as IcebergResult};
 
 /// Reference to puffin blob.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PuffinBlobRef {
+pub struct PuffinBlobRef {
     /// Path for the puffin file.
     pub(crate) puffin_filepath: String,
     /// Start offset for the blob.
