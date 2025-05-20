@@ -7,32 +7,30 @@ use crate::storage::iceberg::iceberg_table_manager::*;
 use crate::storage::iceberg::puffin_utils;
 #[cfg(feature = "storage-s3")]
 use crate::storage::iceberg::s3_test_utils;
+use crate::storage::index::MooncakeIndex;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 use crate::storage::mooncake_table::Snapshot;
 use crate::storage::mooncake_table::{
     DiskFileDeletionVector, TableConfig as MooncakeTableConfig,
     TableMetadata as MooncakeTableMetadata,
 };
-
-use crate::storage::index::MooncakeIndex;
 use crate::storage::MooncakeTable;
 
-use iceberg::io::FileIOBuilder;
 use std::collections::HashMap;
-use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tempfile::tempdir;
 
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow::datatypes::{DataType, Field};
 use arrow_array::{Int32Array, RecordBatch, StringArray};
 use iceberg::io::FileIO;
+use iceberg::io::FileIOBuilder;
 use iceberg::io::FileRead;
 use iceberg::Error as IcebergError;
 use iceberg::Result as IcebergResult;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use parquet::arrow::ArrowWriter;
+use parquet::arrow::AsyncArrowWriter;
+use tempfile::tempdir;
 use tempfile::TempDir;
 
 /// Create test batch deletion vector.
@@ -115,10 +113,10 @@ async fn write_arrow_record_batch_to_local<P: AsRef<std::path::Path>>(
     schema: Arc<ArrowSchema>,
     batch: &RecordBatch,
 ) -> IcebergResult<()> {
-    let file = File::create(&path)?;
-    let mut writer = ArrowWriter::try_new(file, schema, None)?;
-    writer.write(batch)?;
-    writer.close()?;
+    let file = tokio::fs::File::create(&path).await?;
+    let mut writer = AsyncArrowWriter::try_new(file, schema, None)?;
+    writer.write(batch).await?;
+    writer.close().await?;
     Ok(())
 }
 
