@@ -9,7 +9,7 @@ use crate::storage::index::Index;
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 use crate::storage::mooncake_table::MoonlinkRow;
 use crate::storage::storage_utils::{ProcessedDeletionRecord, RawDeletionRecord, RecordLocation};
-use parquet::arrow::ArrowWriter;
+use parquet::arrow::AsyncArrowWriter;
 use std::collections::{BTreeMap, HashMap};
 use std::mem::take;
 use std::path::PathBuf;
@@ -494,7 +494,7 @@ impl SnapshotTableState {
         (deletion_vector_blob_at_read, ret)
     }
 
-    pub(crate) fn request_read(&self) -> Result<ReadOutput> {
+    pub(crate) async fn request_read(&self) -> Result<ReadOutput> {
         let mut file_paths: Vec<String> =
             Vec::with_capacity(self.current_snapshot.disk_files.len());
         let mut associated_files = Vec::new();
@@ -508,7 +508,8 @@ impl SnapshotTableState {
 
         // For committed but not persisted records, we create a temporary file for them, which gets deleted after query completion.
         let file_path = self.current_snapshot.get_name_for_inmemory_file();
-        if file_path.exists() {
+        let filepath_exists = tokio::fs::try_exists(&file_path).await?;
+        if filepath_exists {
             file_paths.push(file_path.to_string_lossy().to_string());
             associated_files.push(file_path.to_string_lossy().to_string());
             return Ok(ReadOutput {
@@ -554,13 +555,13 @@ impl SnapshotTableState {
 
             if !filtered_batches.is_empty() {
                 // Build a parquet file from current record batches
-                //
+                let temp_file = tokio::fs::File::create(&file_path).await?;
                 let mut parquet_writer =
-                    ArrowWriter::try_new(std::fs::File::create(&file_path).unwrap(), schema, None)?;
+                    AsyncArrowWriter::try_new(temp_file, schema, /*props=*/ None)?;
                 for batch in filtered_batches.iter() {
-                    parquet_writer.write(batch)?;
+                    parquet_writer.write(batch).await?;
                 }
-                parquet_writer.close()?;
+                parquet_writer.close().await?;
                 file_paths.push(file_path.to_string_lossy().to_string());
                 associated_files.push(file_path.to_string_lossy().to_string());
             }

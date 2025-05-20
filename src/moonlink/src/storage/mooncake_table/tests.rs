@@ -21,7 +21,7 @@ async fn test_append_commit_snapshot(#[case] identity: IdentityProp) -> Result<(
     table.commit(1);
     snapshot(&mut table).await;
     let snapshot = table.snapshot.read().await;
-    let ReadOutput { file_paths, .. } = snapshot.request_read()?;
+    let ReadOutput { file_paths, .. } = snapshot.request_read().await?;
     verify_file_contents(&file_paths[0], &[1, 2], Some(2));
     Ok(())
 }
@@ -34,7 +34,7 @@ async fn test_flush_basic(#[case] identity: IdentityProp) -> Result<()> {
     let rows = vec![test_row(1, "Alice", 30), test_row(2, "Bob", 25)];
     append_commit_flush_snapshot(&mut table, rows, 1).await?;
     let snapshot = table.snapshot.read().await;
-    let ReadOutput { file_paths, .. } = snapshot.request_read()?;
+    let ReadOutput { file_paths, .. } = snapshot.request_read().await?;
     verify_file_contents(&file_paths[0], &[1, 2], Some(2));
     Ok(())
 }
@@ -65,7 +65,7 @@ async fn test_delete_and_append(#[case] identity: IdentityProp) -> Result<()> {
         position_deletes,
         deletion_vectors,
         ..
-    } = snapshot.request_read()?;
+    } = snapshot.request_read().await?;
     verify_files_and_deletions(&file_paths, position_deletes, deletion_vectors, &[1, 3, 4]);
     Ok(())
 }
@@ -85,7 +85,7 @@ async fn test_deletion_before_flush(#[case] identity: IdentityProp) -> Result<()
     snapshot(&mut table).await;
 
     let snapshot = table.snapshot.read().await;
-    let ReadOutput { file_paths, .. } = snapshot.request_read()?;
+    let ReadOutput { file_paths, .. } = snapshot.request_read().await?;
     verify_file_contents(&file_paths[0], &[1, 3], None);
     Ok(())
 }
@@ -107,7 +107,7 @@ async fn test_deletion_after_flush(#[case] identity: IdentityProp) -> Result<()>
         file_paths,
         position_deletes,
         ..
-    } = snapshot.request_read()?;
+    } = snapshot.request_read().await?;
     assert_eq!(file_paths.len(), 1);
     let mut ids = read_ids_from_parquet(&file_paths[0]);
 
@@ -188,7 +188,7 @@ async fn test_full_row_with_duplication_and_identical() -> Result<()> {
             position_deletes,
             deletion_vectors,
             ..
-        } = table_snapshot.request_read()?;
+        } = table_snapshot.request_read().await?;
         verify_files_and_deletions(
             &file_paths,
             position_deletes,
@@ -214,7 +214,7 @@ async fn test_full_row_with_duplication_and_identical() -> Result<()> {
             position_deletes,
             deletion_vectors,
             ..
-        } = table_snapshot.request_read()?;
+        } = table_snapshot.request_read().await?;
         verify_files_and_deletions(
             &file_paths,
             position_deletes,
@@ -235,7 +235,7 @@ async fn test_full_row_with_duplication_and_identical() -> Result<()> {
             position_deletes,
             deletion_vectors,
             ..
-        } = table_snapshot.request_read()?;
+        } = table_snapshot.request_read().await?;
         verify_files_and_deletions(&file_paths, position_deletes, deletion_vectors, &[1, 2, 3]);
     }
 

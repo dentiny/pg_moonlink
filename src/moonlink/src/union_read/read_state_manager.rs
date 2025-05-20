@@ -126,7 +126,7 @@ impl ReadStateManager {
                 current_snapshot_lsn
             };
 
-            let read_output = table_state_snapshot.request_read()?;
+            let read_output = table_state_snapshot.request_read().await?;
 
             self.last_read_lsn.store(effective_lsn, Ordering::Release);
             *last_read_state_guard = Arc::new(ReadState::new(
