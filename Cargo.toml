@@ -12,12 +12,11 @@ arrow-array = "55"
 arrow-schema = "55"
 async-trait = "0.1"
 bincode = "2"
-bitstream-io = "4"
 chrono = { version = "0.4", default-features = false }
 crc32fast = "1"
 futures = { version = "0.3", default-features = false }
 hashbrown = "0.15.3"
-iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "111d0f3da525aad30335e211b5f29edd94c3ccf7", default-features = false, features = [
+iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "e488f45b8e137e1e0ecc0e07fed864fd73985d21", default-features = false, features = [
   "storage-fs",
 ] }
 multimap = { version = "0.10", default-features = false }
