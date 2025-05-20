@@ -13,10 +13,8 @@ use crate::error::{Error, Result};
 use crate::row::{IdentityProp, MoonlinkRow};
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 use futures::executor::block_on;
-use iceberg::table::Table;
 use std::collections::HashMap;
 use std::mem::take;
-use std::net::UdpSocket;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

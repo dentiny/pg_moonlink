@@ -395,14 +395,27 @@ async fn test_iceberg_snapshot_creation() {
     let mut env = TestEnvironment::new(mooncake_table_config).await;
 
     // Append a new row to the mooncake table.
-    env.append_row(1, "John", 30, None).await;
-    env.commit(1).await;
+    env.append_row(
+        /*id=*/ 1, /*name=*/ "John", /*age=*/ 30, /*xact_id=*/ None,
+    )
+    .await;
+    env.commit(/*lsn=*/ 1).await;
 
     // Attempt an iceberg snapshot.
     env.initiate_snapshot().await;
     env.sync_snapshot_completion().await;
 
-    // Perform a delete
+    // Perform a delete operation.
+    env.delete_row(
+        /*id=*/ 1, /*name=*/ "John", /*age=*/ 30, /*lsn=*/ 100,
+        /*xact_id=*/ None,
+    )
+    .await;
+    env.commit(/*lsn=*/ 200).await;
 
-    // Load iceberg snapshot and make sure
+    // Attempt an iceberg snapshot.
+    env.initiate_snapshot().await;
+    env.sync_snapshot_completion().await;
+
+    // Load from iceberg snapshot manager and make sure both data file and deletion vector.
 }

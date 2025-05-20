@@ -89,7 +89,8 @@ impl TestEnvironment {
             table_commit_rx,
         ));
 
-        let handler = TableHandler::new(mooncake_table, &mut IcebergSnapshotStateManager::new());
+        let mut iceberg_snapshot_manager = IcebergSnapshotStateManager::new();
+        let handler = TableHandler::new(mooncake_table, &mut iceberg_snapshot_manager);
         let event_sender = handler.get_event_sender();
 
         Self {
@@ -98,7 +99,7 @@ impl TestEnvironment {
             read_state_manager,
             replication_tx,
             table_commit_tx,
-            iceberg_snapshot_manager: IcebergSnapshotStateManager::new(),
+            iceberg_snapshot_manager,
             _temp_dir: temp_dir,
         }
     }
