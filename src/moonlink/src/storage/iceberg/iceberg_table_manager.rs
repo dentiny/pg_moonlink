@@ -239,7 +239,7 @@ impl IcebergTableManager {
 
         let data_file = entry.data_file();
         let referenced_path_buf: PathBuf = data_file.referenced_data_file().unwrap().into();
-        let data_file_entry = self.persisted_data_files.get_mut(&referenced_path_buf);
+        let mut data_file_entry = self.persisted_data_files.get_mut(&referenced_path_buf);
         assert!(
             data_file_entry.is_some(),
             "At recovery, the data file path for {:?} doesn't exist",
@@ -250,7 +250,12 @@ impl IcebergTableManager {
         let deletion_vector = DeletionVector::load_from_dv_blob(file_io.clone(), data_file).await?;
         let batch_deletion_vector = deletion_vector
             .take_as_batch_delete_vector(self.mooncake_table_metadata.config.batch_size());
-        data_file_entry.unwrap().deletion_vector = batch_deletion_vector;
+        data_file_entry.as_mut().unwrap().deletion_vector = batch_deletion_vector;
+        data_file_entry.as_mut().unwrap().persisted_deletion_vector = Some(PuffinBlobRef {
+            puffin_filepath: data_file.file_path().to_string(),
+            start_offset: data_file.content_offset().unwrap() as u32,
+            blob_size: data_file.content_size_in_bytes().unwrap() as u32,
+        });
 
         Ok(())
     }
@@ -278,7 +283,7 @@ impl IcebergTableManager {
             mooncake_snapshot.disk_files.insert(
                 data_filepath.clone(),
                 DiskFileDeletionVector {
-                    puffin_deletion_blob: None,
+                    puffin_deletion_blob: data_file_entry.persisted_deletion_vector.clone(),
                     batch_deletion_vector: data_file_entry.deletion_vector.clone(),
                 },
             );
