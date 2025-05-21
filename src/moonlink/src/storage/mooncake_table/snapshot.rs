@@ -163,14 +163,14 @@ impl SnapshotTableState {
             self.last_commit = cp;
         }
 
+        // Periodically, we check whether we could merge small file indices.
+
         // Till this point, committed changes have been reflected to current snapshot; sync the latest change to iceberg.
         // Sync the latest change to iceberg, only triggered when there're new data files generated.
         // To reduce iceberg persistence overhead, we only snapshot when (1) there're persisted data files, or (2) accumulated unflushed deletion vector exceeds threshold.
         // To achieve consistency between data files and deletion vectors, we only consider those with persisted data files.
         //
         // TODO(hjiang): Error handling for snapshot sync-up.
-        //
-        // TODO(hjiang): Add unit test where there're no new disk files.
         let flush_by_data_files = new_data_files.len()
             >= self
                 .mooncake_table_config

@@ -1,5 +1,6 @@
 use crate::storage::index::file_index_id::get_next_file_index_id;
 use crate::storage::storage_utils::{FileId, RecordLocation};
+use arrow_array::builder;
 use futures::executor::block_on;
 use memmap2::Mmap;
 use std::collections::BinaryHeap;
@@ -16,6 +17,7 @@ use tokio_bitstream_io::{
     BigEndian as AsyncBigEndian, BitRead as AsyncBitRead, BitReader as AsyncBitReader,
     BitWrite as AsyncBitWrite, BitWriter as AsyncBitWriter,
 };
+use typed_builder::TypedBuilder;
 
 // Constants
 const HASH_BITS: u32 = 64;
@@ -30,6 +32,27 @@ fn splitmix64(mut x: u64) -> u64 {
     z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
     z ^ (z >> 31)
 }
+
+/// Configurations for merging file indices.
+#[derive(TypedBuilder)]
+pub struct FileIndexMergeConfig {
+    /// Number of existing unmerged index blocks to trigger a merge operation.
+    #[cfg(debug_assertions)]
+    #[builder(default = 10)]
+    pub file_indices_to_merge: u32,
+    /// Number of bytes for a block index to consider it finalized and won't be merged again.
+    #[cfg(debug_assertions)]
+    #[builder(default = 256)]
+    pub index_block_final_size: u32,
+
+    #[cfg(not(debug_assertions))]
+    #[builder(default = 50)]
+    pub file_indices_to_merge: u32,
+    #[cfg(not(debug_assertions))]
+    #[builder(default = 2 * 1024 * 1024)]
+    pub index_block_final_size: u32,
+}
+
 /// Hash index
 /// that maps a u64 to [seg_idx, row_idx]
 ///
@@ -43,7 +66,7 @@ pub struct GlobalIndex {
     /// A unique id to identify each global index.
     pub(crate) global_index_id: u32,
 
-    pub(crate) files: Vec<Arc<PathBuf>>,
+    pub(crate) files: Vec<Arc<PathBuf>>, // data files
     pub(crate) num_rows: u32,
     pub(crate) hash_bits: u32,
     pub(crate) hash_upper_bits: u32,
