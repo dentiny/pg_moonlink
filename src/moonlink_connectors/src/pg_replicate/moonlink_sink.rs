@@ -1,10 +1,10 @@
+use crate::pg_replicate::util::postgres_schema_to_moonlink_schema;
+use crate::pg_replicate::util::PostgresTableRow;
 use crate::pg_replicate::{
     conversions::{cdc_event::CdcEvent, table_row::TableRow},
     replication_state::ReplicationState,
     table::{TableId, TableSchema},
 };
-use crate::postgres::util::postgres_schema_to_moonlink_schema;
-use crate::postgres::util::PostgresTableRow;
 use moonlink::IcebergSnapshotStateManager;
 use moonlink::IcebergTableConfig;
 use moonlink::ReadStateManager;

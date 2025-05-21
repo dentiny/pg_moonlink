@@ -2,6 +2,8 @@
 
 pub mod clients;
 pub mod conversions;
+pub mod moonlink_sink;
+pub mod postgres_source;
 pub mod replication_state;
-pub mod source;
 pub mod table;
+pub mod util;
