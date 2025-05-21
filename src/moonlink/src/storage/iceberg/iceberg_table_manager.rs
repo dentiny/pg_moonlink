@@ -155,7 +155,7 @@ impl IcebergTableManager {
             .generate_location(&format!("{}-hash-index-v1-puffin.bin", Uuid::new_v4()))
     }
 
-    /// Get or create an iceberg table, and load full table status into table manager.
+    /// Get or create an iceberg table based on the iceberg manager config.
     async fn initialize_iceberg_table(&mut self) -> IcebergResult<()> {
         if self.iceberg_table.is_none() {
             let table = utils::get_iceberg_table(

@@ -81,7 +81,6 @@ impl SnapshotTableState {
 
         let mut iceberg_table_manager =
             IcebergTableManager::new(metadata.clone(), iceberg_table_config);
-        // TODO(hjiang): Enable recovery logic in pg_mooncake v0.2.0
         let snapshot = iceberg_table_manager
             .load_snapshot_from_table()
             .await
