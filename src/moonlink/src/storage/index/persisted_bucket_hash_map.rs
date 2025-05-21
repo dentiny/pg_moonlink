@@ -83,6 +83,8 @@ pub(crate) struct IndexBlock {
     pub(crate) bucket_end_idx: u32,
     pub(crate) bucket_start_offset: u64,
     pub(crate) file_path: String,
+    /// File size for the index block file, used to decide whether to continue merge index blocks.
+    pub(crate) file_size: u64,
     data: Option<Mmap>,
 }
 
@@ -94,12 +96,14 @@ impl IndexBlock {
         file_path: String,
     ) -> Self {
         let file = tokio::fs::File::open(file_path.clone()).await.unwrap();
+        let file_metadata = file.metadata().await.unwrap();
         let data = unsafe { Mmap::map(&file).unwrap() };
         Self {
             bucket_start_idx,
             bucket_end_idx,
             bucket_start_offset,
             file_path,
+            file_size: file_metadata.len(),
             data: Some(data),
         }
     }
