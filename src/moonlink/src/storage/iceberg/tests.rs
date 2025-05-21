@@ -800,6 +800,55 @@ async fn test_object_storage_sync_snapshots() -> IcebergResult<()> {
     mooncake_table_snapshot_persist_impl(warehouse_uri).await
 }
 
+#[tokio::test]
+async fn test_drop_table_at_creation() -> IcebergResult<()> {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = temp_dir.path().to_str().unwrap().to_string();
+
+    let mooncake_table_metadata =
+        create_test_table_metadata(temp_dir.path().to_str().unwrap().to_string());
+    let iceberg_table_config = IcebergTableConfig {
+        warehouse_uri: path.clone(),
+        namespace: vec!["namespace".to_string()],
+        table_name: "test_table".to_string(),
+        drop_table_if_exists: false,
+    };
+
+    // Create iceberg snapshot whenever `create_snapshot` is called.
+    let mut mooncake_table_config = MooncakeTableConfig::new();
+    mooncake_table_config.iceberg_snapshot_new_data_file_count = 0;
+    let mut table = MooncakeTable::new(
+        create_test_arrow_schema().as_ref().clone(),
+        "test_table".to_string(),
+        /*version=*/ 1,
+        PathBuf::from(&path),
+        mooncake_table_metadata.identity.clone(),
+        iceberg_table_config.clone(),
+        mooncake_table_config,
+    )
+    .await;
+    let row = MoonlinkRow::new(vec![
+        RowValue::Int32(1),
+        RowValue::ByteArray("John".as_bytes().to_vec()),
+        RowValue::Int32(30),
+    ]);
+    table.append(row.clone()).unwrap();
+    table.commit(/*lsn=*/ 100);
+    table.flush(/*lsn=*/ 200).await.unwrap();
+
+    // Create a new iceberg table manager, recovery gets a fresh state.
+    let mut iceberg_table_manager = IcebergTableManager::new(
+        mooncake_table_metadata.clone(),
+        iceberg_table_config.clone(),
+    );
+    let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
+    assert!(snapshot.disk_files.is_empty());
+    assert!(snapshot.indices.file_indices.is_empty());
+    assert!(snapshot.data_file_flush_lsn.is_none());
+
+    Ok(())
+}
+
 // --------- state-based unit tests ---------
 // Possible states for data records:
 // (1) Uncommitted in-memory record batches
