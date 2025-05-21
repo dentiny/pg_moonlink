@@ -7,6 +7,7 @@ use crate::storage::iceberg::iceberg_table_manager::*;
 use crate::storage::iceberg::puffin_utils;
 #[cfg(feature = "storage-s3")]
 use crate::storage::iceberg::s3_test_utils;
+use crate::storage::index::Index;
 use crate::storage::index::MooncakeIndex;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 use crate::storage::mooncake_table::Snapshot;
@@ -14,6 +15,8 @@ use crate::storage::mooncake_table::{
     DiskFileDeletionVector, TableConfig as MooncakeTableConfig,
     TableMetadata as MooncakeTableMetadata,
 };
+use crate::storage::storage_utils::RawDeletionRecord;
+use crate::storage::storage_utils::RecordLocation;
 use crate::storage::MooncakeTable;
 
 use std::collections::HashMap;
@@ -349,7 +352,53 @@ async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {
     Ok(())
 }
 
-// TODO(hjiang): Figure out a way to check file index content; for example, search for an item.
+/// Test util function to check the given row doesn't exist in the snapshot indices.
+async fn check_row_index_nonexistent(snapshot: &Snapshot, row: &MoonlinkRow) {
+    let key = snapshot.metadata.identity.get_lookup_key(row);
+    let locs = snapshot
+        .indices
+        .find_record(&RawDeletionRecord {
+            lookup_key: key,
+            row_identity: snapshot.metadata.identity.extract_identity_for_key(row),
+            pos: None,
+            lsn: 0, // LSN has nothing to do with deletion record search
+        })
+        .await;
+    assert!(
+        locs.is_empty(),
+        "Deletion record {:?} exists for row {:?}",
+        locs,
+        row
+    );
+}
+
+/// Test util function to check the given row exists in snapshot, and it's on-disk.
+async fn check_row_index_on_disk(snapshot: &Snapshot, row: &MoonlinkRow) {
+    let key = snapshot.metadata.identity.get_lookup_key(row);
+    let locs = snapshot
+        .indices
+        .find_record(&RawDeletionRecord {
+            lookup_key: key,
+            row_identity: snapshot.metadata.identity.extract_identity_for_key(row),
+            pos: None,
+            lsn: 0, // LSN has nothing to do with deletion record search
+        })
+        .await;
+    assert_eq!(
+        locs.len(),
+        1,
+        "Actual location for row {:?} is {:?}",
+        row,
+        locs
+    );
+    assert!(
+        matches!(locs[0], RecordLocation::DiskFile(_, _)),
+        "Actual location for row {:?} is {:?}",
+        row,
+        locs
+    );
+}
+
 async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergResult<()> {
     let temp_dir = tempfile::tempdir().unwrap();
     let path = temp_dir.path().to_path_buf();
@@ -371,7 +420,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         "test_table".to_string(),
         /*version=*/ 1,
         path,
-        identity_property,
+        identity_property.clone(),
         iceberg_table_config.clone(),
         mooncake_table_config,
     )
@@ -424,7 +473,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
             ),
         )
     })?;
-    // First deletion of row2, which happens in MemSlice.
+    // First deletion of row1, which happens in MemSlice.
     table.delete(row1.clone(), /*flush_lsn=*/ 100).await;
     table.flush(/*flush_lsn=*/ 200).await.map_err(|e| {
         IcebergError::new(
@@ -458,6 +507,9 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         "Snapshot data files and file indices are {:?}",
         get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
     );
+    check_row_index_nonexistent(&snapshot, &row1).await;
+    check_row_index_on_disk(&snapshot, &row2).await;
+    check_row_index_on_disk(&snapshot, &row3).await;
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 200);
     check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
@@ -530,6 +582,11 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         "Snapshot data files and file indices are {:?}",
         get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
     );
+    // row1 is deleted in-memory, so file index doesn't track it
+    check_row_index_nonexistent(&snapshot, &row1).await;
+    // row2 is deleted, but still exist in data file
+    check_row_index_on_disk(&snapshot, &row2).await;
+    check_row_index_on_disk(&snapshot, &row3).await;
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 300);
     check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
@@ -591,6 +648,10 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         "Snapshot data files and file indices are {:?}",
         get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
     );
+    check_row_index_nonexistent(&snapshot, &row1).await;
+    // row2 and row3 are deleted, but still exist in data file
+    check_row_index_on_disk(&snapshot, &row2).await;
+    check_row_index_on_disk(&snapshot, &row3).await;
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 400);
     check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
@@ -670,6 +731,10 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         "Snapshot data files and file indices are {:?}",
         get_file_indices_filepath_and_data_filepaths(&snapshot.indices)
     );
+    check_row_index_nonexistent(&snapshot, &row1).await;
+    check_row_index_on_disk(&snapshot, &row2).await;
+    check_row_index_on_disk(&snapshot, &row3).await;
+    check_row_index_on_disk(&snapshot, &row4).await;
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 500);
 
     // The old data file and deletion vector is unchanged.
