@@ -115,7 +115,6 @@ impl FileIndex {
 
 /// In-memory structure for one file index blob in the puffin file, which contains multiple `FileIndex` structs.
 #[derive(Deserialize, Serialize)]
-#[allow(dead_code)]
 pub(crate) struct FileIndexBlob {
     /// A blob contains multiple file indexes.
     pub(crate) file_indices: Vec<FileIndex>,
