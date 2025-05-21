@@ -66,7 +66,7 @@ async fn test_delete_and_append(#[case] identity: IdentityProp) -> Result<()> {
         deletion_vectors,
         ..
     } = snapshot.request_read().await?;
-    verify_files_and_deletions(&file_paths, position_deletes, deletion_vectors, &[1, 3, 4]);
+    verify_files_and_deletions(&file_paths, position_deletes, deletion_vectors, &[1, 3, 4]).await;
     Ok(())
 }
 
@@ -194,7 +194,8 @@ async fn test_full_row_with_duplication_and_identical() -> Result<()> {
             position_deletes,
             deletion_vectors,
             &[1, 2, 2, 3, 3],
-        );
+        )
+        .await;
     }
 
     // Flush the table
@@ -220,7 +221,8 @@ async fn test_full_row_with_duplication_and_identical() -> Result<()> {
             position_deletes,
             deletion_vectors,
             &[1, 2, 3, 3],
-        );
+        )
+        .await;
     }
 
     // Delete one duplicate after flush (row5)
@@ -236,7 +238,8 @@ async fn test_full_row_with_duplication_and_identical() -> Result<()> {
             deletion_vectors,
             ..
         } = table_snapshot.request_read().await?;
-        verify_files_and_deletions(&file_paths, position_deletes, deletion_vectors, &[1, 2, 3]);
+        verify_files_and_deletions(&file_paths, position_deletes, deletion_vectors, &[1, 2, 3])
+            .await;
     }
 
     Ok(())

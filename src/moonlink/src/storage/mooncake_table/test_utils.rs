@@ -6,7 +6,6 @@ use crate::storage::iceberg::puffin_utils;
 use crate::storage::mooncake_table::snapshot::PuffinDeletionBlobAtRead;
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field};
-use futures::executor::block_on;
 use futures::future::join_all;
 use iceberg::io::FileIOBuilder;
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
@@ -177,7 +176,7 @@ fn verify_files_and_deletions_impl(
     assert_eq!(res, expected_ids);
 }
 
-pub fn verify_files_and_deletions(
+pub async fn verify_files_and_deletions(
     files: &[String],
     position_deletes: Vec<(u32, u32)>,
     deletion_vectors: Vec<PuffinDeletionBlobAtRead>,
@@ -193,7 +192,7 @@ pub fn verify_files_and_deletions(
         load_blob_futures.push(get_blob_future);
     }
 
-    let load_blob_results = block_on(join_all(load_blob_futures));
+    let load_blob_results = join_all(load_blob_futures).await;
     for (idx, cur_load_blob_res) in load_blob_results.into_iter().enumerate() {
         let blob = cur_load_blob_res.unwrap();
         let dv = DeletionVector::deserialize(blob).unwrap();

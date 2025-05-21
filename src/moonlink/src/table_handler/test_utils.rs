@@ -252,5 +252,5 @@ pub async fn check_read_snapshot(
             target_lsn, expected_ids
         );
     }
-    verify_files_and_deletions(&files, position_deletes, deletion_vectors, expected_ids);
+    verify_files_and_deletions(&files, position_deletes, deletion_vectors, expected_ids).await;
 }
