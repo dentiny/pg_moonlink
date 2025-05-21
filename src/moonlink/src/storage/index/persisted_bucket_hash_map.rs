@@ -34,7 +34,7 @@ fn splitmix64(mut x: u64) -> u64 {
 }
 
 /// Configurations for merging file indices.
-#[derive(TypedBuilder)]
+#[derive(Clone, Default, Debug, TypedBuilder)]
 pub struct FileIndexMergeConfig {
     /// Number of existing unmerged index blocks to trigger a merge operation.
     #[cfg(debug_assertions)]
@@ -43,14 +43,14 @@ pub struct FileIndexMergeConfig {
     /// Number of bytes for a block index to consider it finalized and won't be merged again.
     #[cfg(debug_assertions)]
     #[builder(default = 256)]
-    pub index_block_final_size: u32,
+    pub index_block_final_size: u64,
 
     #[cfg(not(debug_assertions))]
     #[builder(default = 50)]
     pub file_indices_to_merge: u32,
     #[cfg(not(debug_assertions))]
     #[builder(default = 2 * 1024 * 1024)]
-    pub index_block_final_size: u32,
+    pub index_block_final_size: u64,
 }
 
 /// Hash index

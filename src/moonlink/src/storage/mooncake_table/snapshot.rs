@@ -5,14 +5,17 @@ use crate::error::Result;
 use crate::storage::iceberg::iceberg_table_manager::{
     IcebergOperation, IcebergTableConfig, IcebergTableManager,
 };
+use crate::storage::index::persisted_bucket_hash_map::{GlobalIndex, GlobalIndexBuilder};
 use crate::storage::index::Index;
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 use crate::storage::mooncake_table::MoonlinkRow;
 use crate::storage::storage_utils::{ProcessedDeletionRecord, RawDeletionRecord, RecordLocation};
+use futures::SinkExt;
 use parquet::arrow::AsyncArrowWriter;
 use std::collections::{BTreeMap, HashMap};
 use std::mem::take;
 use std::path::PathBuf;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 pub(crate) struct SnapshotTableState {
@@ -145,6 +148,50 @@ impl SnapshotTableState {
         aggregated_deletion_logs
     }
 
+    /// Attempt to merge multiple file indices into one, and update at current snapshot.
+    /// Return index id for those being merged, and newly merged.
+    async fn merge_file_indices(&mut self) -> (HashSet<u32> /*index block files being merged*/, HashSet<u32> /*newly merged index block files*/) {
+        let mut old_merged_index_blocks = HashSet::new();
+        let mut new_merged_index_blocks = HashSet::new();
+
+        let mut index_files_to_merge = vec![];
+        let mut index_files_to_keep = vec![];
+        // Currently we always have one index block within one file index.
+        let cur_file_indices = std::mem::take(&mut self.current_snapshot.indices.file_indices);
+        for cur_file_index in cur_file_indices {
+            let index_block_size: u64 = cur_file_index.index_blocks.iter().map(|cur_index_block| cur_index_block.file_size).sum();
+            if index_block_size >= self.mooncake_table_config.file_index_config.index_block_final_size {
+                index_files_to_keep.push(cur_file_index);
+                continue;
+            }
+            old_merged_index_blocks.insert(cur_file_index.global_index_id);
+            index_files_to_merge.push(cur_file_index);
+        }
+
+        // No need to merge, if there're not enough small index files to manage.
+        if index_files_to_merge.len() < self.mooncake_table_config.file_index_config.file_indices_to_merge as usize {
+            old_merged_index_blocks.clear();
+            self.current_snapshot.indices.file_indices.extend(index_files_to_keep);
+            self.current_snapshot.indices.file_indices.extend(index_files_to_merge);
+            return (old_merged_index_blocks, new_merged_index_blocks);
+        }
+
+        // Perform index merge operation if we've accumuated a number of small index files.
+        //
+        // TODO(hjiang): Take the easiest implementation to merge all given index files for now, switch to finer granularity merge in the future.
+        // For example, have a target size for merged index files, parallel merge operations, etc.
+        let builder = GlobalIndexBuilder::new();
+        let merged = builder._build_from_merge(index_files_to_merge).await;
+        new_merged_index_blocks.insert(merged.global_index_id);
+
+        // Update current snapshot.
+        // TODO(hjiang): Likely could optimize by storing a map from <index-id, FileIndex>.
+        self.current_snapshot.indices.file_indices.retain(|cur_file_index| old_merged_index_blocks.contains(&cur_file_index.global_index_id));
+        self.current_snapshot.indices.file_indices.push(merged);
+
+        (old_merged_index_blocks, new_merged_index_blocks)
+    }
+
     pub(super) async fn update_snapshot(&mut self, mut task: SnapshotTask) -> u64 {
         // To reduce iceberg write frequency, only create new iceberg snapshot when there're new data files.
         let new_data_files = task.get_new_data_files();
@@ -163,7 +210,9 @@ impl SnapshotTableState {
             self.last_commit = cp;
         }
 
+        // Till this point, all file indices have been tracked by current snapshot.
         // Periodically, we check whether we could merge small file indices.
+        let (_old_merged_index_blocks, _new_merged_index_blocks) = self.merge_file_indices().await;
 
         // Till this point, committed changes have been reflected to current snapshot; sync the latest change to iceberg.
         // Sync the latest change to iceberg, only triggered when there're new data files generated.
@@ -179,8 +228,9 @@ impl SnapshotTableState {
             > self
                 .mooncake_table_config
                 .iceberg_snapshot_new_committed_deletion_log();
+        let flush_by_merged_file_indices = !_new_merged_index_blocks.is_empty();
         if self.current_snapshot.data_file_flush_lsn.is_some()
-            && (flush_by_data_files || flush_by_deletion_logs)
+            && (flush_by_data_files || flush_by_deletion_logs || flush_by_merged_file_indices)
         {
             let flush_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
             let aggregated_committed_deletion_logs =

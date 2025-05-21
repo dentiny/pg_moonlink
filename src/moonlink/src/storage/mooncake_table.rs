@@ -12,6 +12,7 @@ use super::storage_utils::{RawDeletionRecord, RecordLocation};
 use crate::error::{Error, Result};
 use crate::row::{IdentityProp, MoonlinkRow};
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
+use crate::storage::index::persisted_bucket_hash_map::FileIndexMergeConfig;
 use futures::executor::block_on;
 use std::collections::HashMap;
 use std::mem::take;
@@ -39,6 +40,8 @@ pub struct TableConfig {
     pub iceberg_snapshot_new_data_file_count: usize,
     /// Number of unpersisted committed delete logs to trigger an iceberg snapshot.
     pub iceberg_snapshot_new_committed_deletion_log: usize,
+    /// Config for file index.
+    pub file_index_config: FileIndexMergeConfig,
 }
 
 impl Default for TableConfig {
@@ -78,6 +81,7 @@ impl TableConfig {
             iceberg_snapshot_new_data_file_count: Self::DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT,
             iceberg_snapshot_new_committed_deletion_log:
                 Self::DEFAULT_ICEBERG_SNAPSHOT_NEW_COMMITTED_DELETION_LOG,
+            file_index_config: FileIndexMergeConfig::default(),
         }
     }
     pub fn batch_size(&self) -> usize {
