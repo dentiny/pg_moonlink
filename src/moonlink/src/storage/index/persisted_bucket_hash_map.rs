@@ -305,6 +305,29 @@ impl GlobalIndexBuilder {
         self
     }
 
+    // Util function to build global index.
+    fn create_global_index(&mut self) -> (u32, GlobalIndex) {
+        let num_rows = self.num_rows;
+        let bucket_bits = 32 - num_rows.leading_zeros();
+        let num_buckets = (num_rows / 4 + 2).next_power_of_two();
+        let upper_bits = num_buckets.trailing_zeros();
+        let lower_bits = 64 - upper_bits;
+        let seg_id_bits = 32 - (self.files.len() as u32).trailing_zeros();
+        let global_index = GlobalIndex {
+            global_index_id: get_next_file_index_id(),
+            files: std::mem::take(&mut self.files),
+            num_rows,
+            hash_bits: HASH_BITS,
+            hash_upper_bits: upper_bits,
+            hash_lower_bits: lower_bits,
+            seg_id_bits,
+            row_id_bits: 32,
+            bucket_bits,
+            index_blocks: vec![],
+        };
+        (num_buckets, global_index)
+    }
+
     // ================================
     // Build from flush
     // ================================
@@ -317,25 +340,8 @@ impl GlobalIndexBuilder {
         self.build(entries.into_iter()).await
     }
 
-    async fn build(self, iter: impl Iterator<Item = (u64, usize, usize)>) -> GlobalIndex {
-        let num_rows = self.num_rows;
-        let bucket_bits = 32 - num_rows.leading_zeros();
-        let num_buckets = (num_rows / 4 + 2).next_power_of_two();
-        let upper_bits = num_buckets.trailing_zeros();
-        let lower_bits = 64 - upper_bits;
-        let seg_id_bits = 32 - (self.files.len() as u32).trailing_zeros();
-        let mut global_index = GlobalIndex {
-            global_index_id: get_next_file_index_id(),
-            files: self.files,
-            num_rows,
-            hash_bits: HASH_BITS,
-            hash_upper_bits: upper_bits,
-            hash_lower_bits: lower_bits,
-            seg_id_bits,
-            row_id_bits: 32,
-            bucket_bits,
-            index_blocks: vec![],
-        };
+    async fn build(mut self, iter: impl Iterator<Item = (u64, usize, usize)>) -> GlobalIndex {
+        let (num_buckets, mut global_index) = self.create_global_index();
         let mut index_blocks = Vec::new();
         let mut index_block_builder =
             IndexBlockBuilder::new(0, num_buckets + 1, self.directory.clone());
@@ -377,27 +383,10 @@ impl GlobalIndexBuilder {
     }
 
     async fn _build_from_merging_iterator(
-        self,
+        mut self,
         mut iter: GlobalIndexMergingIterator<'_>,
     ) -> GlobalIndex {
-        let num_rows = self.num_rows;
-        let bucket_bits = 32 - num_rows.leading_zeros();
-        let num_buckets = (num_rows / 4 + 2).next_power_of_two();
-        let upper_bits = num_buckets.trailing_zeros();
-        let lower_bits = 64 - upper_bits;
-        let seg_id_bits = 32 - (self.files.len() as u32).trailing_zeros();
-        let mut global_index = GlobalIndex {
-            global_index_id: get_next_file_index_id(),
-            files: self.files,
-            num_rows,
-            hash_bits: HASH_BITS,
-            hash_upper_bits: upper_bits,
-            hash_lower_bits: lower_bits,
-            seg_id_bits,
-            row_id_bits: 32,
-            bucket_bits,
-            index_blocks: vec![],
-        };
+        let (num_buckets, mut global_index) = self.create_global_index();
         let mut index_blocks = Vec::new();
         let mut index_block_builder =
             IndexBlockBuilder::new(0, num_buckets + 1, self.directory.clone());
