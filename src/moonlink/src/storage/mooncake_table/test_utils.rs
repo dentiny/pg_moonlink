@@ -70,6 +70,7 @@ pub async fn test_table(
         warehouse_uri: context.path().to_str().unwrap().to_string(),
         namespace: vec!["default".to_string()],
         table_name: table_name.to_string(),
+        drop_table_if_exists: false,
     };
     MooncakeTable::new(
         test_schema(),

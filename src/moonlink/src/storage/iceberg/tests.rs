@@ -313,6 +313,7 @@ async fn test_sync_snapshots() -> IcebergResult<()> {
         warehouse_uri: tmp_dir.path().to_str().unwrap().to_string(),
         namespace: vec!["namespace".to_string()],
         table_name: "test_table".to_string(),
+        drop_table_if_exists: false,
     };
     let mut iceberg_table_manager = IcebergTableManager::new(mooncake_table_metadata, config);
     test_store_and_load_snapshot_impl(&mut iceberg_table_manager).await?;
@@ -329,6 +330,7 @@ async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {
         warehouse_uri: tmp_dir.path().to_str().unwrap().to_string(),
         namespace: vec!["namespace".to_string()],
         table_name: "test_table".to_string(),
+        drop_table_if_exists: false,
     };
     let mut iceberg_table_manager =
         IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone());
@@ -410,6 +412,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         warehouse_uri,
         namespace: vec!["namespace".to_string()],
         table_name: "test_table".to_string(),
+        drop_table_if_exists: false,
     };
     let schema = create_test_arrow_schema();
     // Create iceberg snapshot whenever `create_snapshot` is called.
@@ -832,6 +835,7 @@ async fn create_table_and_iceberg_manager(
         warehouse_uri,
         namespace: vec!["namespace".to_string()],
         table_name: "test_table".to_string(),
+        drop_table_if_exists: false,
     };
     let schema = create_test_arrow_schema();
 

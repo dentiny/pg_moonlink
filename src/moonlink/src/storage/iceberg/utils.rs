@@ -123,44 +123,77 @@ fn create_iceberg_table_properties() -> HashMap<String, String> {
     props
 }
 
-// Get or create an iceberg table in the given catalog from the given namespace and table name.
-pub(crate) async fn get_or_create_iceberg_table<C: MoonlinkCatalog + ?Sized>(
+/// Create an iceberg table in the given catalog from the given namespace and table name.
+/// Precondition: table doesn't exist in the given catalog.
+async fn create_iceberg_table<C: MoonlinkCatalog + ?Sized>(
+    catalog: &C,
+    warehouse_uri: &str,
+    table_name: &str,
+    namespace_ident: NamespaceIdent,
+    arrow_schema: &ArrowSchema,
+) -> IcebergResult<IcebergTable> {
+    let namespace_already_exists = catalog.namespace_exists(&namespace_ident).await?;
+    if !namespace_already_exists {
+        catalog
+            .create_namespace(&namespace_ident, /*properties=*/ HashMap::new())
+            .await?;
+    }
+
+    let iceberg_schema = IcebergArrow::arrow_schema_to_schema(arrow_schema)?;
+    let tbl_creation = TableCreation::builder()
+        .name(table_name.to_string())
+        .location(format!(
+            "{}/{}/{}",
+            warehouse_uri,
+            namespace_ident.to_url_string(),
+            table_name
+        ))
+        .schema(iceberg_schema)
+        .properties(create_iceberg_table_properties())
+        .build();
+    let table = catalog.create_table(&namespace_ident, tbl_creation).await?;
+    Ok(table)
+}
+
+/// Get or create an iceberg table in the given catalog from the given namespace and table name.
+///
+/// There're several options:
+/// - If the table doesn't exist, create a new one
+/// - If the table already exists, and [drop_if_exists] true (overwrite use case), delete the table and re-create
+/// - If already exists and not requested to drop (recovery use case), do nothing and return the table directly
+pub(crate) async fn get_iceberg_table<C: MoonlinkCatalog + ?Sized>(
     catalog: &C,
     warehouse_uri: &str,
     namespace: &Vec<String>,
     table_name: &str,
     arrow_schema: &ArrowSchema,
+    drop_if_exists: bool,
 ) -> IcebergResult<IcebergTable> {
     let namespace_ident = NamespaceIdent::from_strs(namespace).unwrap();
     let table_ident = TableIdent::new(namespace_ident.clone(), table_name.to_string());
-    match catalog.load_table(&table_ident).await {
-        Ok(table) => Ok(table),
-        // TODO(hjiang): Better error handling.
-        Err(_) => {
-            let namespace_already_exists = catalog.namespace_exists(&namespace_ident).await?;
-            if !namespace_already_exists {
-                catalog
-                    .create_namespace(&namespace_ident, /*properties=*/ HashMap::new())
-                    .await?;
+    let should_create = match catalog.load_table(&table_ident).await {
+        Ok(existing_table) => {
+            if drop_if_exists {
+                catalog.drop_table(&table_ident).await?;
+                true
+            } else {
+                return Ok(existing_table);
             }
-
-            let iceberg_schema = IcebergArrow::arrow_schema_to_schema(arrow_schema)?;
-            let tbl_creation = TableCreation::builder()
-                .name(table_name.to_string())
-                .location(format!(
-                    "{}/{}/{}",
-                    warehouse_uri,
-                    namespace_ident.to_url_string(),
-                    table_name
-                ))
-                .schema(iceberg_schema)
-                .properties(create_iceberg_table_properties())
-                .build();
-            let table = catalog
-                .create_table(&table_ident.namespace, tbl_creation)
-                .await?;
-            Ok(table)
         }
+        Err(_) => true,
+    };
+
+    if should_create {
+        create_iceberg_table(
+            catalog,
+            warehouse_uri,
+            table_name,
+            namespace_ident,
+            arrow_schema,
+        )
+        .await
+    } else {
+        unreachable!()
     }
 }
 

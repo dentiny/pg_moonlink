@@ -48,6 +48,9 @@ pub struct IcebergTableConfig {
     /// Iceberg table name.
     #[builder(default = "table".to_string())]
     pub table_name: String,
+    /// Whether to drop the old table at creation.
+    #[builder(default = false)]
+    pub drop_table_if_exists: bool,
 }
 
 #[cfg_attr(test, automock)]
@@ -153,14 +156,15 @@ impl IcebergTableManager {
     }
 
     /// Get or create an iceberg table, and load full table status into table manager.
-    async fn get_or_create_table(&mut self) -> IcebergResult<()> {
+    async fn initialize_iceberg_table(&mut self) -> IcebergResult<()> {
         if self.iceberg_table.is_none() {
-            let table = utils::get_or_create_iceberg_table(
+            let table = utils::get_iceberg_table(
                 &*self.catalog,
                 &self.config.warehouse_uri,
                 &self.config.namespace,
                 &self.config.table_name,
                 self.mooncake_table_metadata.schema.as_ref(),
+                self.config.drop_table_if_exists,
             )
             .await?;
             self.iceberg_table = Some(table);
@@ -471,7 +475,7 @@ impl IcebergOperation for IcebergTableManager {
         file_indices: &[MooncakeFileIndex],
     ) -> IcebergResult<HashMap<PathBuf, PuffinBlobRef>> {
         // Initialize iceberg table on access.
-        self.get_or_create_table().await?;
+        self.initialize_iceberg_table().await?;
 
         // Persist data files.
         let new_iceberg_data_files = self.sync_data_files(new_disk_files).await?;
@@ -507,7 +511,7 @@ impl IcebergOperation for IcebergTableManager {
     async fn load_snapshot_from_table(&mut self) -> IcebergResult<MooncakeSnapshot> {
         assert!(self.persisted_file_index_ids.is_empty());
 
-        self.get_or_create_table().await?;
+        self.initialize_iceberg_table().await?;
         let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
         let mut flush_lsn: Option<u64> = None;
         if let Some(lsn) = table_metadata.properties().get(MOONCAKE_TABLE_FLUSH_LSN) {
