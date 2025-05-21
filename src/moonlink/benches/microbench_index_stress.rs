@@ -14,7 +14,7 @@ fn bench_index_stress(c: &mut Criterion) {
     let mut builder = GlobalIndexBuilder::new();
     builder
         .set_files(files)
-        .set_directory(tempfile::tempdir().unwrap().into_path());
+        .set_directory(tempfile::tempdir().unwrap().keep());
     let rt = Runtime::new().unwrap();
     let index = rt.block_on(builder.build_from_flush(vec));
 
