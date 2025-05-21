@@ -58,6 +58,8 @@ impl<T: Eq + Hash + Clone> MoonlinkBackend<T> {
         tokio::fs::create_dir_all(base_path).await?;
         let canonicalized_base_path = tokio::fs::canonicalize(base_path).await?;
 
+        println!("create directory = {:?}", canonicalized_base_path);
+
         let mut ingest_source = MoonlinkPostgresSource::new(
             uri.to_owned(),
             canonicalized_base_path.to_str().unwrap().to_string(),

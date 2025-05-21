@@ -125,6 +125,9 @@ impl IcebergTableManager {
         mooncake_table_metadata: Arc<MooncakeTableMetadata>,
         config: IcebergTableConfig,
     ) -> IcebergTableManager {
+
+        println!("iceberg warehouse uri = {:?}", config.warehouse_uri);
+
         let catalog = utils::create_catalog(&config.warehouse_uri).unwrap();
         Self {
             config,
