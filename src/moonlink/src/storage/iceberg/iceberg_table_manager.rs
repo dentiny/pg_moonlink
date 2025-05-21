@@ -403,6 +403,10 @@ impl IcebergTableManager {
         Ok(puffin_deletion_blobs)
     }
 
+    // TODO(hjiang): Figure out the diff part to delete from iceberg table, and new index files to append.
+    /// Util function to sort out file indices to remove (i.e. because of merge), and new file indices to sync to iceberg.
+    // fn get_changed_file_indices(&self, file_indices: &[MooncakeFileIndex]) -> 
+
     /// Dump file indexes into the iceberg table, only new file indexes will be persisted into the table.
     /// Return file index ids which should be added into iceberg table.
     ///
