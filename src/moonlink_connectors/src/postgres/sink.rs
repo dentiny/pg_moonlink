@@ -70,7 +70,7 @@ impl Sink {
             tokio::fs::create_dir_all(&table_path).await.unwrap();
             let (arrow_schema, identity) = postgres_schema_to_moonlink_schema(&table_schema);
             let iceberg_table_config = IcebergTableConfig {
-                warehouse_uri: table_path.to_str().unwrap().to_string(),
+                warehouse_uri: self.base_path.to_str().unwrap().to_string(),
                 namespace: vec!["default".to_string()],
                 table_name: table_schema.table_name.to_string(),
             };
