@@ -76,6 +76,8 @@ impl SnapshotTableState {
         metadata: Arc<TableMetadata>,
         iceberg_table_config: IcebergTableConfig,
     ) -> Self {
+        println!("create snapshot table state");
+
         let mut batches = BTreeMap::new();
         batches.insert(0, InMemoryBatch::new(metadata.config.batch_size));
 
@@ -85,6 +87,9 @@ impl SnapshotTableState {
             .load_snapshot_from_table()
             .await
             .unwrap();
+
+        assert!(snapshot.disk_files.is_empty());
+        println!("after load snapshot from iceberg");
 
         Self {
             mooncake_table_config: metadata.config.clone(),
