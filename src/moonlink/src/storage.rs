@@ -8,7 +8,7 @@ pub use iceberg::iceberg_table_manager::{
     IcebergOperation, IcebergTableConfig, IcebergTableManager,
 };
 pub use mooncake_table::{MooncakeTable, TableConfig};
-pub(crate) use mooncake_table::{PuffinDeletionBlobAtRead, SnapshotTableState};
+pub(crate) use mooncake_table::{PuffinDeletionBlobAtRead, SnapshotTableState, IcebergSnapshotPayload};
 
 #[cfg(test)]
 pub(crate) use mooncake_table::test_utils::*;

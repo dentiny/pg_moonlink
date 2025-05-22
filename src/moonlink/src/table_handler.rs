@@ -1,6 +1,7 @@
 use crate::row::MoonlinkRow;
 use crate::storage::IcebergSnapshotStateManager;
 use crate::storage::MooncakeTable;
+use crate::storage::mooncake_table::IcebergSnapshotPayload;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
@@ -86,13 +87,13 @@ impl TableHandler {
         mut event_receiver: Receiver<TableEvent>,
         mut table: MooncakeTable,
     ) {
-        let mut snapshot_handle: Option<JoinHandle<u64>> = None;
+        let mut snapshot_handle: Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> = None;
         let mut periodic_snapshot_interval = time::interval(Duration::from_millis(500));
         let mut has_outstanding_iceberg_snapshot_request = false;
 
         // Variables related to icebern snapshot operation.
-        // let (iceberg_snapshot_tx, iceberg_snapshot_rx) = mpsc::channel(1);
-
+        let (iceberg_snapshot_tx, iceberg_snapshot_rx) = mpsc::channel(1);
+        
 
         // Process events until the receiver is closed or a Shutdown event is received
         loop {
@@ -157,7 +158,7 @@ impl TableHandler {
                         }
                     }
                 }
-                // wait for snapshot requests.
+                // wait for force snapshot requests.
                 Some(()) = iceberg_snapshot_initiation_receiver.recv() => {
                     assert!(!has_outstanding_iceberg_snapshot_request, "There should be at most one outstanding iceberg snapshot request for one table!");
                     // Only create a snapshot if there isn't already one in progress
@@ -172,8 +173,15 @@ impl TableHandler {
                 Some(()) = async {
                     if let Some(handle) = &mut snapshot_handle {
                         match handle.await {
-                            Ok(lsn) => {
+                            Ok((lsn, iceberg_snapshot_payload)) => {
+                                // Notify read the mooncake table commit of LSN.
                                 table.notify_snapshot_reader(lsn);
+
+                                // Process iceberg snapshot.
+                                if let Some(iceberg_snapshot_payload) = iceberg_snapshot_payload {
+                                    table.persist_iceberg_snapshot(iceberg_snapshot_payload).await;
+                                }
+
                                 if has_outstanding_iceberg_snapshot_request {
                                     iceberg_snaphot_completion_sender.send(()).await.unwrap();
                                     has_outstanding_iceberg_snapshot_request = false;

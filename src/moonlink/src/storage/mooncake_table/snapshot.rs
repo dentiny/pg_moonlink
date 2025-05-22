@@ -1,6 +1,6 @@
 use super::data_batches::{create_batch_from_rows, InMemoryBatch};
 use super::delete_vector::BatchDeletionVector;
-use super::{DiskFileDeletionVector, Snapshot, SnapshotTask, TableConfig, TableMetadata};
+use super::{DiskFileDeletionVector, IcebergSnapshotPayload, Snapshot, SnapshotTask, TableConfig, TableMetadata};
 use crate::error::Result;
 use crate::storage::iceberg::iceberg_table_manager::{
     IcebergOperation, IcebergTableConfig, IcebergTableManager,
@@ -42,11 +42,6 @@ pub(crate) struct SnapshotTableState {
 
     /// Last commit point
     last_commit: RecordLocation,
-
-    /// Iceberg table manager, used to sync snapshot to the corresponding iceberg table.
-    ///
-    /// TODO(hjiang): Figure out a way to store dynamic trait for mock-based unit test.
-    iceberg_table_manager: IcebergTableManager,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,13 +69,11 @@ pub struct ReadOutput {
 impl SnapshotTableState {
     pub(super) async fn new(
         metadata: Arc<TableMetadata>,
-        iceberg_table_config: IcebergTableConfig,
+        iceberg_table_manager: &mut IcebergTableManager,
     ) -> Self {
         let mut batches = BTreeMap::new();
         batches.insert(0, InMemoryBatch::new(metadata.config.batch_size));
 
-        let mut iceberg_table_manager =
-            IcebergTableManager::new(metadata.clone(), iceberg_table_config);
         let snapshot = iceberg_table_manager
             .load_snapshot_from_table()
             .await
@@ -94,7 +87,6 @@ impl SnapshotTableState {
             last_commit: RecordLocation::MemoryBatch(0, 0),
             committed_deletion_log: Vec::new(),
             uncommitted_deletion_log: Vec::new(),
-            iceberg_table_manager,
         }
     }
 
@@ -140,7 +132,7 @@ impl SnapshotTableState {
         aggregated_deletion_logs
     }
 
-    pub(super) async fn update_snapshot(&mut self, mut task: SnapshotTask) -> u64 {
+    pub(super) async fn update_snapshot(&mut self, mut task: SnapshotTask) -> (u64, Option<IcebergSnapshotPayload>) {
         // To reduce iceberg write frequency, only create new iceberg snapshot when there're new data files.
         let new_data_files = task.get_new_data_files();
 
