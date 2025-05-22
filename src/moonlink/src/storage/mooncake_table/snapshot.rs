@@ -147,7 +147,7 @@ impl SnapshotTableState {
 
     pub(super) async fn update_snapshot(&mut self, mut task: SnapshotTask) -> u64 {
         // To reduce iceberg write frequency, only create new iceberg snapshot when there're new data files.
-        let new_data_files = task.get_new_data_files();
+        // let new_data_files = task.get_new_data_files();
 
         self.merge_mem_indices(&mut task);
         self.finalize_batches(&mut task);
@@ -171,41 +171,41 @@ impl SnapshotTableState {
         // TODO(hjiang): Error handling for snapshot sync-up.
         //
         // TODO(hjiang): Add unit test where there're no new disk files.
-        let flush_by_data_files = new_data_files.len()
-            >= self
-                .mooncake_table_config
-                .iceberg_snapshot_new_data_file_count();
-        let flush_by_deletion_logs = self.committed_deletion_log.len()
-            > self
-                .mooncake_table_config
-                .iceberg_snapshot_new_committed_deletion_log();
-        if self.current_snapshot.data_file_flush_lsn.is_some()
-            && (flush_by_data_files || flush_by_deletion_logs)
-        {
-            let flush_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
-            let aggregated_committed_deletion_logs =
-                self.prune_and_aggregate_ondisk_committed_deletion_logs();
-            let puffin_blob_ref = self
-                .iceberg_table_manager
-                .sync_snapshot(
-                    flush_lsn,
-                    new_data_files,
-                    aggregated_committed_deletion_logs,
-                    self.current_snapshot.get_file_indices(),
-                )
-                .await
-                .unwrap();
+        // let flush_by_data_files = new_data_files.len()
+        //     >= self
+        //         .mooncake_table_config
+        //         .iceberg_snapshot_new_data_file_count();
+        // let flush_by_deletion_logs = self.committed_deletion_log.len()
+        //     > self
+        //         .mooncake_table_config
+        //         .iceberg_snapshot_new_committed_deletion_log();
+        // if self.current_snapshot.data_file_flush_lsn.is_some()
+        //     && (flush_by_data_files || flush_by_deletion_logs)
+        // {
+        //     let flush_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
+        //     let aggregated_committed_deletion_logs =
+        //         self.prune_and_aggregate_ondisk_committed_deletion_logs();
+        //     let puffin_blob_ref = self
+        //         .iceberg_table_manager
+        //         .sync_snapshot(
+        //             flush_lsn,
+        //             new_data_files,
+        //             aggregated_committed_deletion_logs,
+        //             self.current_snapshot.get_file_indices(),
+        //         )
+        //         .await
+        //         .unwrap();
 
-            // Update current snapshot reference.
-            for (local_disk_file, puffin_blob_ref) in puffin_blob_ref.into_iter() {
-                let entry = self
-                    .current_snapshot
-                    .disk_files
-                    .get_mut(&local_disk_file)
-                    .unwrap();
-                entry.puffin_deletion_blob = Some(puffin_blob_ref);
-            }
-        }
+        //     // Update current snapshot reference.
+        //     for (local_disk_file, puffin_blob_ref) in puffin_blob_ref.into_iter() {
+        //         let entry = self
+        //             .current_snapshot
+        //             .disk_files
+        //             .get_mut(&local_disk_file)
+        //             .unwrap();
+        //         entry.puffin_deletion_blob = Some(puffin_blob_ref);
+        //     }
+        // }
 
         self.current_snapshot.snapshot_version
     }
