@@ -396,8 +396,8 @@ async fn test_iceberg_snapshot_creation() {
 
     // ---- Attempt to create snapshot before any rows appended ----
     // Snapshot creation function shouldn't get blocked.
-    // env.initiate_snapshot().await;
-    // env.sync_snapshot_completion().await;
+    env.initiate_snapshot().await;
+    env.sync_snapshot_completion().await;
 
     // ---- Create snapshot after new records appended ----
     // Append a new row to the mooncake table.
