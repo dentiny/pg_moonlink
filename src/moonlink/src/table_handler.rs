@@ -75,7 +75,6 @@ impl TableHandler {
         let mut snapshot_handle: Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> = None;
         let mut periodic_snapshot_interval = time::interval(Duration::from_millis(500));
         let mut has_outstanding_iceberg_snapshot_request = false;
-        let mut has_outstanding_mooncake_snapshot = false;
 
         // Process events until the receiver is closed or a Shutdown event is received
         loop {
@@ -144,8 +143,7 @@ impl TableHandler {
                         }
                         TableEvent::ForceSnapshot => {
                             // Only create a snapshot if there isn't already one in progress
-                            if !has_outstanding_mooncake_snapshot {
-                                assert!(snapshot_handle.is_none());
+                            if snapshot_handle.is_none() {
                                 snapshot_handle = table.create_snapshot();
                             }
 
@@ -153,16 +151,14 @@ impl TableHandler {
                             if snapshot_handle.is_none() {
                                 iceberg_snapshot_completion_tx.send(()).await.unwrap();
                             } else {
-                                has_outstanding_mooncake_snapshot = true;
                                 has_outstanding_iceberg_snapshot_request = true;
                             }
                         }
                     }
                 }
-                // wait for the snapshot to complete
+                // Wait for the snapshot to complete.
                 Some((lsn, iceberg_snapshot_payload)) = async {
                     if let Some(handle) = &mut snapshot_handle {
-                        assert!(has_outstanding_mooncake_snapshot);
                         match handle.await {
                             Ok((lsn, iceberg_snapshot_payload)) => {
                                 Some((lsn, iceberg_snapshot_payload))
@@ -188,16 +184,13 @@ impl TableHandler {
                         iceberg_snapshot_completion_tx.send(()).await.unwrap();
                         has_outstanding_iceberg_snapshot_request = false;
                     }
-                    has_outstanding_mooncake_snapshot = false;
                     snapshot_handle = None;
                 }
                 // Periodic snapshot based on time
                 _ = periodic_snapshot_interval.tick() => {
                     // Only create a periodic snapshot if there isn't already one in progress
-                    if !has_outstanding_mooncake_snapshot {
-                        assert!(snapshot_handle.is_none());
+                    if snapshot_handle.is_none() {
                         snapshot_handle = table.create_snapshot();
-                        has_outstanding_mooncake_snapshot = snapshot_handle.is_some();
                     }
                 }
                 // If all senders have been dropped, exit the loop
