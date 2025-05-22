@@ -90,6 +90,10 @@ impl TableHandler {
         let mut periodic_snapshot_interval = time::interval(Duration::from_millis(500));
         let mut has_outstanding_iceberg_snapshot_request = false;
 
+        // Variables related to icebern snapshot operation.
+        // let (iceberg_snapshot_tx, iceberg_snapshot_rx) = mpsc::channel(1);
+
+
         // Process events until the receiver is closed or a Shutdown event is received
         loop {
             tokio::select! {

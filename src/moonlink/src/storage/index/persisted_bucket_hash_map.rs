@@ -39,6 +39,7 @@ fn splitmix64(mut x: u64) -> u64 {
 ///
 /// Values
 /// [lower_bit_hash, seg_idx, row_idx]
+#[derive(Clone)]
 pub struct GlobalIndex {
     /// A unique id to identify each global index.
     pub(crate) global_index_id: u32,
@@ -55,12 +56,13 @@ pub struct GlobalIndex {
     pub(crate) index_blocks: Vec<IndexBlock>,
 }
 
+#[derive(Clone)]
 pub(crate) struct IndexBlock {
     pub(crate) bucket_start_idx: u32,
     pub(crate) bucket_end_idx: u32,
     pub(crate) bucket_start_offset: u64,
     pub(crate) file_path: String,
-    data: Option<Mmap>,
+    data: Arc<Option<Mmap>>,
 }
 
 impl IndexBlock {
@@ -77,7 +79,7 @@ impl IndexBlock {
             bucket_end_idx,
             bucket_start_offset,
             file_path,
-            data: Some(data),
+            data: Arc::new(Some(data)),
         }
     }
 
@@ -126,7 +128,7 @@ impl IndexBlock {
         metadata: &GlobalIndex,
     ) -> Vec<RecordLocation> {
         assert!(bucket_idx >= self.bucket_start_idx && bucket_idx < self.bucket_end_idx);
-        let cursor = Cursor::new(self.data.as_ref().unwrap().as_ref());
+        let cursor = Cursor::new(self.data.as_ref().as_ref().unwrap().as_ref());
         let mut reader = AsyncBitReader::endian(cursor, AsyncBigEndian);
         let mut entry_reader = reader.clone();
         let (entry_start, entry_end) = self.read_bucket(bucket_idx, &mut reader, metadata).await;
@@ -423,7 +425,7 @@ impl<'a> IndexBlockIterator<'a> {
         file_id_remap: &'a Vec<u32>,
     ) -> Self {
         let mut bucket_reader = AsyncBitReader::endian(
-            Cursor::new(collection.data.as_ref().unwrap().as_ref()),
+            Cursor::new(collection.data.as_ref().as_ref().unwrap().as_ref()),
             AsyncBigEndian,
         );
         let entry_reader = bucket_reader.clone();
@@ -594,7 +596,7 @@ impl IndexBlock {
             "\nIndexBlock {{ \n   bucket_start_idx: {}, \n   bucket_end_idx: {},",
             self.bucket_start_idx, self.bucket_end_idx
         )?;
-        let cursor = Cursor::new(self.data.as_ref().unwrap().as_ref());
+        let cursor = Cursor::new(self.data.as_ref().as_ref().unwrap().as_ref());
         let mut reader = AsyncBitReader::endian(cursor, AsyncBigEndian);
         write!(f, "\n   Buckets: ")?;
         let mut num = 0;
