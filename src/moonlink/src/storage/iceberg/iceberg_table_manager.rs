@@ -10,10 +10,10 @@ use crate::storage::iceberg::utils;
 use crate::storage::iceberg::validation as IcebergValidation;
 use crate::storage::index::{FileIndex as MooncakeFileIndex, MooncakeIndex};
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
+use crate::storage::mooncake_table::IcebergSnapshotPayload;
 use crate::storage::mooncake_table::{
     DiskFileDeletionVector, Snapshot as MooncakeSnapshot, TableMetadata as MooncakeTableMetadata,
 };
-use crate::storage::mooncake_table::IcebergSnapshotPayload;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -475,13 +475,18 @@ impl IcebergOperation for IcebergTableManager {
         self.initialize_iceberg_table().await?;
 
         // Persist data files.
-        let new_iceberg_data_files = self.sync_data_files(std::mem::take(&mut snapshot_payload.data_files)).await?;
+        let new_iceberg_data_files = self
+            .sync_data_files(std::mem::take(&mut snapshot_payload.data_files))
+            .await?;
 
         // Persist committed deletion logs.
-        let deletion_puffin_blobs = self.sync_deletion_vector(std::mem::take(&mut snapshot_payload.new_deletion_vector)).await?;
+        let deletion_puffin_blobs = self
+            .sync_deletion_vector(std::mem::take(&mut snapshot_payload.new_deletion_vector))
+            .await?;
 
         // Persist file index changes.
-        self.sync_file_indices(&mut snapshot_payload.file_indices).await?;
+        self.sync_file_indices(&snapshot_payload.file_indices)
+            .await?;
 
         // Only start append action when there're new data files.
         let mut txn = Transaction::new(self.iceberg_table.as_ref().unwrap());
@@ -496,7 +501,10 @@ impl IcebergOperation for IcebergTableManager {
         // The ideal solution is to store at snapshot summary additional properties.
         // Issue: https://github.com/apache/iceberg-rust/issues/1329
         let mut prop = HashMap::new();
-        prop.insert(MOONCAKE_TABLE_FLUSH_LSN.to_string(), snapshot_payload.flush_lsn.to_string());
+        prop.insert(
+            MOONCAKE_TABLE_FLUSH_LSN.to_string(),
+            snapshot_payload.flush_lsn.to_string(),
+        );
         txn = txn.set_properties(prop)?;
 
         self.iceberg_table = Some(txn.commit(&*self.catalog).await?);
