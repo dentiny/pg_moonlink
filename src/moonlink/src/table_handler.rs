@@ -109,14 +109,10 @@ impl TableHandler {
                         }
                         TableEvent::Commit { lsn } => {
                             table.commit(lsn);
-                            println!("commit at lsn {}", lsn);
                             if table.should_flush() {
-                                println!("flush expected");
                                 if let Err(e) = table.flush(lsn).await {
                                     println!("Flush failed in Commit: {}", e);
                                 }
-                            } else {
-                                println!("no!! flush");
                             }
                         }
                         TableEvent::StreamCommit { lsn, xact_id } => {
