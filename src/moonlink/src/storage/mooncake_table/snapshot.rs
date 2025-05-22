@@ -98,11 +98,6 @@ impl SnapshotTableState {
         }
     }
 
-    /// Update data file flush LSN.
-    pub(crate) fn update_flush_lsn(&mut self, lsn: u64) {
-        self.current_snapshot.data_file_flush_lsn = Some(lsn)
-    }
-
     /// Prune and aggregate committed deletion logs to flush point.
     fn prune_and_aggregate_ondisk_committed_deletion_logs(
         &mut self,
@@ -156,8 +151,11 @@ impl SnapshotTableState {
         self.rows = take(&mut task.new_rows);
         self.process_deletion_log(&mut task).await;
 
-        if task.new_lsn != 0 {
-            self.current_snapshot.snapshot_version = task.new_lsn;
+        if let Some(flush_lsn) = task.new_flush_lsn {
+            self.current_snapshot.data_file_flush_lsn = Some(flush_lsn);
+        }
+        if task.new_commit_lsn != 0 {
+            self.current_snapshot.snapshot_version = task.new_commit_lsn;
         }
         if let Some(cp) = task.new_commit_point {
             self.last_commit = cp;
@@ -431,7 +429,7 @@ impl SnapshotTableState {
 
         for mut entry in take(&mut self.uncommitted_deletion_log) {
             let deletion = entry.take().unwrap();
-            if deletion.lsn <= task.new_lsn {
+            if deletion.lsn <= task.new_commit_lsn {
                 self.commit_deletion(deletion);
             } else {
                 still_uncommitted.push(Some(deletion));
@@ -446,7 +444,7 @@ impl SnapshotTableState {
     async fn apply_new_deletions(&mut self, task: &mut SnapshotTask) {
         for raw in take(&mut task.new_deletions) {
             let processed = self.process_delete_record(raw).await;
-            if processed.lsn <= task.new_lsn {
+            if processed.lsn <= task.new_commit_lsn {
                 self.commit_deletion(processed);
             } else {
                 self.uncommitted_deletion_log.push(Some(processed));

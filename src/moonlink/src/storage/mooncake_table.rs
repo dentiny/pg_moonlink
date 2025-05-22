@@ -183,7 +183,9 @@ pub struct SnapshotTask {
     new_rows: Option<SharedRowBufferSnapshot>,
     new_mem_indices: Vec<Arc<MemIndex>>,
     /// Assigned (non-zero) after a commit event.
-    new_lsn: u64,
+    new_commit_lsn: u64,
+    /// Assigned at a flush operation.
+    new_flush_lsn: Option<u64>,
     new_commit_point: Option<RecordLocation>,
 }
 
@@ -196,13 +198,14 @@ impl SnapshotTask {
             new_record_batches: Vec::new(),
             new_rows: None,
             new_mem_indices: Vec::new(),
-            new_lsn: 0,
+            new_commit_lsn: 0,
+            new_flush_lsn: None,
             new_commit_point: None,
         }
     }
 
     pub fn should_create_snapshot(&self) -> bool {
-        self.new_lsn > 0
+        self.new_commit_lsn > 0
             || !self.new_disk_slices.is_empty()
             || self.new_deletions.len()
                 > self.mooncake_table_config.snapshot_deletion_record_count()
@@ -344,7 +347,7 @@ impl MooncakeTable {
     }
 
     pub fn commit(&mut self, lsn: u64) {
-        self.next_snapshot_task.new_lsn = lsn;
+        self.next_snapshot_task.new_commit_lsn = lsn;
         self.next_snapshot_task.new_commit_point = Some(self.mem_slice.get_commit_check_point());
     }
 
@@ -515,7 +518,7 @@ impl MooncakeTable {
             let xact_mem_slice = &mut stream_state.mem_slice;
 
             let snapshot_task = &mut self.next_snapshot_task;
-            snapshot_task.new_lsn = lsn;
+            snapshot_task.new_commit_lsn = lsn;
 
             // We update our delete records with the last lsn of the transaction
             // Note that in the stream case we dont have this until commit time
@@ -551,8 +554,7 @@ impl MooncakeTable {
     // UNDONE(BATCH_INSERT):
     // flush uncommitted batches from big batch insert
     pub async fn flush(&mut self, lsn: u64) -> Result<()> {
-        // Marks a checkpoint for iceberg snapshot creation.
-        self.snapshot.write().await.update_flush_lsn(lsn);
+        self.next_snapshot_task.new_flush_lsn = Some(lsn);
 
         if self.mem_slice.is_empty() {
             return Ok(());
