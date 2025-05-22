@@ -6,7 +6,6 @@ mod shared_array;
 mod table_snapshot;
 mod snapshot;
 
-use super::iceberg::iceberg_table_manager::IcebergTableConfig;
 use super::iceberg::puffin_utils::PuffinBlobRef;
 use super::index::{FileIndex, MemIndex, MooncakeIndex};
 use super::storage_utils::{RawDeletionRecord, RecordLocation};
@@ -157,11 +156,6 @@ impl Snapshot {
             data_file_flush_lsn: None,
             indices: MooncakeIndex::new(),
         }
-    }
-
-    /// Get file indices for the current snapshot.
-    pub(crate) fn get_file_indices(&self) -> &[FileIndex] {
-        self.indices.file_indices.as_slice()
     }
 
     pub fn get_name_for_inmemory_file(&self) -> PathBuf {
@@ -642,6 +636,7 @@ impl MooncakeTable {
     // ================================
     //
     // Test util function, which updates mooncake table snapshot and create iceberg snapshot in a serial fashion. 
+    #[cfg(test)]
     pub(crate) async fn create_mooncake_and_iceberg_snapshot_for_test(&mut self) {
         if let Some(join_handle) = self.create_snapshot() {
             // Wait for the snapshot async task to complete.

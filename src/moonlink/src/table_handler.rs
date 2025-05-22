@@ -192,6 +192,9 @@ impl TableHandler {
                         futures::future::pending::<Option<_>>().await
                     }
                 } => {
+                    // 1. At most there's at most one mooncake snapshot and iceberg snapshot take place at the same time.
+                    // 2. Iceberg snapshot happens right after mooncake snapshot.
+                    // TODO(hjiang): Read state mamnager might rely on fresh mooncake snapshot commit LSN, in the followup PR we should consider allow multiple mooncake snapshots before one iceberg snapshot.
                     snapshot_handle = None;
                 }
                 // Periodic snapshot based on time
