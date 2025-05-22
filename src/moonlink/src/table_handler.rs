@@ -158,8 +158,6 @@ impl TableHandler {
                     assert!(!has_outstanding_iceberg_snapshot_request, "There should be at most one outstanding iceberg snapshot request for one table!");
                     // Only create a snapshot if there isn't already one in progress
                     if snapshot_handle.is_none() {
-                        // It's possible that there're not enough arrow record batches or deletion logs at the moment, so snapshot won't be created right away.
-                        // Receiver will only get notified at next successful snapshot.
                         snapshot_handle = table.create_snapshot();
                     }
 
