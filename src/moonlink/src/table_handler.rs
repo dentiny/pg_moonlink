@@ -167,7 +167,7 @@ impl TableHandler {
                 }
                 // wait for the snapshot to complete
                 Some(()) = async {
-                    if let Some(handle) = &mut snapshot_handle {
+                    if let Some(handle) = snapshot_handle.take() {
                         match handle.await {
                             Ok((lsn, iceberg_snapshot_payload)) => {
                                 // Notify read the mooncake table commit of LSN.
