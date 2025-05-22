@@ -407,10 +407,6 @@ async fn test_iceberg_snapshot_creation() {
     .await;
     env.commit(/*lsn=*/ 1).await;
 
-    // TODO(hjiang): All events sent to table handler eventloop is handled in an asynchronous fashion,
-    // so there's no guarantee commit event is already handled by mooncake at this point.
-    // Manually add a sleep to reduce flakiness, what we need is a barrier in eventloop.
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     // Attempt an iceberg snapshot.
     env.initiate_snapshot().await;
     env.sync_snapshot_completion().await;
@@ -439,10 +435,6 @@ async fn test_iceberg_snapshot_creation() {
     .await;
     env.commit(/*lsn=*/ 200).await;
 
-    // TODO(hjiang): All events sent to table handler eventloop is handled in an asynchronous fashion,
-    // so there's no guarantee commit event is already handled by mooncake at this point.
-    // Manually add a sleep to reduce flakiness, what we need is a barrier in eventloop.
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     // Attempt an iceberg snapshot.
     env.initiate_snapshot().await;
     env.sync_snapshot_completion().await;

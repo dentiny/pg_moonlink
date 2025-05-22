@@ -1,6 +1,5 @@
 use crate::row::MoonlinkRow;
 use crate::storage::mooncake_table::IcebergSnapshotPayload;
-use crate::storage::IcebergSnapshotStateManager;
 use crate::storage::MooncakeTable;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
@@ -31,6 +30,8 @@ pub enum TableEvent {
     StreamFlush { xact_id: u32 },
     /// Shutdown the handler
     _Shutdown,
+    /// Force a mooncake and iceberg snapshot.
+    ForceSnapshot,
 }
 
 /// Handler for table operations
@@ -44,28 +45,13 @@ pub struct TableHandler {
 
 impl TableHandler {
     /// Create a new TableHandler for the given schema and table name
-    pub fn new(
-        table: MooncakeTable,
-        iceberg_snapshot_state_manager: &mut IcebergSnapshotStateManager,
-    ) -> Self {
+    pub fn new(table: MooncakeTable, iceberg_snapshot_completion_tx: mpsc::Sender<()>) -> Self {
         // Create channel for events
         let (event_sender, event_receiver) = mpsc::channel(100);
 
-        let iceberg_snapshot_initiation_receiver = iceberg_snapshot_state_manager
-            .take_snapshot_initiation_receiver()
-            .unwrap();
-        let iceberg_snapshot_completion_sender =
-            iceberg_snapshot_state_manager.get_snapshot_completion_sender();
-
         // Spawn the task with the oneshot receiver
         let event_handle = Some(tokio::spawn(async move {
-            Self::event_loop(
-                iceberg_snapshot_initiation_receiver,
-                iceberg_snapshot_completion_sender,
-                event_receiver,
-                table,
-            )
-            .await;
+            Self::event_loop(iceberg_snapshot_completion_tx, event_receiver, table).await;
         }));
 
         // Create the handler
@@ -82,8 +68,7 @@ impl TableHandler {
 
     /// Main event processing loop
     async fn event_loop(
-        mut iceberg_snapshot_initiation_receiver: Receiver<()>,
-        iceberg_snaphot_completion_sender: Sender<()>,
+        iceberg_snapshot_completion_tx: Sender<()>,
         mut event_receiver: Receiver<TableEvent>,
         mut table: MooncakeTable,
     ) {
@@ -152,21 +137,19 @@ impl TableHandler {
                             println!("Shutting down table handler");
                             break;
                         }
-                    }
-                }
-                // wait for force snapshot requests.
-                Some(()) = iceberg_snapshot_initiation_receiver.recv() => {
-                    assert!(!has_outstanding_iceberg_snapshot_request, "There should be at most one outstanding iceberg snapshot request for one table!");
-                    // Only create a snapshot if there isn't already one in progress
-                    if snapshot_handle.is_none() {
-                        snapshot_handle = table.create_snapshot();
-                    }
+                        TableEvent::ForceSnapshot => {
+                            // Only create a snapshot if there isn't already one in progress
+                            if snapshot_handle.is_none() {
+                                snapshot_handle = table.create_snapshot();
+                            }
 
-                    // Nothing to create snapshot, directly return.
-                    if snapshot_handle.is_none() {
-                        iceberg_snaphot_completion_sender.send(()).await.unwrap();
-                    } else {
-                        has_outstanding_iceberg_snapshot_request = true;
+                            // Nothing to create snapshot, directly return.
+                            if snapshot_handle.is_none() {
+                                iceberg_snapshot_completion_tx.send(()).await.unwrap();
+                            } else {
+                                has_outstanding_iceberg_snapshot_request = true;
+                            }
+                        }
                     }
                 }
                 // wait for the snapshot to complete
@@ -183,7 +166,7 @@ impl TableHandler {
                                 }
 
                                 if has_outstanding_iceberg_snapshot_request {
-                                    iceberg_snaphot_completion_sender.send(()).await.unwrap();
+                                    iceberg_snapshot_completion_tx.send(()).await.unwrap();
                                     has_outstanding_iceberg_snapshot_request = false;
                                 }
                             }

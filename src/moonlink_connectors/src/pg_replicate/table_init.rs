@@ -7,6 +7,7 @@ use moonlink::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::sync::{mpsc::Sender, watch};
 
 /// Components required to replicate a single table.
@@ -54,8 +55,11 @@ pub async fn build_table_components(
     let (commit_tx, commit_rx) = watch::channel(0u64);
     let read_state_manager =
         ReadStateManager::new(&table, replication_state.subscribe(), commit_rx);
-    let mut iceberg_snapshot_manager = IcebergSnapshotStateManager::new();
-    let handler = TableHandler::new(table, &mut iceberg_snapshot_manager);
+
+    let (snapshot_completion_tx, snapshot_completion_rx) = mpsc::channel(1);
+    let handler = TableHandler::new(table, snapshot_completion_tx);
+    let iceberg_snapshot_manager =
+        IcebergSnapshotStateManager::new(handler.get_event_sender(), snapshot_completion_rx);
     let event_sender = handler.get_event_sender();
 
     let sink_components = TableComponents {
