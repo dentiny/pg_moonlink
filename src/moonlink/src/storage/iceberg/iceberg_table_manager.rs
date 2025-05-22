@@ -72,7 +72,7 @@ pub trait IcebergOperation {
     ///
     /// TODO(hjiang): We're storing the iceberg table status in two places, one for iceberg table manager, another at snapshot.
     /// Provide delta change interface, so snapshot doesn't need to store everything.
-    /// 
+    ///
     /// TODO(hjiang): It's ok to take only new moooncake file index, instead of all file indices.
     #[allow(async_fn_in_trait)]
     async fn sync_snapshot(

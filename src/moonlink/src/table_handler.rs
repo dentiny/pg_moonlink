@@ -1,7 +1,7 @@
 use crate::row::MoonlinkRow;
+use crate::storage::mooncake_table::IcebergSnapshotPayload;
 use crate::storage::IcebergSnapshotStateManager;
 use crate::storage::MooncakeTable;
-use crate::storage::mooncake_table::IcebergSnapshotPayload;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};

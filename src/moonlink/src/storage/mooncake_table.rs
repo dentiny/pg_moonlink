@@ -3,19 +3,19 @@ pub(crate) mod delete_vector;
 mod disk_slice;
 mod mem_slice;
 mod shared_array;
-mod table_snapshot;
 mod snapshot;
+mod table_snapshot;
 
 use super::iceberg::puffin_utils::PuffinBlobRef;
-use super::index::{FileIndex, MemIndex, MooncakeIndex};
+use super::index::{MemIndex, MooncakeIndex};
 use super::storage_utils::{RawDeletionRecord, RecordLocation};
 use crate::error::{Error, Result};
 use crate::row::{IdentityProp, MoonlinkRow};
-use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
-pub(crate) use crate::storage::mooncake_table::table_snapshot::IcebergSnapshotPayload;
 use crate::storage::iceberg::iceberg_table_manager::{
     IcebergOperation, IcebergTableConfig, IcebergTableManager,
 };
+use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
+pub(crate) use crate::storage::mooncake_table::table_snapshot::IcebergSnapshotPayload;
 use futures::executor::block_on;
 use std::collections::HashMap;
 use std::mem::take;
@@ -190,7 +190,7 @@ pub struct SnapshotTask {
     new_commit_point: Option<RecordLocation>,
 
     /// ---- States have been recorded by mooncake snapshot, and persisted into iceberg table ----
-    /// These persisted items will be reflected to mooncake snapshot in the next invocation of periodic mooncake snapshot operation. 
+    /// These persisted items will be reflected to mooncake snapshot in the next invocation of periodic mooncake snapshot operation.
     ///
     /// Flush LSN for iceberg snapshot.
     iceberg_flush_lsn: Option<u64>,
@@ -311,7 +311,8 @@ impl MooncakeTable {
             identity,
         });
         let (table_snapshot_watch_sender, table_snapshot_watch_receiver) = watch::channel(0);
-        let mut iceberg_table_manager = IcebergTableManager::new(metadata.clone(), iceberg_table_config);
+        let mut iceberg_table_manager =
+            IcebergTableManager::new(metadata.clone(), iceberg_table_config);
         Self {
             mem_slice: MemSlice::new(
                 metadata.schema.clone(),
@@ -610,13 +611,28 @@ impl MooncakeTable {
     }
 
     // TODO(hjiang): Better error handling at TableHandler eventloop.
-    pub(crate) async fn persist_iceberg_snapshot(&mut self, snapshot_payload: IcebergSnapshotPayload) {
-        let puffin_blob_ref = self.iceberg_table_manager.sync_snapshot(snapshot_payload.flush_lsn, snapshot_payload.data_files, snapshot_payload.new_deletion_vector, snapshot_payload.file_indices.as_slice()).await.unwrap();
+    pub(crate) async fn persist_iceberg_snapshot(
+        &mut self,
+        snapshot_payload: IcebergSnapshotPayload,
+    ) {
+        let puffin_blob_ref = self
+            .iceberg_table_manager
+            .sync_snapshot(
+                snapshot_payload.flush_lsn,
+                snapshot_payload.data_files,
+                snapshot_payload.new_deletion_vector,
+                snapshot_payload.file_indices.as_slice(),
+            )
+            .await
+            .unwrap();
 
         assert!(self.next_snapshot_task.iceberg_flush_lsn.is_none());
         self.next_snapshot_task.iceberg_flush_lsn = Some(snapshot_payload.flush_lsn);
 
-        assert!(self.next_snapshot_task.iceberg_persisted_puffin_blob.is_empty());
+        assert!(self
+            .next_snapshot_task
+            .iceberg_persisted_puffin_blob
+            .is_empty());
         self.next_snapshot_task.iceberg_persisted_puffin_blob = puffin_blob_ref;
     }
 
@@ -635,7 +651,7 @@ impl MooncakeTable {
     // Test util functions
     // ================================
     //
-    // Test util function, which updates mooncake table snapshot and create iceberg snapshot in a serial fashion. 
+    // Test util function, which updates mooncake table snapshot and create iceberg snapshot in a serial fashion.
     #[cfg(test)]
     pub(crate) async fn create_mooncake_and_iceberg_snapshot_for_test(&mut self) {
         if let Some(join_handle) = self.create_snapshot() {
