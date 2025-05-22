@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use crate::storage::index::FileIndex as MooncakeFileIndex;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 
+#[derive(Debug)]
 pub struct IcebergSnapshotPayload {
     /// Flush LSN.
     pub(crate) flush_lsn: u64,

@@ -219,7 +219,7 @@ impl SnapshotTask {
         self.new_commit_lsn > 0
             || !self.new_disk_slices.is_empty()
             || self.new_deletions.len()
-                > self.mooncake_table_config.snapshot_deletion_record_count()
+                >= self.mooncake_table_config.snapshot_deletion_record_count()
     }
 
     /// Get newly created data files.
@@ -600,8 +600,10 @@ impl MooncakeTable {
         }
         self.next_snapshot_task.new_rows = Some(self.mem_slice.get_latest_rows());
         let next_snapshot_task = take(&mut self.next_snapshot_task);
+        self.next_snapshot_task = SnapshotTask::new(self.metadata.config.clone());
+        let cur_snapshot = self.snapshot.clone();
         Some(tokio::task::spawn(Self::create_snapshot_async(
-            self.snapshot.clone(),
+            cur_snapshot,
             next_snapshot_task,
         )))
     }
