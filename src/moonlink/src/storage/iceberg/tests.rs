@@ -485,12 +485,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         )
     })?;
     table.commit(/*flush_lsn=*/ 200);
-    table.create_snapshot().unwrap().await.map_err(|e| {
-        IcebergError::new(
-            iceberg::ErrorKind::Unexpected,
-            format!("Failed to create snapshot to iceberg table because {:?}", e),
-        )
-    })?;
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, whose construction is lazy and asynchronous by design.
     let mut iceberg_table_manager = IcebergTableManager::new(
@@ -560,12 +555,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         )
     })?;
     table.commit(/*flush_lsn=*/ 300);
-    table.create_snapshot().unwrap().await.map_err(|e| {
-        IcebergError::new(
-            iceberg::ErrorKind::Unexpected,
-            format!("Failed to create snapshot to iceberg because {:?}", e),
-        )
-    })?;
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, whose construction is lazy and asynchronous by design.
     let mut iceberg_table_manager = IcebergTableManager::new(
@@ -626,12 +616,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         )
     })?;
     table.commit(/*flush_lsn=*/ 400);
-    table.create_snapshot().unwrap().await.map_err(|e| {
-        IcebergError::new(
-            iceberg::ErrorKind::Unexpected,
-            format!("Failed to create snapshot to iceberg because {:?}", e),
-        )
-    })?;
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, whose construction is lazy and asynchronous by design.
     let mut iceberg_table_manager = IcebergTableManager::new(
@@ -709,12 +694,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         )
     })?;
     table.commit(/*flush_lsn=*/ 500);
-    table.create_snapshot().unwrap().await.map_err(|e| {
-        IcebergError::new(
-            iceberg::ErrorKind::Unexpected,
-            format!("Failed to create snapshot to iceberg table because {:?}", e),
-        )
-    })?;
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot store and load, here we explicitly load snapshot from iceberg table, whose construction is lazy and asynchronous by design.
     let mut iceberg_table_manager = IcebergTableManager::new(
@@ -1176,7 +1156,7 @@ async fn test_state_1_3() -> IcebergResult<()> {
     table.append(row.clone()).unwrap();
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1210,7 +1190,7 @@ async fn test_state_1_4() -> IcebergResult<()> {
     table.delete(row.clone(), /*lsn=*/ 400).await;
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1238,7 +1218,7 @@ async fn test_state_2_1() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 100);
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1268,7 +1248,7 @@ async fn test_state_2_2() -> IcebergResult<()> {
     table.delete(row.clone(), /*lsn=*/ 200).await;
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1301,7 +1281,7 @@ async fn test_state_2_3() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 400);
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1336,7 +1316,7 @@ async fn test_state_2_4() -> IcebergResult<()> {
     table.delete(row.clone(), /*lsn=*/ 500).await;
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1365,7 +1345,7 @@ async fn test_state_3_1() -> IcebergResult<()> {
     table.flush(/*lsn=*/ 200).await.unwrap();
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1396,7 +1376,7 @@ async fn test_state_3_2() -> IcebergResult<()> {
     table.delete(row.clone(), /*lsn=*/ 300).await;
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1430,7 +1410,7 @@ async fn test_state_3_3_deletion_before_flush() -> IcebergResult<()> {
     table.flush(/*lsn=*/ 500).await.unwrap();
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1469,7 +1449,7 @@ async fn test_state_3_3_deletion_after_flush() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 500);
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1510,7 +1490,7 @@ async fn test_state_3_4_committed_deletion_before_flush() -> IcebergResult<()> {
     table.delete(row.clone(), /*lsn=*/ 600).await;
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1551,7 +1531,7 @@ async fn test_state_3_4_committed_deletion_after_flush() -> IcebergResult<()> {
     table.delete(row.clone(), /*lsn=*/ 600).await;
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1591,7 +1571,7 @@ async fn test_state_4_1() -> IcebergResult<()> {
     table.append(row).unwrap();
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1628,7 +1608,7 @@ async fn test_state_4_2() -> IcebergResult<()> {
     table.append(row).unwrap();
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1668,7 +1648,7 @@ async fn test_state_4_3() -> IcebergResult<()> {
     table.append(row).unwrap();
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1710,7 +1690,7 @@ async fn test_state_4_4() -> IcebergResult<()> {
     table.append(row).unwrap();
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1747,7 +1727,7 @@ async fn test_state_5_1() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 300);
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1786,7 +1766,7 @@ async fn test_state_5_2() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 400);
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1828,7 +1808,7 @@ async fn test_state_5_3_deletion_before_flush() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 600);
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1875,7 +1855,7 @@ async fn test_state_5_3_deletion_after_flush() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 600);
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1924,7 +1904,7 @@ async fn test_state_5_4_committed_deletion_before_flush() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 700);
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -1973,7 +1953,7 @@ async fn test_state_5_4_committed_deletion_after_flush() -> IcebergResult<()> {
     table.commit(/*lsn=*/ 700);
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -2022,7 +2002,7 @@ async fn test_state_6_1() -> IcebergResult<()> {
     table.append(row).unwrap();
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -2068,7 +2048,7 @@ async fn test_state_6_2() -> IcebergResult<()> {
     table.append(row).unwrap();
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -2117,7 +2097,7 @@ async fn test_state_6_3_deletion_before_flush() -> IcebergResult<()> {
     table.append(row).unwrap();
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -2171,7 +2151,7 @@ async fn test_state_6_3_deletion_after_flush() -> IcebergResult<()> {
     table.append(row).unwrap();
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -2227,7 +2207,7 @@ async fn test_state_6_4_committed_deletion_before_flush() -> IcebergResult<()> {
     table.append(row).unwrap();
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
@@ -2283,7 +2263,7 @@ async fn test_state_6_4_committed_deletion_after_flush() -> IcebergResult<()> {
     table.append(row).unwrap();
 
     // Request to create snapshot.
-    table.create_snapshot().unwrap().await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
 
     // Check iceberg snapshot status.
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;

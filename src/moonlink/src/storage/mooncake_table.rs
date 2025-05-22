@@ -597,7 +597,7 @@ impl MooncakeTable {
         Ok(())
     }
 
-    // Create a snapshot of the last committed version, return current snapshot's version.
+    // Create a snapshot of the last committed version, return current snapshot's version and payload to perform iceberg snapshot.
     //
     pub fn create_snapshot(&mut self) -> Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> {
         if !self.next_snapshot_task.should_create_snapshot() {
@@ -635,6 +635,31 @@ impl MooncakeTable {
             .await
             .update_snapshot(next_snapshot_task)
             .await
+    }
+
+    // ================================
+    // Test util functions
+    // ================================
+    //
+    // Test util function, which updates mooncake table snapshot and create iceberg snapshot in a serial fashion. 
+    pub(crate) async fn create_mooncake_and_iceberg_snapshot_for_test(&mut self) {
+        if let Some(join_handle) = self.create_snapshot() {
+            // Wait for the snapshot async task to complete.
+            match join_handle.await {
+                Ok((lsn, payload)) => {
+                    // Notify readers that the mooncake snapshot has been created.
+                    self.notify_snapshot_reader(lsn);
+
+                    // Create iceberg snapshot if possible
+                    if let Some(payload) = payload {
+                        self.persist_iceberg_snapshot(payload).await;
+                    }
+                }
+                Err(e) => {
+                    panic!("failed to join snapshot handle: {:?}", e);
+                }
+            }
+        }
     }
 }
 
