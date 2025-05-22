@@ -615,19 +615,15 @@ impl MooncakeTable {
         &mut self,
         snapshot_payload: IcebergSnapshotPayload,
     ) {
+        let flush_lsn = snapshot_payload.flush_lsn;
         let puffin_blob_ref = self
             .iceberg_table_manager
-            .sync_snapshot(
-                snapshot_payload.flush_lsn,
-                snapshot_payload.data_files,
-                snapshot_payload.new_deletion_vector,
-                snapshot_payload.file_indices.as_slice(),
-            )
+            .sync_snapshot(snapshot_payload)
             .await
             .unwrap();
 
         assert!(self.next_snapshot_task.iceberg_flush_lsn.is_none());
-        self.next_snapshot_task.iceberg_flush_lsn = Some(snapshot_payload.flush_lsn);
+        self.next_snapshot_task.iceberg_flush_lsn = Some(flush_lsn);
 
         assert!(self
             .next_snapshot_task

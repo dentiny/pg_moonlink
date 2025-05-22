@@ -10,6 +10,7 @@ use crate::storage::iceberg::s3_test_utils;
 use crate::storage::index::Index;
 use crate::storage::index::MooncakeIndex;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
+use crate::storage::mooncake_table::IcebergSnapshotPayload;
 use crate::storage::mooncake_table::Snapshot;
 use crate::storage::mooncake_table::{
     DiskFileDeletionVector, TableConfig as MooncakeTableConfig,
@@ -217,14 +218,14 @@ async fn test_store_and_load_snapshot_impl(
     let parquet_path = tmp_dir.path().join(data_filename_1);
     write_arrow_record_batch_to_local(parquet_path.as_path(), arrow_schema.clone(), &batch).await?;
 
+    let iceberg_snapshot_payload = IcebergSnapshotPayload {
+        flush_lsn: 0,
+        data_files: vec![parquet_path.clone()],
+        new_deletion_vector: test_committed_deletion_log_1(parquet_path.clone()),
+        file_indices: vec![],
+    };
     iceberg_table_manager
-        .sync_snapshot(
-            /*flush_lsn=*/ 0,
-            /*new_disk_files=*/ vec![parquet_path.clone()],
-            /*committed_deletion_log=*/
-            test_committed_deletion_log_1(parquet_path.clone()),
-            /*file_indices=*/ vec![].as_slice(),
-        )
+        .sync_snapshot(iceberg_snapshot_payload)
         .await?;
 
     // Write second snapshot to iceberg table, with updated deletion vector and new data file.
@@ -232,14 +233,15 @@ async fn test_store_and_load_snapshot_impl(
     let batch = test_batch_2(arrow_schema.clone());
     let parquet_path = tmp_dir.path().join(data_filename_2);
     write_arrow_record_batch_to_local(parquet_path.as_path(), arrow_schema.clone(), &batch).await?;
+
+    let iceberg_snapshot_payload = IcebergSnapshotPayload {
+        flush_lsn: 1,
+        data_files: vec![parquet_path.clone()],
+        new_deletion_vector: test_committed_deletion_log_2(parquet_path.clone()),
+        file_indices: vec![],
+    };
     iceberg_table_manager
-        .sync_snapshot(
-            /*flush_lsn=*/ 1,
-            /*new_disk_files=*/ vec![parquet_path.clone()],
-            /*committed_deletion_log=*/
-            test_committed_deletion_log_2(parquet_path.clone()),
-            /*file_indices=*/ vec![].as_slice(),
-        )
+        .sync_snapshot(iceberg_snapshot_payload)
         .await?;
 
     // Check persisted items in the iceberg table.
@@ -334,13 +336,14 @@ async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {
     };
     let mut iceberg_table_manager =
         IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone());
+    let iceberg_snapshot_payload = IcebergSnapshotPayload {
+        flush_lsn: 0,
+        data_files: vec![],
+        new_deletion_vector: HashMap::new(),
+        file_indices: vec![],
+    };
     iceberg_table_manager
-        .sync_snapshot(
-            /*flush_lsn=*/ 0,
-            /*disk_files=*/ vec![],
-            /*desired_deletion_vector=*/ HashMap::new(),
-            /*file_indices=*/ vec![].as_slice(),
-        )
+        .sync_snapshot(iceberg_snapshot_payload)
         .await?;
 
     // Recover from iceberg snapshot, and check mooncake table snapshot version.
