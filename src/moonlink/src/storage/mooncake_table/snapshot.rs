@@ -25,7 +25,7 @@ pub(crate) struct SnapshotTableState {
     /// Current snapshot
     current_snapshot: Snapshot,
 
-    /// In memory RecordBatches, maps from batch to in-memory batch.
+    /// In memory RecordBatches, maps from batch id to in-memory batch.
     batches: BTreeMap<u64, InMemoryBatch>,
 
     /// Latest rows
@@ -41,6 +41,7 @@ pub(crate) struct SnapshotTableState {
     //
     // Type-3, committed but not yet persisted deletion logs.
     committed_deletion_log: Vec<ProcessedDeletionRecord>,
+    // Type-1: uncommitted deletion logs.
     uncommitted_deletion_log: Vec<Option<ProcessedDeletionRecord>>,
 
     /// Last commit point
@@ -182,6 +183,7 @@ impl SnapshotTableState {
     pub(super) async fn update_snapshot(
         &mut self,
         mut task: SnapshotTask,
+        force_create: bool,
     ) -> (u64, Option<IcebergSnapshotPayload>) {
         // Reflect iceberg snapshot to mooncake snapshot.
         self.prune_committed_deletion_logs(&task);
@@ -216,14 +218,20 @@ impl SnapshotTableState {
         //
         // TODO(hjiang): Error handling for snapshot sync-up.
         let mut iceberg_snapshot_payload: Option<IcebergSnapshotPayload> = None;
-        let flush_by_data_files = new_data_files.len()
-            >= self
-                .mooncake_table_config
-                .iceberg_snapshot_new_data_file_count();
-        let flush_by_deletion_logs = self.committed_deletion_log.len()
-            > self
-                .mooncake_table_config
-                .iceberg_snapshot_new_committed_deletion_log();
+        let mut data_file_snapshot_threshold = self
+            .mooncake_table_config
+            .iceberg_snapshot_new_data_file_count();
+        let mut deletion_record_snapshot_threshold = self
+            .mooncake_table_config
+            .iceberg_snapshot_new_committed_deletion_log();
+        if force_create {
+            data_file_snapshot_threshold = 1;
+            deletion_record_snapshot_threshold = 1;
+        }
+        let flush_by_data_files = new_data_files.len() >= data_file_snapshot_threshold;
+        let flush_by_deletion_logs =
+            self.committed_deletion_log.len() >= deletion_record_snapshot_threshold;
+
         if self.current_snapshot.data_file_flush_lsn.is_some()
             && (flush_by_data_files || flush_by_deletion_logs)
         {
@@ -534,8 +542,7 @@ impl SnapshotTableState {
     }
 
     pub(crate) async fn request_read(&self) -> Result<ReadOutput> {
-        let mut file_paths: Vec<String> =
-            Vec::with_capacity(self.current_snapshot.disk_files.len());
+        let mut file_paths = Vec::with_capacity(self.current_snapshot.disk_files.len());
         let mut associated_files = Vec::new();
         let (deletion_vectors_at_read, position_deletes) = self.get_deletion_records();
         file_paths.extend(

@@ -394,11 +394,6 @@ async fn test_iceberg_snapshot_creation() {
     };
     let mut env = TestEnvironment::new(mooncake_table_config.clone()).await;
 
-    // ---- Attempt to create snapshot before any rows appended ----
-    // Snapshot creation function shouldn't get blocked.
-    env.initiate_snapshot().await;
-    env.sync_snapshot_completion().await;
-
     // ---- Create snapshot after new records appended ----
     // Append a new row to the mooncake table.
     env.append_row(
@@ -407,8 +402,8 @@ async fn test_iceberg_snapshot_creation() {
     .await;
     env.commit(/*lsn=*/ 1).await;
 
-    // Attempt an iceberg snapshot.
-    env.initiate_snapshot().await;
+    // Attempt an iceberg snapshot, with requested LSN already committed.
+    env.initiate_snapshot(/*lsn=*/ 1).await;
     env.sync_snapshot_completion().await;
 
     // Load from iceberg table manager to make sure data file exists.

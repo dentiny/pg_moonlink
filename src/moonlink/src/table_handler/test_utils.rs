@@ -138,8 +138,8 @@ impl TestEnvironment {
     // --- Util functions for iceberg snapshot creation ---
 
     /// Initiate an iceberg snapshot event at best effort.
-    pub async fn initiate_snapshot(&mut self) {
-        self.iceberg_snapshot_manager.initiate_snapshot().await
+    pub async fn initiate_snapshot(&mut self, lsn: u64) {
+        self.iceberg_snapshot_manager.initiate_snapshot(lsn).await
     }
 
     /// Wait iceberg snapshot creation completion.

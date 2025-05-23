@@ -28,9 +28,10 @@ impl IcebergSnapshotStateManager {
     }
 
     /// Initiate an iceberg snapshot event.
-    pub async fn initiate_snapshot(&mut self) {
+    /// Notice: at most one force snapshot is supported.
+    pub async fn initiate_snapshot(&mut self, lsn: u64) {
         self.table_event_tx
-            .send(TableEvent::ForceSnapshot)
+            .send(TableEvent::ForceSnapshot { lsn })
             .await
             .unwrap()
     }

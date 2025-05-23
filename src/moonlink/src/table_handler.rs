@@ -31,7 +31,7 @@ pub enum TableEvent {
     /// Shutdown the handler
     _Shutdown,
     /// Force a mooncake and iceberg snapshot.
-    ForceSnapshot,
+    ForceSnapshot { lsn: u64 },
 }
 
 /// Handler for table operations
@@ -74,7 +74,8 @@ impl TableHandler {
     ) {
         let mut snapshot_handle: Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> = None;
         let mut periodic_snapshot_interval = time::interval(Duration::from_millis(500));
-        let mut has_outstanding_iceberg_snapshot_request = false;
+        // Requested minimum LSN for a force snapshot request.
+        let mut force_snapshot_lsn: Option<u64> = None;
 
         // Process events until the receiver is closed or a Shutdown event is received
         loop {
@@ -109,10 +110,18 @@ impl TableHandler {
                         }
                         TableEvent::Commit { lsn } => {
                             table.commit(lsn);
-                            if table.should_flush() {
+
+                            // Force create snapshot if
+                            // 1. force snapshot is requested
+                            // and 2. there's no snapshot creation operation ongoing
+                            let need_force_snapshot = force_snapshot_lsn.is_some() && force_snapshot_lsn.unwrap() <= lsn && snapshot_handle.is_none();
+                            if table.should_flush() || need_force_snapshot {
                                 if let Err(e) = table.flush(lsn).await {
                                     println!("Flush failed in Commit: {}", e);
                                 }
+                            }
+                            if need_force_snapshot {
+                                snapshot_handle = table.create_snapshot();
                             }
                         }
                         TableEvent::StreamCommit { lsn, xact_id } => {
@@ -137,18 +146,9 @@ impl TableHandler {
                             println!("Shutting down table handler");
                             break;
                         }
-                        TableEvent::ForceSnapshot => {
-                            // Only create a snapshot if there isn't already one in progress
-                            if snapshot_handle.is_none() {
-                                snapshot_handle = table.create_snapshot();
-                            }
-
-                            // Nothing to create snapshot, directly return.
-                            if snapshot_handle.is_none() {
-                                iceberg_snapshot_completion_tx.send(()).await.unwrap();
-                            } else {
-                                has_outstanding_iceberg_snapshot_request = true;
-                            }
+                        TableEvent::ForceSnapshot { lsn } => {
+                            assert!(force_snapshot_lsn.is_none());
+                            force_snapshot_lsn = Some(lsn);
                         }
                     }
                 }
@@ -172,13 +172,21 @@ impl TableHandler {
                     table.notify_snapshot_reader(lsn);
 
                     // Process iceberg snapshot.
+                    // TODO(hjiang): Move iceberg snapshot creation out of eventloop.
+                    let mut cur_flush_lsn : Option<u64> = None;
                     if let Some(iceberg_snapshot_payload) = iceberg_snapshot_payload {
+                        cur_flush_lsn = Some(iceberg_snapshot_payload.flush_lsn);
                         table.persist_iceberg_snapshot(iceberg_snapshot_payload).await;
                     }
 
-                    if has_outstanding_iceberg_snapshot_request {
-                        iceberg_snapshot_completion_tx.send(()).await.unwrap();
-                        has_outstanding_iceberg_snapshot_request = false;
+                    // Notify completion of iceberg snapshot, with flush LSN no earlier than requested LSN.
+                    if let Some(request_snapshot_lsn) = force_snapshot_lsn {
+                        if let Some(cur_flush_lsn) = cur_flush_lsn {
+                            if request_snapshot_lsn <= cur_flush_lsn {
+                                iceberg_snapshot_completion_tx.send(()).await.unwrap();
+                                force_snapshot_lsn = None;
+                            }
+                        }
                     }
                     snapshot_handle = None;
                 }

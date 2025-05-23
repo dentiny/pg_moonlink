@@ -90,6 +90,8 @@ impl MemSlice {
         None
     }
 
+    /// Append the given row into column store buffer and mem index.
+    /// Return the finalized record batch if the current one's full.
     pub(super) fn append(
         &mut self,
         lookup_key: u64,

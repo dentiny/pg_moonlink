@@ -600,6 +600,10 @@ impl MooncakeTable {
 
     // UNDONE(BATCH_INSERT):
     // Flush uncommitted batches from big batch insert, whether how much record batch there is.
+    //
+    // This function
+    // - tracks all record batches by current snapshot task
+    // - persists all full batch records to local filesystem
     pub async fn flush(&mut self, lsn: u64) -> Result<()> {
         self.next_snapshot_task.new_flush_lsn = Some(lsn);
 
@@ -624,11 +628,10 @@ impl MooncakeTable {
     }
 
     // Create a snapshot of the last committed version, return current snapshot's version and payload to perform iceberg snapshot.
-    //
-    pub fn create_snapshot(&mut self) -> Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> {
-        if !self.next_snapshot_task.should_create_snapshot() {
-            return None;
-        }
+    fn create_snapshot_impl(
+        &mut self,
+        force_create: bool,
+    ) -> Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> {
         self.next_snapshot_task.new_rows = Some(self.mem_slice.get_latest_rows());
         let next_snapshot_task = take(&mut self.next_snapshot_task);
         self.next_snapshot_task = SnapshotTask::new(self.metadata.config.clone());
@@ -636,7 +639,21 @@ impl MooncakeTable {
         Some(tokio::task::spawn(Self::create_snapshot_async(
             cur_snapshot,
             next_snapshot_task,
+            force_create,
         )))
+    }
+
+    pub fn create_snapshot(&mut self) -> Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> {
+        if !self.next_snapshot_task.should_create_snapshot() {
+            return None;
+        }
+        self.create_snapshot_impl(/*force_create=*/ false)
+    }
+
+    pub fn force_create_snapshot(
+        &mut self,
+    ) -> Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> {
+        self.create_snapshot_impl(/*force_snapshot=*/ true)
     }
 
     pub(crate) fn notify_snapshot_reader(&self, lsn: u64) {
@@ -668,11 +685,12 @@ impl MooncakeTable {
     async fn create_snapshot_async(
         snapshot: Arc<RwLock<SnapshotTableState>>,
         next_snapshot_task: SnapshotTask,
+        force_create: bool,
     ) -> (u64, Option<IcebergSnapshotPayload>) {
         snapshot
             .write()
             .await
-            .update_snapshot(next_snapshot_task)
+            .update_snapshot(next_snapshot_task, force_create)
             .await
     }
 
