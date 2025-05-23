@@ -1,11 +1,15 @@
 use crate::row::{IdentityProp, MoonlinkRow, RowValue};
-use crate::storage::mooncake_table::TableMetadata as MooncakeTableMetadata;
+use crate::storage::mooncake_table::{
+    DiskFileDeletionVector, TableMetadata as MooncakeTableMetadata,
+};
 use crate::storage::IcebergTableConfig;
+use crate::storage::{load_blob_from_puffin_file, DeletionVector};
 use crate::storage::{verify_files_and_deletions, MooncakeTable};
 use crate::table_handler::{TableEvent, TableHandler}; // Ensure this path is correct
 use crate::union_read::{decode_read_state_for_testing, ReadStateManager};
 use crate::{IcebergSnapshotStateManager, IcebergTableManager, TableConfig as MooncakeTableConfig};
 
+use iceberg::io::FileIOBuilder;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
@@ -243,4 +247,31 @@ pub async fn check_read_snapshot(
         );
     }
     verify_files_and_deletions(&files, position_deletes, deletion_vectors, expected_ids).await;
+}
+
+/// Test util function to check consistency for snapshot batch deletion vector and deletion puffin blob.
+pub(crate) async fn check_deletion_vector_consistency(disk_dv_entry: &DiskFileDeletionVector) {
+    if disk_dv_entry.puffin_deletion_blob.is_none() {
+        assert!(disk_dv_entry
+            .batch_deletion_vector
+            .collect_deleted_rows()
+            .is_empty());
+        return;
+    }
+
+    let local_fileio = FileIOBuilder::new_fs_io().build().unwrap();
+    let blob = load_blob_from_puffin_file(
+        local_fileio,
+        &disk_dv_entry
+            .puffin_deletion_blob
+            .as_ref()
+            .unwrap()
+            .puffin_filepath,
+    )
+    .await
+    .unwrap();
+    let iceberg_deletion_vector = DeletionVector::deserialize(blob).unwrap();
+    let batch_deletion_vector = iceberg_deletion_vector
+        .take_as_batch_delete_vector(MooncakeTableConfig::default().batch_size());
+    assert_eq!(batch_deletion_vector, disk_dv_entry.batch_deletion_vector);
 }
