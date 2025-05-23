@@ -117,6 +117,8 @@ pub struct IcebergTableManager {
     pub(crate) iceberg_table: Option<IcebergTable>,
 
     /// Maps from already persisted data file filepath to its deletion vector, and iceberg `DataFile`.
+    ///
+    /// TODO(hjiang): Check we could use `MooncakeDataFileRef` as map key.
     pub(crate) persisted_data_files: HashMap<String, DataFileEntry>,
 
     /// A set of file index id which has been managed by the iceberg table.
@@ -358,11 +360,14 @@ impl IcebergTableManager {
     }
 
     /// Dump local data files into iceberg table.
-    /// Return new iceberg data files for append transaction.
+    /// Return new iceberg data files for append transaction, and local data filepath to remote data filepath for index block remapping.
     async fn sync_data_files(
         &mut self,
         new_data_files: Vec<MooncakeDataFileRef>,
-    ) -> IcebergResult<Vec<DataFile>> {
+    ) -> IcebergResult<(Vec<DataFile>, HashMap<MooncakeDataFileRef, String>)> {
+        // Maps from local data filepath to remote filepath.
+        let mut local_data_file_to_remote = HashMap::with_capacity(new_data_files.len());
+
         let mut new_iceberg_data_files = Vec::with_capacity(new_data_files.len());
         for local_data_file in new_data_files.into_iter() {
             let iceberg_data_file = utils::write_record_batch_to_iceberg(
@@ -370,6 +375,10 @@ impl IcebergTableManager {
                 local_data_file.file_path(),
             )
             .await?;
+            local_data_file_to_remote.insert(
+                local_data_file.clone(),
+                iceberg_data_file.file_path().to_string(),
+            );
             let old_entry = self.persisted_data_files.insert(
                 local_data_file.file_path().to_string(),
                 DataFileEntry {
@@ -383,7 +392,7 @@ impl IcebergTableManager {
             assert!(old_entry.is_none());
             new_iceberg_data_files.push(iceberg_data_file);
         }
-        Ok(new_iceberg_data_files)
+        Ok((new_iceberg_data_files, local_data_file_to_remote))
     }
 
     /// Dump committed deletion logs into iceberg table, only the changed part will be persisted.
@@ -417,7 +426,11 @@ impl IcebergTableManager {
     ///
     /// TODO(hjiang): Need to configure (1) the number of blobs in a puffin file; and (2) the number of file index in a puffin blob.
     /// For implementation simpicity, put everything in a single file and a single blob.
-    async fn sync_file_indices(&mut self, file_indices: &[MooncakeFileIndex]) -> IcebergResult<()> {
+    async fn sync_file_indices(
+        &mut self,
+        file_indices: &[MooncakeFileIndex],
+        local_data_file_to_remote: HashMap<MooncakeDataFileRef, String>,
+    ) -> IcebergResult<()> {
         if file_indices.len() == self.persisted_file_index_ids.len() {
             return Ok(());
         }
@@ -438,6 +451,7 @@ impl IcebergTableManager {
         let mut new_file_indices: Vec<&MooncakeFileIndex> =
             Vec::with_capacity(file_indices.len() - self.persisted_file_index_ids.len());
         for cur_file_index in file_indices.iter() {
+            // An un-persisted index file index.
             if self
                 .persisted_file_index_ids
                 .insert(cur_file_index.global_index_id)
@@ -457,7 +471,11 @@ impl IcebergTableManager {
             }
         }
 
-        let file_index_blob = FileIndexBlob::new(new_file_indices, local_index_file_to_remote);
+        let file_index_blob = FileIndexBlob::new(
+            new_file_indices,
+            local_index_file_to_remote,
+            local_data_file_to_remote,
+        );
         let puffin_blob = file_index_blob.as_blob()?;
         puffin_writer
             .add(puffin_blob, iceberg::puffin::CompressionCodec::None)
@@ -480,7 +498,7 @@ impl IcebergOperation for IcebergTableManager {
         self.initialize_iceberg_table().await?;
 
         // Persist data files.
-        let new_iceberg_data_files = self
+        let (new_iceberg_data_files, local_data_file_to_remote) = self
             .sync_data_files(std::mem::take(&mut snapshot_payload.data_files))
             .await?;
 
@@ -490,7 +508,7 @@ impl IcebergOperation for IcebergTableManager {
             .await?;
 
         // Persist file index changes.
-        self.sync_file_indices(&snapshot_payload.file_indices)
+        self.sync_file_indices(&snapshot_payload.file_indices, local_data_file_to_remote)
             .await?;
 
         // Only start append action when there're new data files.
