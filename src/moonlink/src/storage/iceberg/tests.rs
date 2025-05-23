@@ -396,12 +396,16 @@ async fn check_row_index_on_disk(snapshot: &Snapshot, row: &MoonlinkRow) {
         row,
         locs
     );
-    assert!(
-        matches!(locs[0], RecordLocation::DiskFile(_, _)),
-        "Actual location for row {:?} is {:?}",
-        row,
-        locs
-    );
+    match &locs[0] {
+        RecordLocation::DiskFile(file_id, _) => {
+            let path = &file_id.0;
+            let exists = tokio::fs::try_exists(path.as_ref()).await.unwrap();
+            assert!(exists, "Data file {:?} doesn't exist", path);
+        }
+        _ => {
+            panic!("Unexpected location {:?}", locs[0]);
+        }
+    }
 }
 
 async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergResult<()> {
