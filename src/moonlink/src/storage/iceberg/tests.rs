@@ -21,6 +21,7 @@ use crate::storage::storage_utils::RecordLocation;
 use crate::storage::MooncakeTable;
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -408,15 +409,58 @@ async fn check_row_index_on_disk(snapshot: &Snapshot, row: &MoonlinkRow) {
     }
 }
 
+/// Test util functions to check recovered snapshot only contains remote filepaths and they do exist.
+async fn validate_recovered_snapshot(snapshot: &Snapshot, warehouse_uri: &str) {
+    let warehouse_directory = tokio::fs::canonicalize(&warehouse_uri).await.unwrap();
+    let mut data_filepaths: HashSet<String> = HashSet::new();
+
+    // Check data files and their puffin blobs.
+    for (cur_disk_file, cur_deletion_vector) in snapshot.disk_files.iter() {
+        assert!(cur_disk_file.starts_with(&warehouse_directory));
+        assert!(tokio::fs::try_exists(cur_disk_file).await.unwrap());
+        assert!(data_filepaths.insert(cur_disk_file.to_str().unwrap().to_string()));
+
+        if cur_deletion_vector.puffin_deletion_blob.is_none() {
+            continue;
+        }
+        let puffin_filepath = &cur_deletion_vector
+            .puffin_deletion_blob
+            .as_ref()
+            .unwrap()
+            .puffin_filepath;
+        let puffin_pathbuf = PathBuf::from(puffin_filepath);
+        assert!(puffin_pathbuf.starts_with(&warehouse_directory));
+        assert!(tokio::fs::try_exists(puffin_filepath).await.unwrap());
+    }
+
+    // Check file indices.
+    let mut index_referenced_data_filepaths: HashSet<String> = HashSet::new();
+    for cur_file_index in snapshot.indices.file_indices.iter() {
+        for cur_index_block in cur_file_index.index_blocks.iter() {
+            let index_pathbuf = PathBuf::from(&cur_index_block.file_path);
+            assert!(index_pathbuf.starts_with(&warehouse_directory));
+            assert!(tokio::fs::try_exists(&index_pathbuf).await.unwrap());
+        }
+
+        for cur_data_filepath in cur_file_index.files.iter() {
+            index_referenced_data_filepaths.insert(cur_data_filepath.to_str().unwrap().to_string());
+        }
+    }
+
+    assert_eq!(index_referenced_data_filepaths, data_filepaths);
+}
+
 async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergResult<()> {
+    // For the ease of testing, we use different directories for mooncake table and iceberg warehouse uri.
     let temp_dir = tempfile::tempdir().unwrap();
     let path = temp_dir.path().to_path_buf();
+
     let mooncake_table_metadata =
         create_test_table_metadata(temp_dir.path().to_str().unwrap().to_string());
     let identity_property = mooncake_table_metadata.identity.clone();
 
     let iceberg_table_config = IcebergTableConfig {
-        warehouse_uri,
+        warehouse_uri: warehouse_uri.clone(),
         namespace: vec!["namespace".to_string()],
         table_name: "test_table".to_string(),
         drop_table_if_exists: false,
@@ -517,6 +561,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
     check_row_index_on_disk(&snapshot, &row3).await;
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 200);
     check_deletion_vector_consistency_for_snapshot(&snapshot).await;
+    validate_recovered_snapshot(&snapshot, &warehouse_uri).await;
 
     // Check the loaded data file is of the expected format and content.
     let file_io = iceberg_table_manager
@@ -589,6 +634,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
     check_row_index_on_disk(&snapshot, &row3).await;
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 300);
     check_deletion_vector_consistency_for_snapshot(&snapshot).await;
+    validate_recovered_snapshot(&snapshot, &warehouse_uri).await;
 
     // Check the loaded data file is of the expected format and content.
     let file_io = iceberg_table_manager
@@ -649,6 +695,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
     check_row_index_on_disk(&snapshot, &row3).await;
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 400);
     check_deletion_vector_consistency_for_snapshot(&snapshot).await;
+    validate_recovered_snapshot(&snapshot, &warehouse_uri).await;
 
     // Check the loaded data file is of the expected format and content.
     let file_io = iceberg_table_manager
@@ -726,6 +773,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
     check_row_index_on_disk(&snapshot, &row3).await;
     check_row_index_on_disk(&snapshot, &row4).await;
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 500);
+    validate_recovered_snapshot(&snapshot, &warehouse_uri).await;
 
     // The old data file and deletion vector is unchanged.
     let old_data_entry = iceberg_table_manager
