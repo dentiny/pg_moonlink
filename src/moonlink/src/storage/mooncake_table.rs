@@ -599,7 +599,7 @@ impl MooncakeTable {
     }
 
     // UNDONE(BATCH_INSERT):
-    // flush uncommitted batches from big batch insert
+    // Flush uncommitted batches from big batch insert, whether how much record batch there is.
     pub async fn flush(&mut self, lsn: u64) -> Result<()> {
         self.next_snapshot_task.new_flush_lsn = Some(lsn);
 
