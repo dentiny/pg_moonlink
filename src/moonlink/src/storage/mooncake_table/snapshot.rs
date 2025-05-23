@@ -348,7 +348,7 @@ impl SnapshotTableState {
             .collect();
 
         match candidates.len() {
-            0 => panic!("can't find deletion record"),
+            0 => panic!("can't find deletion record {:?}", deletion),
             1 => Self::build_processed_deletion(deletion, candidates.pop().unwrap()),
             _ => {
                 // Multiple candidates → disambiguate via full row identity comparison.

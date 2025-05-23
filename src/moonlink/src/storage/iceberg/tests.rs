@@ -966,31 +966,30 @@ async fn create_table_and_iceberg_manager(
 
 // Test util function to prepare for committed and persisted data file,
 // here we write two rows and assume they'll be included in one arrow record batch and one data file.
-// Return the second row for later deletion if necessary.
 async fn prepare_committed_and_flushed_data_files(
     table: &mut MooncakeTable,
     lsn: u64,
-) -> MoonlinkRow {
+) -> (MoonlinkRow, MoonlinkRow) {
     // Append first row.
-    let row = MoonlinkRow::new(vec![
+    let row_1 = MoonlinkRow::new(vec![
         RowValue::Int32(1),
         RowValue::ByteArray("John".as_bytes().to_vec()),
         RowValue::Int32(30),
     ]);
-    table.append(row.clone()).unwrap();
+    table.append(row_1.clone()).unwrap();
 
     // Append second row.
-    let row = MoonlinkRow::new(vec![
+    let row_2 = MoonlinkRow::new(vec![
         RowValue::Int32(4),
         RowValue::ByteArray("David".as_bytes().to_vec()),
         RowValue::Int32(40),
     ]);
-    table.append(row.clone()).unwrap();
+    table.append(row_2.clone()).unwrap();
 
     table.commit(lsn);
     table.flush(lsn).await.unwrap();
 
-    row
+    (row_2, row_1)
 }
 
 // Test util function to check whether the data file in iceberg snapshot is the same as initially-prepared one from `prepare_committed_and_flushed_data_files`.
@@ -1217,7 +1216,7 @@ async fn test_state_1_3() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite.
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -1249,7 +1248,7 @@ async fn test_state_1_4() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -1283,7 +1282,7 @@ async fn test_state_1_5() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed and flushed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -1316,7 +1315,7 @@ async fn test_state_1_6() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed and flushed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -1409,7 +1408,7 @@ async fn test_state_2_3() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite.
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -1442,7 +1441,7 @@ async fn test_state_2_4() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -1477,7 +1476,7 @@ async fn test_state_2_5() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed and flushed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -1511,7 +1510,7 @@ async fn test_state_2_6() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed and flushed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -1607,7 +1606,7 @@ async fn test_state_3_3_deletion_before_flush() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -1646,7 +1645,7 @@ async fn test_state_3_3_deletion_after_flush() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
         RowValue::Int32(2),
@@ -1685,7 +1684,7 @@ async fn test_state_3_4_committed_deletion_before_flush() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -1726,7 +1725,7 @@ async fn test_state_3_4_committed_deletion_after_flush() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
         RowValue::Int32(2),
@@ -1767,7 +1766,7 @@ async fn test_state_3_5() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed and flushed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -1807,7 +1806,7 @@ async fn test_state_3_6() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed and flushed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -1921,7 +1920,7 @@ async fn test_state_4_3() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed record batch).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -1961,7 +1960,7 @@ async fn test_state_4_4() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -2003,7 +2002,7 @@ async fn test_state_4_5() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed and flushed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -2044,7 +2043,7 @@ async fn test_state_4_6() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed and flushed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -2163,7 +2162,7 @@ async fn test_state_5_3_deletion_before_flush() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -2210,7 +2209,7 @@ async fn test_state_5_3_deletion_after_flush() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
         RowValue::Int32(2),
@@ -2257,7 +2256,7 @@ async fn test_state_5_4_committed_deletion_before_flush() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -2306,7 +2305,7 @@ async fn test_state_5_4_committed_deletion_after_flush() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
         RowValue::Int32(2),
@@ -2355,7 +2354,7 @@ async fn test_state_5_5() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare committed and flushed deletion record.
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -2403,7 +2402,7 @@ async fn test_state_5_6() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare committed and flushed deletion record.
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -2543,7 +2542,7 @@ async fn test_state_6_3_deletion_before_flush() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -2597,7 +2596,7 @@ async fn test_state_6_3_deletion_after_flush() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
         RowValue::Int32(2),
@@ -2651,7 +2650,7 @@ async fn test_state_6_4_committed_deletion_before_flush() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare deletion pre-requisite (committed deletion record).
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -2707,7 +2706,7 @@ async fn test_state_6_4_committed_deletion_after_flush() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepate data files pre-requisite.
     let row = MoonlinkRow::new(vec![
         RowValue::Int32(2),
@@ -2763,7 +2762,7 @@ async fn test_state_6_5() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare committed and flushed deletion records.
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -2818,7 +2817,7 @@ async fn test_state_6_6() -> IcebergResult<()> {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Prepare environment setup.
-    let old_row = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
     // Prepare committed and flushed deletion records.
     table.delete(old_row.clone(), /*lsn=*/ 200).await;
     table.commit(/*lsn=*/ 300);
@@ -2863,6 +2862,157 @@ async fn test_state_6_6() -> IcebergResult<()> {
     .await;
     assert_eq!(snapshot.indices.file_indices.len(), 2);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 400);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
+
+    Ok(())
+}
+
+// Testing combination: (7) + (1) => no snapshot
+#[tokio::test]
+async fn test_state_7_1() -> IcebergResult<()> {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
+
+    // Request to create snapshot.
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
+
+    // Check iceberg snapshot status.
+    let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
+    assert!(snapshot.disk_files.is_empty());
+    assert!(snapshot.indices.file_indices.is_empty());
+    assert!(snapshot.data_file_flush_lsn.is_none());
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
+
+    Ok(())
+}
+
+// Testing combination: (7) + (2) => no snapshot
+#[tokio::test]
+async fn test_state_7_2() -> IcebergResult<()> {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
+
+    // Prepare environment setup.
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    // Prepare uncommitted deletion record.
+    table.delete(/*row=*/ old_row.clone(), /*lsn=*/ 200).await;
+
+    // Request to create snapshot.
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
+
+    // Check iceberg snapshot status.
+    let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
+    check_prev_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ false).await;
+    assert_eq!(snapshot.indices.file_indices.len(), 1);
+    assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 100);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
+
+    Ok(())
+}
+
+// Testing combination: (7) + (3) => no snapshot
+#[tokio::test]
+async fn test_state_7_3() -> IcebergResult<()> {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
+
+    // Prepare environment setup.
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    // Prepare committed deletion record.
+    table.delete(/*row=*/ old_row.clone(), /*lsn=*/ 200).await;
+    table.commit(/*lsn=*/ 300);
+
+    // Request to create snapshot.
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
+
+    // Check iceberg snapshot status.
+    let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
+    check_prev_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ false).await;
+    assert_eq!(snapshot.indices.file_indices.len(), 1);
+    assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 100);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
+
+    Ok(())
+}
+
+// Testing combination: (7) + (4) => no snapshot
+#[tokio::test]
+async fn test_state_7_4() -> IcebergResult<()> {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
+
+    // Prepare environment setup.
+    let (old_row_1, old_row_2) =
+        prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    // Prepare committed deletion record.
+    table.delete(/*row=*/ old_row_1.clone(), /*lsn=*/ 200).await;
+    table.commit(/*lsn=*/ 300);
+    // Prepare uncommitted deletion record.
+    table.delete(old_row_2, /*lsn=*/ 400).await;
+
+    // Request to create snapshot.
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
+
+    // Check iceberg snapshot status.
+    let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
+    check_prev_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ false).await;
+    assert_eq!(snapshot.indices.file_indices.len(), 1);
+    assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 100);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
+
+    Ok(())
+}
+
+// Testing combination: (7) + (5) => snapshot with deletion vector
+#[tokio::test]
+async fn test_state_7_5() -> IcebergResult<()> {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
+
+    // Prepare environment setup.
+    let (old_row, _) = prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    // Prepare committed and flushed deletion record.
+    table.delete(/*row=*/ old_row.clone(), /*lsn=*/ 200).await;
+    table.commit(/*lsn=*/ 300);
+    table.flush(/*lsn=*/ 300).await.unwrap();
+
+    // Request to create snapshot.
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
+
+    // Check iceberg snapshot status.
+    let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
+    check_prev_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ true).await;
+    assert_eq!(snapshot.indices.file_indices.len(), 1);
+    assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 300);
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
+
+    Ok(())
+}
+
+// Testing combination: (7) + (6) => snapshot with deletion vector
+#[tokio::test]
+async fn test_state_7_6() -> IcebergResult<()> {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
+
+    // Prepare environment setup.
+    let (old_row_1, old_row_2) =
+        prepare_committed_and_flushed_data_files(&mut table, /*lsn=*/ 100).await;
+    // Prepare committed and flushed deletion record.
+    table.delete(/*row=*/ old_row_1.clone(), /*lsn=*/ 200).await;
+    table.commit(/*lsn=*/ 300);
+    table.flush(/*lsn=*/ 300).await.unwrap();
+    // Prepare uncommitted deletion record.
+    table.delete(old_row_2.clone(), /*lsn=*/ 400).await;
+
+    // Request to create snapshot.
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
+
+    // Check iceberg snapshot status.
+    let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
+    check_prev_data_files(&snapshot, &iceberg_table_manager, /*deleted=*/ true).await;
+    assert_eq!(snapshot.indices.file_indices.len(), 1);
+    assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 300);
     check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
