@@ -125,11 +125,7 @@ mod tests {
         });
         set.insert(df.clone());
 
-        let lookup_id = FileId(42);
-
-        // No dummy object needed 🎯
-        if let Some(found) = set.get(&lookup_id) {
-            println!("Found: {:?}", found.file_path);
-        }
+        let lookup_id = df.file_id.clone();
+        assert!(set.contains(&lookup_id));
     }
 }

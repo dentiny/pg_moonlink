@@ -258,7 +258,7 @@ mod tests {
             temp_dir.path().to_path_buf(),
             entries,
             Some(1),
-            0,
+            /*table_auto_incr_id=*/ 0,
             Arc::new(old_index),
         );
         disk_slice.write().await?;

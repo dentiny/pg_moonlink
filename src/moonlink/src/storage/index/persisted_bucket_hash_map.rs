@@ -639,7 +639,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new() {
-        let data_file = create_data_file(0, "a.parquet".to_string());
+        let data_file = create_data_file(/*file_id=*/ 0, "a.parquet".to_string());
         let files = vec![data_file.clone()];
         let hash_entries = vec![
             (1, 0, 0),
@@ -684,9 +684,9 @@ mod tests {
     #[tokio::test]
     async fn test_merge() {
         let files = vec![
-            create_data_file(1, "1.parquet".to_string()),
-            create_data_file(2, "2.parquet".to_string()),
-            create_data_file(3, "3.parquet".to_string()),
+            create_data_file(/*file_id=*/ 1, "1.parquet".to_string()),
+            create_data_file(/*file_id=*/ 2, "2.parquet".to_string()),
+            create_data_file(/*file_id=*/ 3, "3.parquet".to_string()),
         ];
         let vec = (0..100).map(|i| (i as u64, i % 3, i)).collect::<Vec<_>>();
         let mut builder = GlobalIndexBuilder::new();
@@ -695,8 +695,8 @@ mod tests {
             .set_directory(tempfile::tempdir().unwrap().keep());
         let index1 = builder.build_from_flush(vec).await;
         let files = vec![
-            create_data_file(4, "4.parquet".to_string()),
-            create_data_file(5, "5.parquet".to_string()),
+            create_data_file(/*file_id=*/ 4, "4.parquet".to_string()),
+            create_data_file(/*file_id=*/ 5, "5.parquet".to_string()),
         ];
         let vec = (100..200).map(|i| (i as u64, i % 2, i)).collect::<Vec<_>>();
         let mut builder = GlobalIndexBuilder::new();

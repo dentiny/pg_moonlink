@@ -242,12 +242,12 @@ impl IcebergTableManager {
         }
 
         let data_file = entry.data_file();
-        let referencec_file_name = data_file.referenced_data_file().unwrap();
-        let mut data_file_entry = self.persisted_data_files.get_mut(&referencec_file_name);
+        let referenced_filepath = data_file.referenced_data_file().unwrap();
+        let mut data_file_entry = self.persisted_data_files.get_mut(&referenced_filepath);
         assert!(
             data_file_entry.is_some(),
             "At recovery, the data file path for {:?} doesn't exist",
-            &referencec_file_name
+            &referenced_filepath
         );
 
         IcebergValidation::validate_puffin_manifest_entry(entry)?;

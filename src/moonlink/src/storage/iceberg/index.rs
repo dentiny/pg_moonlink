@@ -227,7 +227,7 @@ mod tests {
             row_id_bits: 3,
             bucket_bits: 5,
             files: vec![create_data_file(
-                0,
+                /*file_id=*/ 0,
                 temp_data_file.path().to_str().unwrap().to_string(),
             )],
             index_blocks: vec![

@@ -118,7 +118,7 @@ impl SnapshotTableState {
                 assert!(deletion_vector.delete_row(*row_idx));
             }
         }
-        let mut ret = vec![];
+        let mut ret = Vec::with_capacity(aggregated_deletion_logs.len());
         for (file_id, deletion_vector) in aggregated_deletion_logs.into_iter() {
             ret.push((
                 self.current_snapshot
