@@ -118,7 +118,7 @@ pub struct IcebergTableManager {
 
     /// Maps from already persisted data file filepath to its deletion vector, and iceberg `DataFile`.
     ///
-    /// TODO(hjiang): Check we could use `MooncakeDataFileRef` as map key.
+    /// TODO(hjiang): Consider using `MooncakeDataFileRef` as map key.
     pub(crate) persisted_data_files: HashMap<String, DataFileEntry>,
 
     /// A set of file index id which has been managed by the iceberg table.
@@ -214,12 +214,7 @@ impl IcebergTableManager {
 
         let data_file = entry.data_file();
         let file_path = PathBuf::from(data_file.file_path().to_string());
-        assert_eq!(
-            data_file.file_format(),
-            DataFileFormat::Parquet,
-            "Data file is of file format parquet for entry {:?}.",
-            entry,
-        );
+        assert_eq!(data_file.file_format(), DataFileFormat::Parquet);
         let new_data_file_entry = DataFileEntry {
             data_file: data_file.clone(),
             deletion_vector: BatchDeletionVector::new(/*max_rows=*/ 0),
@@ -282,7 +277,6 @@ impl IcebergTableManager {
             } else {
                 0
             };
-        let mut file_name_to_id = HashMap::new();
         // Fill in disk files.
         mooncake_snapshot.disk_files = HashMap::with_capacity(self.persisted_data_files.len());
         for (file_id, (data_filepath, data_file_entry)) in
@@ -295,7 +289,6 @@ impl IcebergTableManager {
                     batch_deletion_vector: data_file_entry.deletion_vector.clone(),
                 },
             );
-            file_name_to_id.insert(data_filepath.to_string(), file_id);
         }
         // UNDONE:
         // 1. Update file id in persisted_file_indices.
