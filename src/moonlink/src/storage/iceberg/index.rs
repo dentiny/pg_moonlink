@@ -49,15 +49,21 @@ impl FileIndex {
     /// # Arguments
     ///
     /// * local_index_file_to_remote: hash map from local index filepath to remote filepath, which is to be managed by iceberg.
+    /// * local_data_file_to_remote: hash map from local data filepath to remote filepath, which is to be managed by iceberg.
     pub(crate) fn new(
         mooncake_index: &MooncakeFileIndex,
         local_index_file_to_remote: &mut HashMap<String, String>,
+        local_data_file_to_remote: &mut HashMap<String, String>,
     ) -> Self {
         Self {
             data_files: mooncake_index
                 .files
                 .iter()
-                .map(|path| path.to_str().unwrap().to_string())
+                .map(|path| {
+                    local_data_file_to_remote
+                        .remove(path.to_str().unwrap())
+                        .unwrap()
+                })
                 .collect(),
             index_block_files: mooncake_index
                 .index_blocks
@@ -124,11 +130,18 @@ impl FileIndexBlob {
     pub fn new(
         file_indices: Vec<&MooncakeFileIndex>,
         mut local_index_file_to_remote: HashMap<String, String>,
+        mut local_data_file_to_remote: HashMap<String, String>,
     ) -> Self {
         Self {
             file_indices: file_indices
                 .into_iter()
-                .map(|file_index| FileIndex::new(file_index, &mut local_index_file_to_remote))
+                .map(|file_index| {
+                    FileIndex::new(
+                        file_index,
+                        &mut local_index_file_to_remote,
+                        &mut local_data_file_to_remote,
+                    )
+                })
                 .collect(),
         }
     }
@@ -208,12 +221,15 @@ mod tests {
     #[tokio::test]
     async fn test_hash_index_v1_serde() {
         // Fill in meaningless random bytes, mainly to verify the correctness of serde.
-        let temp_data_file = NamedTempFile::new().unwrap();
         let temp_local_index_file = NamedTempFile::new().unwrap();
         let temp_remote_index_file = NamedTempFile::new().unwrap();
 
+        // Notice: use the same filepath for index block and data file only for serde testing, no IO involved.
         let local_index_filepath = temp_local_index_file.path().to_str().unwrap().to_string();
         let remote_index_filepath = temp_remote_index_file.path().to_str().unwrap().to_string();
+
+        let local_data_filepath = local_index_filepath.clone();
+        let remote_data_filepath = remote_index_filepath.clone();
 
         let original_mooncake_file_index = MooncakeFileIndex {
             global_index_id: 0,
@@ -224,7 +240,7 @@ mod tests {
             seg_id_bits: 6,
             row_id_bits: 3,
             bucket_bits: 5,
-            files: vec![Arc::new(PathBuf::from(temp_data_file.path()))],
+            files: vec![Arc::new(PathBuf::from(local_data_filepath.clone()))],
             index_blocks: vec![
                 MooncakeIndexBlock::new(
                     /*bucket_start_idx=*/ 0,
@@ -241,9 +257,14 @@ mod tests {
             local_index_filepath.clone(),
             remote_index_filepath.clone(),
         )]);
+        let local_data_file_to_remote = HashMap::<String, String>::from([(
+            local_data_filepath.clone(),
+            remote_data_filepath.clone(),
+        )]);
         let file_index_blob = FileIndexBlob::new(
             vec![&original_mooncake_file_index],
             local_index_file_to_remote,
+            local_data_file_to_remote,
         );
         let blob = file_index_blob.as_blob().unwrap();
 
@@ -260,7 +281,7 @@ mod tests {
         );
         assert_eq!(
             mooncake_file_index.files,
-            original_mooncake_file_index.files
+            vec![Arc::new(PathBuf::from(remote_data_filepath.clone()))],
         );
         assert_eq!(
             mooncake_file_index.hash_bits,
