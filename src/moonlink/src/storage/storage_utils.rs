@@ -125,7 +125,7 @@ mod tests {
         });
         set.insert(df.clone());
 
-        let lookup_id = df.file_id.clone();
+        let lookup_id = df.file_id;
         assert!(set.contains(&lookup_id));
     }
 }
