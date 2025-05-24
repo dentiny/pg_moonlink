@@ -74,15 +74,26 @@ impl TableHandler {
     ) {
         let mut snapshot_handle: Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> = None;
         let mut periodic_snapshot_interval = time::interval(Duration::from_millis(500));
+
         // Requested minimum LSN for a force snapshot request.
         // If assigned, means there's force snapshot requested.
         let mut force_snapshot_lsn: Option<u64> = None;
+
+        // Record LSN if the last handled table event is commit, so table could be flushed safely.
+        let mut last_event_is_commit_and_commit_lsn: Option<u64> = None;
 
         // Process events until the receiver is closed or a Shutdown event is received
         loop {
             tokio::select! {
                 // Process events from the queue
                 Some(event) = event_receiver.recv() => {
+                    last_event_is_commit_and_commit_lsn = match event {
+                        TableEvent::Commit { lsn } => Some(lsn),
+                        // `ForceSnapshot` event doesn't affect whether mooncake is at a committed state.
+                        TableEvent::ForceSnapshot { .. } => last_event_is_commit_and_commit_lsn,
+                        _ => None,
+                    };
+
                     match event {
                         TableEvent::Append { row, xact_id } => {
                             let result = match xact_id {
@@ -195,6 +206,7 @@ impl TableHandler {
 
                         if force_snapshot_lsn.is_some() && force_snapshot_lsn.unwrap() <= cur_flush_lsn {
                             iceberg_snapshot_completion_tx.send(()).await.unwrap();
+                            force_snapshot_lsn = None;
                         }
                     }
 
@@ -203,9 +215,23 @@ impl TableHandler {
                 // Periodic snapshot based on time
                 _ = periodic_snapshot_interval.tick() => {
                     // Only create a periodic snapshot if there isn't already one in progress
-                    if snapshot_handle.is_none() {
-                        snapshot_handle = table.create_snapshot();
+                    if snapshot_handle.is_some() {
+                        continue;
                     }
+
+                    // Check whether a flush and force snapshot is needed.
+                    if let Some(requested_lsn) = force_snapshot_lsn {
+                        if let Some(commit_lsn) = last_event_is_commit_and_commit_lsn {
+                            if requested_lsn <= commit_lsn {
+                                table.flush(/*lsn=*/ commit_lsn).await.unwrap();
+                                snapshot_handle = table.force_create_snapshot();
+                                continue;
+                            }
+                        }
+                    }
+
+                    // Fallback to normal periodic snapshot.
+                    snapshot_handle = table.create_snapshot();
                 }
                 // If all senders have been dropped, exit the loop
                 else => {
