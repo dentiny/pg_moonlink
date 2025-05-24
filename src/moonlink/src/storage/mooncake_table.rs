@@ -289,8 +289,6 @@ pub struct MooncakeTable {
     next_file_id: u32,
 
     /// Iceberg table manager, used to sync snapshot to the corresponding iceberg table.
-    ///
-    /// TODO(hjiang): Figure out a way to store dynamic trait for mock-based unit test.
     iceberg_table_manager: Box<dyn TableManager>,
 
     /// LSN of the latest commit.
