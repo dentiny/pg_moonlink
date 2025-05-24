@@ -130,6 +130,7 @@ impl DiskSliceWriter {
             if writer.is_none() {
                 // Generate a unique file name
                 // Create the file
+                out_file_idx = files.len();
                 let file_id = get_unique_file_id_for_flush(
                     self.table_auto_incr_id as u64,
                     out_file_idx as u64,
@@ -140,7 +141,6 @@ impl DiskSliceWriter {
                     tokio::fs::File::create(dir_path.join(data_file.as_ref().unwrap().file_path()))
                         .await
                         .map_err(Error::Io)?;
-                out_file_idx = files.len();
                 writer = Some(AsyncArrowWriter::try_new(file, self.schema.clone(), None)?);
                 out_row_idx = 0;
             }
