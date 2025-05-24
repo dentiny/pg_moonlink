@@ -75,6 +75,7 @@ impl TableHandler {
         let mut snapshot_handle: Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> = None;
         let mut periodic_snapshot_interval = time::interval(Duration::from_millis(500));
         // Requested minimum LSN for a force snapshot request.
+        // If assigned, means there's force snapshot requested.
         let mut force_snapshot_lsn: Option<u64> = None;
 
         // Process events until the receiver is closed or a Shutdown event is received
