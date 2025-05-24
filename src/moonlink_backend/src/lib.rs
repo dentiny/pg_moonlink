@@ -48,11 +48,14 @@ impl<T: Eq + Hash + Clone> MoonlinkBackend<T> {
     }
 
     /// Create an iceberg snapshot with the given LSN, return when the a snapshot is successfully created.
-    pub async fn create_iceberg_snapshot(&self, table_id: &T, lsn: u64) -> Result<()> {
+    ///
+    /// TODO(hjiang): Revert the interface change after pg_mooncake updates function call.
+    pub async fn create_iceberg_snapshot(&self, table_id: &T /*, lsn: u64*/) -> Result<()> {
         let mut manager = self.replication_manager.write().await;
 
         let writer = manager.get_iceberg_snapshot_manager(table_id);
-        writer.initiate_snapshot(lsn).await;
+        // writer.initiate_snapshot(lsn).await;
+        writer.initiate_snapshot(0).await;
         writer.sync_snapshot_completion().await;
         Ok(())
     }
