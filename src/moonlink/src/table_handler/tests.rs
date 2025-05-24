@@ -385,16 +385,13 @@ async fn test_streaming_transaction_periodic_flush_then_abort() {
 
 #[tokio::test]
 async fn test_iceberg_snapshot_creation() {
+    // Set mooncake and iceberg flush and snapshot threshold to huge value, to verify force flush and force snapshot works as expected.
     let mooncake_table_config = MooncakeTableConfig {
         batch_size: MooncakeTableConfig::DEFAULT_BATCH_SIZE,
-        // Flush to local filesystem as long as there's new data.
-        mem_slice_size: 1,
-        // Create mooncake table snapshot as long as there's new deletion records.
-        snapshot_deletion_record_count: 1,
-        // Create iceberg snapshot as long as there's new data file persisted.
-        iceberg_snapshot_new_data_file_count: 1,
-        // Create iceberg snapshot as long as there's new committed deletion logs.
-        iceberg_snapshot_new_committed_deletion_log: 1,
+        mem_slice_size: 1000,
+        snapshot_deletion_record_count: 1000,
+        iceberg_snapshot_new_data_file_count: 1000,
+        iceberg_snapshot_new_committed_deletion_log: 1000,
     };
     let mut env = TestEnvironment::new(mooncake_table_config.clone()).await;
 

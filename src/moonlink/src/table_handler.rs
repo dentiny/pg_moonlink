@@ -114,15 +114,17 @@ impl TableHandler {
 
                             // Force create snapshot if
                             // 1. force snapshot is requested
-                            // and 2. there's no snapshot creation operation ongoing
-                            let need_force_snapshot = force_snapshot_lsn.is_some() && force_snapshot_lsn.unwrap() <= lsn && snapshot_handle.is_none();
+                            // and 2. LSN which meets force snapshot requirement has appeared, before that we still allow buffering
+                            // and 3. there's no snapshot creation operation ongoing
+                            let need_force_snapshot = force_snapshot_lsn.is_some() && lsn >= force_snapshot_lsn.unwrap() && snapshot_handle.is_none();
+
                             if table.should_flush() || need_force_snapshot {
                                 if let Err(e) = table.flush(lsn).await {
                                     println!("Flush failed in Commit: {}", e);
                                 }
                             }
                             if need_force_snapshot {
-                                snapshot_handle = table.create_snapshot();
+                                snapshot_handle = table.force_create_snapshot();
                             }
                         }
                         TableEvent::StreamCommit { lsn, xact_id } => {
@@ -149,8 +151,18 @@ impl TableHandler {
                             break;
                         }
                         TableEvent::ForceSnapshot { lsn } => {
+                            // TODO(hjiang): Currently we only support one ongoing force snapshot operation.
                             assert!(force_snapshot_lsn.is_none());
-                            force_snapshot_lsn = Some(lsn);
+
+                            // Fast-path: if iceberg snapshot requirement is already satisfied, notify directly.
+                            let last_iceberg_snapshot_lsn = table.get_iceberg_snapshot_lsn();
+                            if last_iceberg_snapshot_lsn.is_some() && lsn <= last_iceberg_snapshot_lsn.unwrap() {
+                                iceberg_snapshot_completion_tx.send(()).await.unwrap();
+                            }
+                            // Iceberg snapshot LSN requirement is not met, record the required LSN, so later commit will pick up.
+                            else {
+                                force_snapshot_lsn = Some(lsn);
+                            }
                         }
                     }
                 }
@@ -173,23 +185,19 @@ impl TableHandler {
                     // Notify read the mooncake table commit of LSN.
                     table.notify_snapshot_reader(lsn);
 
-                    // Process iceberg snapshot.
+                    // Process iceberg snapshop; and notify completion of iceberg snapshot, if flush LSN no earlier than requested LSN.
+                    //
                     // TODO(hjiang): Move iceberg snapshot creation out of eventloop.
-                    let mut cur_flush_lsn : Option<u64> = None;
                     if let Some(iceberg_snapshot_payload) = iceberg_snapshot_payload {
-                        cur_flush_lsn = Some(iceberg_snapshot_payload.flush_lsn);
+                        let cur_flush_lsn = iceberg_snapshot_payload.flush_lsn;
                         table.persist_iceberg_snapshot(iceberg_snapshot_payload).await;
-                    }
+                        table.set_iceberg_snapshot_lsn(cur_flush_lsn);
 
-                    // Notify completion of iceberg snapshot, with flush LSN no earlier than requested LSN.
-                    if let Some(request_snapshot_lsn) = force_snapshot_lsn {
-                        if let Some(cur_flush_lsn) = cur_flush_lsn {
-                            if request_snapshot_lsn <= cur_flush_lsn {
-                                iceberg_snapshot_completion_tx.send(()).await.unwrap();
-                                force_snapshot_lsn = None;
-                            }
+                        if force_snapshot_lsn.is_some() && force_snapshot_lsn.unwrap() <= cur_flush_lsn {
+                            iceberg_snapshot_completion_tx.send(()).await.unwrap();
                         }
                     }
+
                     snapshot_handle = None;
                 }
                 // Periodic snapshot based on time

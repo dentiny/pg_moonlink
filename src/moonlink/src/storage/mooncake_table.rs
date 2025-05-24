@@ -295,6 +295,9 @@ pub struct MooncakeTable {
 
     /// LSN of the latest commit.
     last_commit_lsn: Arc<AtomicU64>,
+
+    /// LSN of the latest iceberg snapshot.
+    last_iceberg_snapshot_lsn: Option<u64>,
 }
 
 impl MooncakeTable {
@@ -338,7 +341,22 @@ impl MooncakeTable {
             next_file_id: 0,
             iceberg_table_manager,
             last_commit_lsn: Arc::new(AtomicU64::new(0)),
+            last_iceberg_snapshot_lsn: None,
         }
+    }
+
+    /// Set iceberg snapshot flush LSN, called after a snapshot operation.
+    pub(crate) fn set_iceberg_snapshot_lsn(&mut self, lsn: u64) {
+        assert!(
+            self.last_iceberg_snapshot_lsn.is_none()
+                || self.last_iceberg_snapshot_lsn.unwrap() < lsn
+        );
+        self.last_iceberg_snapshot_lsn = Some(lsn);
+    }
+
+    /// Get iceberg snapshot flush LSN.
+    pub(crate) fn get_iceberg_snapshot_lsn(&self) -> Option<u64> {
+        self.last_iceberg_snapshot_lsn
     }
 
     pub(crate) fn get_state_for_reader(
