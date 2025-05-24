@@ -6,8 +6,8 @@ mod union_read;
 
 pub use error::*;
 pub use storage::{
-    IcebergOperation, IcebergSnapshotStateManager, IcebergTableConfig, IcebergTableManager,
-    MooncakeTable, TableConfig,
+    IcebergSnapshotStateManager, IcebergTableConfig, IcebergTableManager, MooncakeTable,
+    TableConfig, TableManager,
 };
 pub use table_handler::{TableEvent, TableHandler};
 pub use union_read::{ReadState, ReadStateManager};

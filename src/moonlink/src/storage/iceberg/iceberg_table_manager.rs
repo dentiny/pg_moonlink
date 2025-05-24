@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::vec;
 
+use async_trait::async_trait;
 use iceberg::io::FileIO;
 use iceberg::puffin::CompressionCodec;
 use iceberg::spec::DataFileFormat;
@@ -54,8 +55,9 @@ pub struct IcebergTableConfig {
     pub drop_table_if_exists: bool,
 }
 
+#[async_trait]
 #[cfg_attr(test, automock)]
-pub trait IcebergOperation {
+pub trait TableManager: Send {
     /// Write a new snapshot to iceberg table.
     /// It could be called for multiple times to write and commit multiple snapshots.
     ///
@@ -84,9 +86,7 @@ pub trait IcebergOperation {
     /// Load latest snapshot from iceberg table. Used for recovery and initialization.
     /// Notice this function is supposed to call **only once**.
     #[allow(async_fn_in_trait)]
-    async fn load_snapshot_from_table(&mut self) -> IcebergResult<MooncakeSnapshot>
-    where
-        Self: Sized;
+    async fn load_snapshot_from_table(&mut self) -> IcebergResult<MooncakeSnapshot>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -482,7 +482,8 @@ impl IcebergTableManager {
 }
 
 /// TODO(hjiang): Parallelize all IO operations.
-impl IcebergOperation for IcebergTableManager {
+#[async_trait]
+impl TableManager for IcebergTableManager {
     async fn sync_snapshot(
         &mut self,
         mut snapshot_payload: IcebergSnapshotPayload,

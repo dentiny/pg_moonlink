@@ -5,7 +5,7 @@ use super::{
     TableMetadata,
 };
 use crate::error::Result;
-use crate::storage::iceberg::iceberg_table_manager::{IcebergOperation, IcebergTableManager};
+use crate::storage::iceberg::iceberg_table_manager::TableManager;
 use crate::storage::iceberg::puffin_utils::PuffinBlobRef;
 use crate::storage::index::Index;
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
@@ -73,7 +73,7 @@ pub struct ReadOutput {
 impl SnapshotTableState {
     pub(super) async fn new(
         metadata: Arc<TableMetadata>,
-        iceberg_table_manager: &mut IcebergTableManager,
+        iceberg_table_manager: &mut dyn TableManager,
     ) -> Self {
         let mut batches = BTreeMap::new();
         batches.insert(0, InMemoryBatch::new(metadata.config.batch_size));

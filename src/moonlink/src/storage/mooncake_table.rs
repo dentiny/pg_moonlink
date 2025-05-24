@@ -12,7 +12,7 @@ use super::storage_utils::{MooncakeDataFileRef, RawDeletionRecord, RecordLocatio
 use crate::error::{Error, Result};
 use crate::row::{IdentityProp, MoonlinkRow};
 use crate::storage::iceberg::iceberg_table_manager::{
-    IcebergOperation, IcebergTableConfig, IcebergTableManager,
+    IcebergTableConfig, IcebergTableManager, TableManager,
 };
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 pub(crate) use crate::storage::mooncake_table::table_snapshot::IcebergSnapshotPayload;
@@ -291,7 +291,7 @@ pub struct MooncakeTable {
     /// Iceberg table manager, used to sync snapshot to the corresponding iceberg table.
     ///
     /// TODO(hjiang): Figure out a way to store dynamic trait for mock-based unit test.
-    iceberg_table_manager: IcebergTableManager,
+    iceberg_table_manager: Box<dyn TableManager>,
 
     /// LSN of the latest commit.
     last_commit_lsn: Arc<AtomicU64>,
@@ -322,8 +322,10 @@ impl MooncakeTable {
             identity,
         });
         let (table_snapshot_watch_sender, table_snapshot_watch_receiver) = watch::channel(0);
-        let mut iceberg_table_manager =
-            IcebergTableManager::new(metadata.clone(), iceberg_table_config);
+        let mut iceberg_table_manager = Box::new(IcebergTableManager::new(
+            metadata.clone(),
+            iceberg_table_config,
+        ));
         Self {
             mem_slice: MemSlice::new(
                 metadata.schema.clone(),
@@ -332,7 +334,7 @@ impl MooncakeTable {
             ),
             metadata: metadata.clone(),
             snapshot: Arc::new(RwLock::new(
-                SnapshotTableState::new(metadata, &mut iceberg_table_manager).await,
+                SnapshotTableState::new(metadata, &mut *iceberg_table_manager).await,
             )),
             next_snapshot_task: SnapshotTask::new(table_config),
             transaction_stream_states: HashMap::new(),
