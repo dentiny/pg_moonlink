@@ -76,21 +76,20 @@ impl TableHandler {
         let mut periodic_snapshot_interval = time::interval(Duration::from_millis(500));
 
         // Requested minimum LSN for a force snapshot request.
-        // If assigned, means there's force snapshot requested.
         let mut force_snapshot_lsn: Option<u64> = None;
 
-        // Record LSN if the last handled table event is commit, so table could be flushed safely.
-        let mut last_event_is_commit_and_commit_lsn: Option<u64> = None;
+        // Record LSN if the last handled table event is committed, which indicates mooncake table stays at a consistent view, so table could be flushed safely.
+        let mut table_consistent_view_lsn: Option<u64> = None;
 
         // Process events until the receiver is closed or a Shutdown event is received
         loop {
             tokio::select! {
                 // Process events from the queue
                 Some(event) = event_receiver.recv() => {
-                    last_event_is_commit_and_commit_lsn = match event {
+                    table_consistent_view_lsn = match event {
                         TableEvent::Commit { lsn } => Some(lsn),
                         // `ForceSnapshot` event doesn't affect whether mooncake is at a committed state.
-                        TableEvent::ForceSnapshot { .. } => last_event_is_commit_and_commit_lsn,
+                        TableEvent::ForceSnapshot { .. } => table_consistent_view_lsn,
                         _ => None,
                     };
 
@@ -221,7 +220,7 @@ impl TableHandler {
 
                     // Check whether a flush and force snapshot is needed.
                     if let Some(requested_lsn) = force_snapshot_lsn {
-                        if let Some(commit_lsn) = last_event_is_commit_and_commit_lsn {
+                        if let Some(commit_lsn) = table_consistent_view_lsn {
                             if requested_lsn <= commit_lsn {
                                 table.flush(/*lsn=*/ commit_lsn).await.unwrap();
                                 snapshot_handle = table.force_create_snapshot();

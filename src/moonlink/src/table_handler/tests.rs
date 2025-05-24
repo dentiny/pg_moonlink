@@ -557,4 +557,8 @@ async fn test_iceberg_snapshot_creation() {
         );
         check_deletion_vector_consistency(&cur_deletion_vector).await;
     }
+
+    // Requested LSN is no later than current iceberg snapshot LSN.
+    env.initiate_snapshot(/*lsn=*/ 1).await;
+    env.sync_snapshot_completion().await;
 }
