@@ -574,6 +574,8 @@ impl MooncakeTable {
     }
 
     pub async fn commit_transaction_stream(&mut self, xact_id: u32, lsn: u64) -> Result<()> {
+        self.next_snapshot_task.new_flush_lsn = Some(lsn);
+
         if let Some(mut stream_state) = self.transaction_stream_states.remove(&xact_id) {
             let xact_mem_slice = &mut stream_state.mem_slice;
 
