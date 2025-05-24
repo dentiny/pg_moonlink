@@ -1,6 +1,10 @@
+use arrow_array::{Int32Array, RecordBatch, StringArray};
+
 use super::test_utils::*;
 use crate::storage::mooncake_table::TableConfig as MooncakeTableConfig;
 use crate::storage::IcebergOperation;
+
+use std::sync::Arc;
 
 #[tokio::test]
 async fn test_table_handler() {
@@ -394,6 +398,26 @@ async fn test_iceberg_snapshot_creation() {
     };
     let mut env = TestEnvironment::new(mooncake_table_config.clone()).await;
 
+    // Arrow batches used in test.
+    let arrow_batch_1 = RecordBatch::try_new(
+        Arc::new(default_schema()),
+        vec![
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(StringArray::from(vec!["John".to_string()])),
+            Arc::new(Int32Array::from(vec![30])),
+        ],
+    )
+    .unwrap();
+    let arrow_batch_2 = RecordBatch::try_new(
+        Arc::new(default_schema()),
+        vec![
+            Arc::new(Int32Array::from(vec![2])),
+            Arc::new(StringArray::from(vec!["Bob".to_string()])),
+            Arc::new(Int32Array::from(vec![20])),
+        ],
+    )
+    .unwrap();
+
     // ---- Create snapshot after new records appended ----
     // Append a new row to the mooncake table.
     env.append_row(
@@ -414,8 +438,11 @@ async fn test_iceberg_snapshot_creation() {
         .unwrap();
     assert_eq!(snapshot.disk_files.len(), 1);
     let (cur_data_file, cur_deletion_vector) = snapshot.disk_files.into_iter().next().unwrap();
-    // TODO(hjiang): Check data file content.
-    assert!(tokio::fs::metadata(cur_data_file.file_path()).await.is_ok());
+    // Check data file.
+    let actual_arrow_batch = load_arrow_batch(&cur_data_file.file_path()).await;
+    let expected_arrow_batch = arrow_batch_1.clone();
+    assert_eq!(actual_arrow_batch, expected_arrow_batch);
+    // Check deletion vector.
     assert!(cur_deletion_vector
         .batch_deletion_vector
         .collect_deleted_rows()
@@ -452,8 +479,11 @@ async fn test_iceberg_snapshot_creation() {
     assert_eq!(snapshot.disk_files.len(), 2);
     for (cur_data_file, cur_deletion_vector) in snapshot.disk_files.into_iter() {
         // Check the first data file.
-        if cur_data_file == old_data_file {
-            assert!(tokio::fs::metadata(cur_data_file.file_path()).await.is_ok());
+        if cur_data_file.file_path() == old_data_file.file_path() {
+            let actual_arrow_batch = load_arrow_batch(&cur_data_file.file_path()).await;
+            let expected_arrow_batch = arrow_batch_1.clone();
+            assert_eq!(actual_arrow_batch, expected_arrow_batch);
+            // Check the first deletion vector.
             assert_eq!(
                 cur_deletion_vector
                     .batch_deletion_vector
@@ -465,8 +495,10 @@ async fn test_iceberg_snapshot_creation() {
         }
 
         // Check the second data file.
-        // TODO(hjiang): Check data file content.
-        assert!(tokio::fs::metadata(cur_data_file.file_path()).await.is_ok());
+        let actual_arrow_batch = load_arrow_batch(&cur_data_file.file_path()).await;
+        let expected_arrow_batch = arrow_batch_2.clone();
+        assert_eq!(actual_arrow_batch, expected_arrow_batch);
+        // Check the second deletion vector.
         let deleted_rows = cur_deletion_vector
             .batch_deletion_vector
             .collect_deleted_rows();

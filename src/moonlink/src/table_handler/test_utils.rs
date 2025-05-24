@@ -9,12 +9,14 @@ use crate::table_handler::{TableEvent, TableHandler}; // Ensure this path is cor
 use crate::union_read::{decode_read_state_for_testing, ReadStateManager};
 use crate::{IcebergSnapshotStateManager, IcebergTableManager, TableConfig as MooncakeTableConfig};
 
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow_array::RecordBatch;
 use iceberg::io::FileIOBuilder;
+use iceberg::io::FileRead;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
-
-use arrow::datatypes::{DataType, Field, Schema};
 use tokio::sync::{mpsc, watch};
 
 /// Creates a default schema for testing.
@@ -247,6 +249,23 @@ pub async fn check_read_snapshot(
         );
     }
     verify_files_and_deletions(&files, position_deletes, deletion_vectors, expected_ids).await;
+}
+
+/// Test util function to load all arrow batch from the given local parquet file.
+pub(crate) async fn load_arrow_batch(filepath: &str) -> RecordBatch {
+    let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+    let input_file = file_io.new_input(filepath).unwrap();
+    let input_file_metadata = input_file.metadata().await.unwrap();
+    let reader = input_file.reader().await.unwrap();
+    let bytes = reader.read(0..input_file_metadata.size).await.unwrap();
+    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
+    let mut reader = builder.build().unwrap();
+    let batch = reader
+        .next()
+        .transpose()
+        .unwrap()
+        .expect("Should have one batch");
+    batch
 }
 
 /// Test util function to check consistency for snapshot batch deletion vector and deletion puffin blob.
