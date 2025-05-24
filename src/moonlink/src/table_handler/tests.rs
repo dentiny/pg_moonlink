@@ -509,4 +509,55 @@ async fn test_iceberg_snapshot_creation() {
         );
         check_deletion_vector_consistency(&cur_deletion_vector).await;
     }
+
+    // ---- Create snapshot only with old records deleted ----
+    env.initiate_snapshot(/*lsn=*/ 7).await;
+    env.delete_row(
+        /*id=*/ 2, /*name=*/ "Bob", /*age=*/ 20, /*lsn=*/ 6,
+        /*xact_id=*/ None,
+    )
+    .await;
+    env.commit(/*lsn=*/ 7).await;
+
+    // Block wait until iceberg snapshot created.
+    env.sync_snapshot_completion().await;
+
+    // Load from iceberg table manager to check snapshot status.
+    let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
+    let snapshot = iceberg_table_manager
+        .load_snapshot_from_table()
+        .await
+        .unwrap();
+    assert_eq!(snapshot.disk_files.len(), 2);
+    for (cur_data_file, cur_deletion_vector) in snapshot.disk_files.into_iter() {
+        // Check the first data file.
+        if cur_data_file.file_path() == old_data_file.file_path() {
+            let actual_arrow_batch = load_arrow_batch(cur_data_file.file_path()).await;
+            let expected_arrow_batch = arrow_batch_1.clone();
+            assert_eq!(actual_arrow_batch, expected_arrow_batch);
+            // Check the first deletion vector.
+            assert_eq!(
+                cur_deletion_vector
+                    .batch_deletion_vector
+                    .collect_deleted_rows(),
+                vec![0]
+            );
+            check_deletion_vector_consistency(&cur_deletion_vector).await;
+            continue;
+        }
+
+        // Check the second data file.
+        let actual_arrow_batch = load_arrow_batch(cur_data_file.file_path()).await;
+        let expected_arrow_batch = arrow_batch_2.clone();
+        assert_eq!(actual_arrow_batch, expected_arrow_batch);
+        // Check the second deletion vector.
+        // Check the first deletion vector.
+        assert_eq!(
+            cur_deletion_vector
+                .batch_deletion_vector
+                .collect_deleted_rows(),
+            vec![0]
+        );
+        check_deletion_vector_consistency(&cur_deletion_vector).await;
+    }
 }

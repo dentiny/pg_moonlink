@@ -125,6 +125,7 @@ impl TableHandler {
                             }
                         }
                         TableEvent::StreamCommit { lsn, xact_id } => {
+                            // TODO(hiang): Support force snapshot creation.
                             if let Err(e) = table.commit_transaction_stream(xact_id, lsn).await {
                                 println!("Stream commit flush failed: {}", e);
                             }
