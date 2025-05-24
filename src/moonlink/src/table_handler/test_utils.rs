@@ -260,12 +260,12 @@ pub(crate) async fn load_arrow_batch(filepath: &str) -> RecordBatch {
     let bytes = reader.read(0..input_file_metadata.size).await.unwrap();
     let builder = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
     let mut reader = builder.build().unwrap();
-    let batch = reader
+
+    reader
         .next()
         .transpose()
         .unwrap()
-        .expect("Should have one batch");
-    batch
+        .expect("Should have one batch")
 }
 
 /// Test util function to check consistency for snapshot batch deletion vector and deletion puffin blob.

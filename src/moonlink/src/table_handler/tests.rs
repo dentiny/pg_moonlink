@@ -439,7 +439,7 @@ async fn test_iceberg_snapshot_creation() {
     assert_eq!(snapshot.disk_files.len(), 1);
     let (cur_data_file, cur_deletion_vector) = snapshot.disk_files.into_iter().next().unwrap();
     // Check data file.
-    let actual_arrow_batch = load_arrow_batch(&cur_data_file.file_path()).await;
+    let actual_arrow_batch = load_arrow_batch(cur_data_file.file_path()).await;
     let expected_arrow_batch = arrow_batch_1.clone();
     assert_eq!(actual_arrow_batch, expected_arrow_batch);
     // Check deletion vector.
@@ -480,7 +480,7 @@ async fn test_iceberg_snapshot_creation() {
     for (cur_data_file, cur_deletion_vector) in snapshot.disk_files.into_iter() {
         // Check the first data file.
         if cur_data_file.file_path() == old_data_file.file_path() {
-            let actual_arrow_batch = load_arrow_batch(&cur_data_file.file_path()).await;
+            let actual_arrow_batch = load_arrow_batch(cur_data_file.file_path()).await;
             let expected_arrow_batch = arrow_batch_1.clone();
             assert_eq!(actual_arrow_batch, expected_arrow_batch);
             // Check the first deletion vector.
@@ -495,7 +495,7 @@ async fn test_iceberg_snapshot_creation() {
         }
 
         // Check the second data file.
-        let actual_arrow_batch = load_arrow_batch(&cur_data_file.file_path()).await;
+        let actual_arrow_batch = load_arrow_batch(cur_data_file.file_path()).await;
         let expected_arrow_batch = arrow_batch_2.clone();
         assert_eq!(actual_arrow_batch, expected_arrow_batch);
         // Check the second deletion vector.
