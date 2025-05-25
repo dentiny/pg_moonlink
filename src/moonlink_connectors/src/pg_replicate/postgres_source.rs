@@ -1,6 +1,8 @@
+use std::sync::RwLock;
 use std::{
     collections::HashMap,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
     time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH},
 };
@@ -49,9 +51,10 @@ pub enum PostgresSourceError {
 
 pub struct PostgresSource {
     replication_client: ReplicationClient,
-    table_schemas: HashMap<TableId, TableSchema>,
+    table_schemas: Arc<RwLock<HashMap<TableId, TableSchema>>>,
     slot_name: Option<String>,
     publication: Option<String>,
+    uri: String,
 }
 
 impl PostgresSource {
@@ -72,9 +75,10 @@ impl PostgresSource {
             .await?;
         Ok(PostgresSource {
             replication_client,
-            table_schemas,
+            table_schemas: Arc::new(RwLock::new(table_schemas)),
             publication,
             slot_name,
+            uri: uri.to_string(),
         })
     }
 
@@ -108,8 +112,28 @@ impl PostgresSource {
         })
     }
 
-    pub fn get_table_schemas(&self) -> &HashMap<TableId, TableSchema> {
-        &self.table_schemas
+    pub async fn get_table_schemas(&self) -> HashMap<TableId, TableSchema> {
+        self.table_schemas.read().unwrap().clone()
+    }
+
+    pub async fn fetch_table_schema(
+        &mut self,
+        table_name: &str,
+        publication: Option<&str>,
+    ) -> Result<TableSchema, PostgresSourceError> {
+        // Open new connection to get table schema
+        let mut replication_client = ReplicationClient::connect_no_tls(&self.uri).await?;
+        replication_client.begin_readonly_transaction().await?;
+        let (schema, name) = TableName::parse_schema_name(table_name);
+        let table_schema = replication_client
+            .get_table_schema(TableName { schema, name }, publication)
+            .await?;
+        // Add the table schema to the source so that we can use it to convert cdc events.
+        self.table_schemas
+            .write()
+            .unwrap()
+            .insert(table_schema.table_id, table_schema.clone());
+        Ok(table_schema)
     }
 
     pub async fn get_table_copy_stream(
@@ -215,7 +239,7 @@ pin_project! {
     pub struct CdcStream {
         #[pin]
         stream: LogicalReplicationStream,
-        table_schemas: HashMap<TableId, TableSchema>,
+        table_schemas: Arc<RwLock<HashMap<TableId, TableSchema>>>,
         postgres_epoch: SystemTime,
     }
 }
@@ -250,10 +274,14 @@ impl Stream for CdcStream {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
         match ready!(this.stream.poll_next(cx)) {
-            Some(Ok(msg)) => match CdcEventConverter::try_from(msg, this.table_schemas) {
-                Ok(row) => Poll::Ready(Some(Ok(row))),
-                Err(e) => Poll::Ready(Some(Err(e.into()))),
-            },
+            Some(Ok(msg)) => {
+                let table_schemas = this.table_schemas.read().unwrap();
+                println!("table_schemas: {:?}", table_schemas);
+                match CdcEventConverter::try_from(msg, &table_schemas) {
+                    Ok(row) => Poll::Ready(Some(Ok(row))),
+                    Err(e) => Poll::Ready(Some(Err(e.into()))),
+                }
+            }
             Some(Err(e)) => Poll::Ready(Some(Err(e.into()))),
             None => Poll::Ready(None),
         }

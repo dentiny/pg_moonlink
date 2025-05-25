@@ -13,13 +13,12 @@ use tokio::sync::{mpsc::Sender, watch};
 /// Components required to replicate a single table.
 /// Components that the [`Sink`] needs for processing CDC events.
 pub struct TableComponents {
-    pub handler: TableHandler,
     pub event_sender: Sender<TableEvent>,
 }
 
 /// Resources that should be returned to the caller when a table is initialised.
 pub struct TableResources {
-    pub sink_components: TableComponents,
+    pub event_sender: Sender<TableEvent>,
     pub read_state_manager: ReadStateManager,
     pub iceberg_snapshot_manager: IcebergSnapshotStateManager,
 }
@@ -59,13 +58,8 @@ pub async fn build_table_components(
         IcebergSnapshotStateManager::new(handler.get_event_sender(), snapshot_completion_rx);
     let event_sender = handler.get_event_sender();
 
-    let sink_components = TableComponents {
-        handler,
-        event_sender,
-    };
-
     TableResources {
-        sink_components,
+        event_sender,
         read_state_manager,
         iceberg_snapshot_manager,
     }

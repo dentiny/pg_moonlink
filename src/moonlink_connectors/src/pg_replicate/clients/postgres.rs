@@ -388,7 +388,7 @@ impl ReplicationClient {
         Ok(table_schemas)
     }
 
-    async fn get_table_schema(
+    pub async fn get_table_schema(
         &self,
         table_name: TableName,
         publication: Option<&str>,

@@ -44,9 +44,10 @@ impl<T: Eq + Hash> ReplicationManager<T> {
             let base_path = tokio::fs::canonicalize(&self.table_base_path)
                 .await
                 .map_err(PostgresSourceError::Io)?;
-            let replication_connection =
+            let mut replication_connection =
                 ReplicationConnection::new(uri.to_owned(), base_path.to_str().unwrap().to_string())
                     .await?;
+            replication_connection.start_replication().await?;
             self.connections
                 .insert(uri.to_string(), replication_connection);
         }
