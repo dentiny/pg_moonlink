@@ -198,6 +198,8 @@ pub struct SnapshotTask {
     ///
     /// Flush LSN for iceberg snapshot.
     iceberg_flush_lsn: Option<u64>,
+    /// Persisted new data files.
+    iceberg_persisted_data_files: Vec<MooncakeDataFileRef>,
     /// Puffin blobs which have been persisted into iceberg snapshot.
     iceberg_persisted_puffin_blob: HashMap<MooncakeDataFileRef, PuffinBlobRef>,
 }
@@ -215,6 +217,7 @@ impl SnapshotTask {
             new_flush_lsn: None,
             new_commit_point: None,
             iceberg_flush_lsn: None,
+            iceberg_persisted_data_files: Vec::new(),
             iceberg_persisted_puffin_blob: HashMap::new(),
         }
     }
@@ -306,8 +309,10 @@ pub(crate) struct IcebergSnapshotResult {
     pub(crate) table_manager: Box<dyn TableManager>,
     /// Iceberg flush LSN.
     pub(crate) flush_lsn: u64,
-    /// Persisted data file and deletion vector in the iceberg snapshot.
-    persisted_content: HashMap<Arc<MooncakeDataFile>, PuffinBlobRef>,
+    /// Persisted data files.
+    pub(crate) new_data_files: Vec<MooncakeDataFileRef>,
+    /// Persisted puffin blob reference.
+    pub(crate) puffin_blob_ref: HashMap<MooncakeDataFileRef, PuffinBlobRef>,
 }
 
 impl MooncakeTable {
@@ -371,10 +376,16 @@ impl MooncakeTable {
 
         assert!(self
             .next_snapshot_task
+            .iceberg_persisted_data_files
+            .is_empty());
+        self.next_snapshot_task.iceberg_persisted_data_files = iceberg_snapshot_res.new_data_files;
+
+        assert!(self
+            .next_snapshot_task
             .iceberg_persisted_puffin_blob
             .is_empty());
         self.next_snapshot_task.iceberg_persisted_puffin_blob =
-            iceberg_snapshot_res.persisted_content;
+            iceberg_snapshot_res.puffin_blob_ref;
     }
 
     /// Get iceberg snapshot flush LSN.
@@ -712,6 +723,7 @@ impl MooncakeTable {
         snapshot_payload: IcebergSnapshotPayload,
     ) -> IcebergSnapshotResult {
         let flush_lsn = snapshot_payload.flush_lsn;
+        let new_data_files = snapshot_payload.data_files.clone();
         let puffin_blob_ref = iceberg_table_manager
             .sync_snapshot(snapshot_payload)
             .await
@@ -719,7 +731,8 @@ impl MooncakeTable {
         IcebergSnapshotResult {
             table_manager: iceberg_table_manager,
             flush_lsn,
-            persisted_content: puffin_blob_ref,
+            new_data_files,
+            puffin_blob_ref: puffin_blob_ref,
         }
     }
     pub(crate) fn persist_iceberg_snapshot(
@@ -761,9 +774,19 @@ impl MooncakeTable {
 
                     // Create iceberg snapshot if possible
                     if let Some(payload) = payload {
+                        println!(
+                            "recieve payload to persist data files {:?}",
+                            payload.data_files
+                        );
+
                         let iceberg_join_handle = self.persist_iceberg_snapshot(payload);
                         match iceberg_join_handle.await {
                             Ok(iceberg_snapshot_res) => {
+                                println!(
+                                    "iceberg snapshot res = {:?}",
+                                    iceberg_snapshot_res.new_data_files
+                                );
+
                                 self.set_iceberg_snapshot_res(iceberg_snapshot_res);
                             }
                             Err(e) => {
@@ -777,6 +800,8 @@ impl MooncakeTable {
                 }
             }
         }
+
+        println!("\n\n\n===\n\n\n");
     }
 }
 
