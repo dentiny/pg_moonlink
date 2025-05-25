@@ -208,16 +208,36 @@ impl SnapshotTableState {
             .drain(0..persisted_new_data_files.len());
     }
 
+    /// Util function to decide whether to create iceberg snapshot by new data files.
+    fn create_iceberg_snapshot_by_data_files(
+        &self,
+        new_data_files: &Vec<Arc<MooncakeDataFile>>,
+        force_create: bool,
+    ) -> bool {
+        let data_file_snapshot_threshold = if !force_create {
+            self.mooncake_table_config
+                .iceberg_snapshot_new_data_file_count()
+        } else {
+            1
+        };
+        new_data_files.len() >= data_file_snapshot_threshold
+    }
+    /// Util function to decide whether to create iceberg snapshot by deletion vectors.
+    fn create_iceberg_snapshot_by_committed_logs(&self, force_create: bool) -> bool {
+        let mut deletion_record_snapshot_threshold = if !force_create {
+            self.mooncake_table_config
+                .iceberg_snapshot_new_committed_deletion_log()
+        } else {
+            1
+        };
+        self.committed_deletion_log.len() >= deletion_record_snapshot_threshold
+    }
+
     pub(super) async fn update_snapshot(
         &mut self,
         mut task: SnapshotTask,
         force_create: bool,
     ) -> (u64, Option<IcebergSnapshotPayload>) {
-        println!(
-            "iceberg already persist data files {:?}",
-            task.iceberg_persisted_data_files
-        );
-
         // Reflect iceberg snapshot to mooncake snapshot.
         self.prune_committed_deletion_logs(&task);
         self.prune_persisted_data_files(std::mem::take(&mut task.iceberg_persisted_data_files));
@@ -229,8 +249,6 @@ impl SnapshotTableState {
         //
         // To reduce iceberg write frequency, only create new iceberg snapshot when there're new data files.
         let new_data_files = task.get_new_data_files();
-
-        println!("new data files are created {:?}", new_data_files);
 
         self.merge_mem_indices(&mut task);
         self.finalize_batches(&mut task);
@@ -254,30 +272,15 @@ impl SnapshotTableState {
             .unpersisted_data_files
             .extend(new_data_files.clone());
 
-        println!(
-            "now unpersisted data files are {:?}",
-            self.unpersisted_iceberg_records.unpersisted_data_files
-        );
-
         // Till this point, committed changes have been reflected to current snapshot; sync the latest change to iceberg.
         // To reduce iceberg persistence overhead, we only snapshot when (1) there're persisted data files, or (2) accumulated unflushed deletion vector exceeds threshold.
         //
         // TODO(hjiang): Error handling for snapshot sync-up.
         // TODO(hjiang): Add unit tests for cases we don't flush every time new data files are generated.
         let mut iceberg_snapshot_payload: Option<IcebergSnapshotPayload> = None;
-        let mut data_file_snapshot_threshold = self
-            .mooncake_table_config
-            .iceberg_snapshot_new_data_file_count();
-        let mut deletion_record_snapshot_threshold = self
-            .mooncake_table_config
-            .iceberg_snapshot_new_committed_deletion_log();
-        if force_create {
-            data_file_snapshot_threshold = 1;
-            deletion_record_snapshot_threshold = 1;
-        }
-        let flush_by_data_files = new_data_files.len() >= data_file_snapshot_threshold;
-        let flush_by_deletion_logs =
-            self.committed_deletion_log.len() >= deletion_record_snapshot_threshold;
+        let flush_by_data_files =
+            self.create_iceberg_snapshot_by_data_files(&new_data_files, force_create);
+        let flush_by_deletion_logs = self.create_iceberg_snapshot_by_committed_logs(force_create);
 
         if self.current_snapshot.data_file_flush_lsn.is_some()
             && (flush_by_data_files || flush_by_deletion_logs)

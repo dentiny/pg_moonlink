@@ -774,19 +774,9 @@ impl MooncakeTable {
 
                     // Create iceberg snapshot if possible
                     if let Some(payload) = payload {
-                        println!(
-                            "recieve payload to persist data files {:?}",
-                            payload.data_files
-                        );
-
                         let iceberg_join_handle = self.persist_iceberg_snapshot(payload);
                         match iceberg_join_handle.await {
                             Ok(iceberg_snapshot_res) => {
-                                println!(
-                                    "iceberg snapshot res = {:?}",
-                                    iceberg_snapshot_res.new_data_files
-                                );
-
                                 self.set_iceberg_snapshot_res(iceberg_snapshot_res);
                             }
                             Err(e) => {
@@ -800,8 +790,6 @@ impl MooncakeTable {
                 }
             }
         }
-
-        println!("\n\n\n===\n\n\n");
     }
 }
 

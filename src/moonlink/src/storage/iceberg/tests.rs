@@ -798,7 +798,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         &old_data_entry.unwrap(),
         data_entry,
         "Add new data file shouldn't change existing persisted items"
-    );
+    ); // <--- failure here
     let (file_in_new_snapshot, _) = snapshot
         .disk_files
         .iter()
