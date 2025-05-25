@@ -8,9 +8,7 @@ mod table_snapshot;
 
 use super::iceberg::puffin_utils::PuffinBlobRef;
 use super::index::{MemIndex, MooncakeIndex};
-use super::storage_utils::{
-    MooncakeDataFile, MooncakeDataFileRef, RawDeletionRecord, RecordLocation,
-};
+use super::storage_utils::{MooncakeDataFileRef, RawDeletionRecord, RecordLocation};
 use crate::error::{Error, Result};
 use crate::row::{IdentityProp, MoonlinkRow};
 use crate::storage::iceberg::iceberg_table_manager::{
