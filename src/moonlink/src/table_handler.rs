@@ -1,5 +1,6 @@
 use crate::row::MoonlinkRow;
 use crate::storage::mooncake_table::IcebergSnapshotPayload;
+use crate::storage::mooncake_table::IcebergSnapshotResult;
 use crate::storage::MooncakeTable;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
@@ -72,8 +73,15 @@ impl TableHandler {
         mut event_receiver: Receiver<TableEvent>,
         mut table: MooncakeTable,
     ) {
-        let mut snapshot_handle: Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> = None;
         let mut periodic_snapshot_interval = time::interval(Duration::from_millis(500));
+
+        // Join handle for mooncake snapshot.
+        let mut mooncake_snapshot_handle: Option<
+            JoinHandle<(u64, Option<IcebergSnapshotPayload>)>,
+        > = None;
+
+        // Join handle for iceberg snapshot.
+        let mut iceberg_snapshot_handle: Option<JoinHandle<IcebergSnapshotResult>> = None;
 
         // Requested minimum LSN for a force snapshot request.
         let mut force_snapshot_lsn: Option<u64> = None;
@@ -126,7 +134,7 @@ impl TableHandler {
                             // 1. force snapshot is requested
                             // and 2. LSN which meets force snapshot requirement has appeared, before that we still allow buffering
                             // and 3. there's no snapshot creation operation ongoing
-                            let need_force_snapshot = force_snapshot_lsn.is_some() && lsn >= force_snapshot_lsn.unwrap() && snapshot_handle.is_none();
+                            let need_force_snapshot = force_snapshot_lsn.is_some() && lsn >= force_snapshot_lsn.unwrap() && mooncake_snapshot_handle.is_none();
 
                             if table.should_flush() || need_force_snapshot {
                                 if let Err(e) = table.flush(lsn).await {
@@ -134,7 +142,7 @@ impl TableHandler {
                                 }
                             }
                             if need_force_snapshot {
-                                snapshot_handle = table.force_create_snapshot();
+                                mooncake_snapshot_handle = table.force_create_snapshot();
                             }
                         }
                         TableEvent::StreamCommit { lsn, xact_id } => {
@@ -176,9 +184,9 @@ impl TableHandler {
                         }
                     }
                 }
-                // Wait for the snapshot to complete.
+                // Wait for the mooncake snapshot to complete.
                 Some((lsn, iceberg_snapshot_payload)) = async {
-                    if let Some(handle) = &mut snapshot_handle {
+                    if let Some(handle) = &mut mooncake_snapshot_handle {
                         match handle.await {
                             Ok((lsn, iceberg_snapshot_payload)) => {
                                 Some((lsn, iceberg_snapshot_payload))
@@ -195,26 +203,46 @@ impl TableHandler {
                     // Notify read the mooncake table commit of LSN.
                     table.notify_snapshot_reader(lsn);
 
-                    // Process iceberg snapshop; and notify completion of iceberg snapshot, if flush LSN no earlier than requested LSN.
+                    // Process iceberg snapshot and trigger iceberg snapshot if necessary.
                     //
-                    // TODO(hjiang): Move iceberg snapshot creation out of eventloop.
-                    if let Some(iceberg_snapshot_payload) = iceberg_snapshot_payload {
-                        let cur_flush_lsn = iceberg_snapshot_payload.flush_lsn;
-                        table.persist_iceberg_snapshot(iceberg_snapshot_payload).await;
-                        table.set_iceberg_snapshot_lsn(cur_flush_lsn);
-
-                        if force_snapshot_lsn.is_some() && force_snapshot_lsn.unwrap() <= cur_flush_lsn {
-                            iceberg_snapshot_completion_tx.send(()).await.unwrap();
-                            force_snapshot_lsn = None;
+                    // TODO(hjiang): same as mooncake snapshot, there should be at most one iceberg snapshot ongoing; for simplicity, we skip iceberg snapshot if there's already one.
+                    // An optimization is skip generating payload if we know it's already taking place, but the risk is missing iceberg snapshot.
+                    if iceberg_snapshot_handle.is_none() {
+                        if let Some(iceberg_snapshot_payload) = iceberg_snapshot_payload {
+                            iceberg_snapshot_handle = Some(table.persist_iceberg_snapshot(iceberg_snapshot_payload));
                         }
                     }
 
-                    snapshot_handle = None;
+                    mooncake_snapshot_handle = None;
+                }
+                // Wait for iceberg snapshot flush operation to finish.
+                Some(iceberg_snapshot_res) = async {
+                    if let Some(handle) = &mut iceberg_snapshot_handle {
+                        match handle.await {
+                            Ok(iceberg_snapshot_res) => {
+                                Some(iceberg_snapshot_res)
+                            }
+                            Err(e) => {
+                                println!("Iceberg snapshot task gets cancelled: {:?}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        futures::future::pending::<Option<_>>().await
+                    }
+                } => {
+                    let iceberg_flush_lsn = iceberg_snapshot_res.flush_lsn;
+                    table.set_iceberg_snapshot_res(iceberg_snapshot_res);
+                    if force_snapshot_lsn.is_some() && force_snapshot_lsn.unwrap() <= iceberg_flush_lsn {
+                        iceberg_snapshot_completion_tx.send(()).await.unwrap();
+                        force_snapshot_lsn = None;
+                    }
+                    iceberg_snapshot_handle = None;
                 }
                 // Periodic snapshot based on time
                 _ = periodic_snapshot_interval.tick() => {
                     // Only create a periodic snapshot if there isn't already one in progress
-                    if snapshot_handle.is_some() {
+                    if mooncake_snapshot_handle.is_some() {
                         continue;
                     }
 
@@ -223,14 +251,14 @@ impl TableHandler {
                         if let Some(commit_lsn) = table_consistent_view_lsn {
                             if requested_lsn <= commit_lsn {
                                 table.flush(/*lsn=*/ commit_lsn).await.unwrap();
-                                snapshot_handle = table.force_create_snapshot();
+                                mooncake_snapshot_handle = table.force_create_snapshot();
                                 continue;
                             }
                         }
                     }
 
                     // Fallback to normal periodic snapshot.
-                    snapshot_handle = table.create_snapshot();
+                    mooncake_snapshot_handle = table.create_snapshot();
                 }
                 // If all senders have been dropped, exit the loop
                 else => {

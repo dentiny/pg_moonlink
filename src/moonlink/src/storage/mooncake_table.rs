@@ -8,7 +8,9 @@ mod table_snapshot;
 
 use super::iceberg::puffin_utils::PuffinBlobRef;
 use super::index::{MemIndex, MooncakeIndex};
-use super::storage_utils::{MooncakeDataFileRef, RawDeletionRecord, RecordLocation};
+use super::storage_utils::{
+    MooncakeDataFile, MooncakeDataFileRef, RawDeletionRecord, RecordLocation,
+};
 use crate::error::{Error, Result};
 use crate::row::{IdentityProp, MoonlinkRow};
 use crate::storage::iceberg::iceberg_table_manager::{
@@ -289,13 +291,23 @@ pub struct MooncakeTable {
     next_file_id: u32,
 
     /// Iceberg table manager, used to sync snapshot to the corresponding iceberg table.
-    iceberg_table_manager: Box<dyn TableManager>,
+    iceberg_table_manager: Option<Box<dyn TableManager>>,
 
     /// LSN of the latest commit.
     last_commit_lsn: Arc<AtomicU64>,
 
     /// LSN of the latest iceberg snapshot.
     last_iceberg_snapshot_lsn: Option<u64>,
+}
+
+/// Return type of async iceberg snapshot creation.
+pub(crate) struct IcebergSnapshotResult {
+    /// Table manager is (1) not `Sync` safe; (2) only used at iceberg snapshot creation, so we `move` it around every snapshot.
+    pub(crate) table_manager: Box<dyn TableManager>,
+    /// Iceberg flush LSN.
+    pub(crate) flush_lsn: u64,
+    /// Persisted data file and deletion vector in the iceberg snapshot.
+    persisted_content: HashMap<Arc<MooncakeDataFile>, PuffinBlobRef>,
 }
 
 impl MooncakeTable {
@@ -339,19 +351,30 @@ impl MooncakeTable {
             table_snapshot_watch_sender,
             table_snapshot_watch_receiver,
             next_file_id: 0,
-            iceberg_table_manager,
+            iceberg_table_manager: Some(iceberg_table_manager),
             last_commit_lsn: Arc::new(AtomicU64::new(0)),
             last_iceberg_snapshot_lsn: None,
         }
     }
 
     /// Set iceberg snapshot flush LSN, called after a snapshot operation.
-    pub(crate) fn set_iceberg_snapshot_lsn(&mut self, lsn: u64) {
+    pub(crate) fn set_iceberg_snapshot_res(&mut self, iceberg_snapshot_res: IcebergSnapshotResult) {
+        let iceberg_flush_lsn = iceberg_snapshot_res.flush_lsn;
         assert!(
             self.last_iceberg_snapshot_lsn.is_none()
-                || self.last_iceberg_snapshot_lsn.unwrap() < lsn
+                || self.last_iceberg_snapshot_lsn.unwrap() < iceberg_flush_lsn
         );
-        self.last_iceberg_snapshot_lsn = Some(lsn);
+        self.last_iceberg_snapshot_lsn = Some(iceberg_flush_lsn);
+
+        assert!(self.iceberg_table_manager.is_none());
+        self.iceberg_table_manager = Some(iceberg_snapshot_res.table_manager);
+
+        assert!(self
+            .next_snapshot_task
+            .iceberg_persisted_puffin_blob
+            .is_empty());
+        self.next_snapshot_task.iceberg_persisted_puffin_blob =
+            iceberg_snapshot_res.persisted_content;
     }
 
     /// Get iceberg snapshot flush LSN.
@@ -684,25 +707,30 @@ impl MooncakeTable {
     }
 
     // TODO(hjiang): Better error handling at TableHandler eventloop.
-    pub(crate) async fn persist_iceberg_snapshot(
-        &mut self,
+    async fn persist_iceberg_snapshot_impl(
+        mut iceberg_table_manager: Box<dyn TableManager>,
         snapshot_payload: IcebergSnapshotPayload,
-    ) {
+    ) -> IcebergSnapshotResult {
         let flush_lsn = snapshot_payload.flush_lsn;
-        let puffin_blob_ref = self
-            .iceberg_table_manager
+        let puffin_blob_ref = iceberg_table_manager
             .sync_snapshot(snapshot_payload)
             .await
             .unwrap();
-
-        assert!(self.next_snapshot_task.iceberg_flush_lsn.is_none());
-        self.next_snapshot_task.iceberg_flush_lsn = Some(flush_lsn);
-
-        assert!(self
-            .next_snapshot_task
-            .iceberg_persisted_puffin_blob
-            .is_empty());
-        self.next_snapshot_task.iceberg_persisted_puffin_blob = puffin_blob_ref;
+        IcebergSnapshotResult {
+            table_manager: iceberg_table_manager,
+            flush_lsn,
+            persisted_content: puffin_blob_ref,
+        }
+    }
+    pub(crate) fn persist_iceberg_snapshot(
+        &mut self,
+        snapshot_payload: IcebergSnapshotPayload,
+    ) -> JoinHandle<IcebergSnapshotResult> {
+        let iceberg_table_manager = self.iceberg_table_manager.take().unwrap();
+        tokio::task::spawn(Self::persist_iceberg_snapshot_impl(
+            iceberg_table_manager,
+            snapshot_payload,
+        ))
     }
 
     async fn create_snapshot_async(
@@ -724,16 +752,24 @@ impl MooncakeTable {
     // Test util function, which updates mooncake table snapshot and create iceberg snapshot in a serial fashion.
     #[cfg(test)]
     pub(crate) async fn create_mooncake_and_iceberg_snapshot_for_test(&mut self) {
-        if let Some(join_handle) = self.create_snapshot() {
+        if let Some(mooncake_join_handle) = self.create_snapshot() {
             // Wait for the snapshot async task to complete.
-            match join_handle.await {
+            match mooncake_join_handle.await {
                 Ok((lsn, payload)) => {
                     // Notify readers that the mooncake snapshot has been created.
                     self.notify_snapshot_reader(lsn);
 
                     // Create iceberg snapshot if possible
                     if let Some(payload) = payload {
-                        self.persist_iceberg_snapshot(payload).await;
+                        let iceberg_join_handle = self.persist_iceberg_snapshot(payload);
+                        match iceberg_join_handle.await {
+                            Ok(iceberg_snapshot_res) => {
+                                self.set_iceberg_snapshot_res(iceberg_snapshot_res);
+                            }
+                            Err(e) => {
+                                panic!("Iceberg snapshot task gets cancelled: {:?}", e);
+                            }
+                        }
                     }
                 }
                 Err(e) => {
