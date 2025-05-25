@@ -439,7 +439,7 @@ async fn test_async_iceberg_snapshot() {
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 10);
 
     let (data_file_1, deletion_vector_1) = snapshot.disk_files.iter().next().unwrap();
-    let actual_arrow_batch = load_arrow_batch(&file_io, &data_file_1.file_path())
+    let actual_arrow_batch = load_arrow_batch(&file_io, data_file_1.file_path())
         .await
         .unwrap();
     assert_eq!(actual_arrow_batch, expected_arrow_batch_1);
@@ -448,7 +448,7 @@ async fn test_async_iceberg_snapshot() {
         .collect_deleted_rows()
         .is_empty());
     assert!(deletion_vector_1.puffin_deletion_blob.is_none());
-    validate_recovered_snapshot(&snapshot, &temp_dir.path().to_str().unwrap()).await;
+    validate_recovered_snapshot(&snapshot, temp_dir.path().to_str().unwrap()).await;
     check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     // Operation group 3: Append new rows and create mooncake snapshot.
@@ -478,7 +478,7 @@ async fn test_async_iceberg_snapshot() {
     assert_eq!(snapshot.indices.file_indices.len(), 3);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 40);
 
-    validate_recovered_snapshot(&snapshot, &temp_dir.path().to_str().unwrap()).await;
+    validate_recovered_snapshot(&snapshot, temp_dir.path().to_str().unwrap()).await;
     check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     // Find the key-value pair, which correspond to old snapshot's only key.
@@ -506,7 +506,7 @@ async fn test_async_iceberg_snapshot() {
             .collect_deleted_rows()
             .is_empty());
 
-        let actual_arrow_batch = load_arrow_batch(&file_io, &cur_data_file.file_path())
+        let actual_arrow_batch = load_arrow_batch(&file_io, cur_data_file.file_path())
             .await
             .unwrap();
         if actual_arrow_batch == expected_arrow_batch_2 {
