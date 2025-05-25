@@ -367,6 +367,35 @@ async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {
 /// In the test case we perform one iceberg snapshot after three mooncake snapshots.
 #[tokio::test]
 async fn test_async_iceberg_snapshot() {
+    let expected_arrow_batch_1 = RecordBatch::try_new(
+        create_test_arrow_schema(),
+        vec![
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(StringArray::from(vec!["John"])),
+            Arc::new(Int32Array::from(vec![10])),
+        ],
+    )
+    .unwrap();
+    let expected_arrow_batch_2 = RecordBatch::try_new(
+        create_test_arrow_schema(),
+        vec![
+            Arc::new(Int32Array::from(vec![2])),
+            Arc::new(StringArray::from(vec!["Bob"])),
+            Arc::new(Int32Array::from(vec![20])),
+        ],
+    )
+    .unwrap();
+    let expected_arrow_batch_3 = RecordBatch::try_new(
+        create_test_arrow_schema(),
+        vec![
+            Arc::new(Int32Array::from(vec![3])),
+            Arc::new(StringArray::from(vec!["Cat"])),
+            Arc::new(Int32Array::from(vec![30])),
+        ],
+    )
+    .unwrap();
+    let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+
     let temp_dir = tempfile::tempdir().unwrap();
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
@@ -374,11 +403,11 @@ async fn test_async_iceberg_snapshot() {
     let row_1 = MoonlinkRow::new(vec![
         RowValue::Int32(1),
         RowValue::ByteArray("John".as_bytes().to_vec()),
-        RowValue::Int32(30),
+        RowValue::Int32(10),
     ]);
     table.append(row_1.clone()).unwrap();
-    table.commit(/*lsn=*/10);
-    table.flush(/*lsn=*/10).await.unwrap();
+    table.commit(/*lsn=*/ 10);
+    table.flush(/*lsn=*/ 10).await.unwrap();
     let mooncake_snapshot_handle = table.create_snapshot().unwrap();
     let (_, iceberg_snapshot_payload) = mooncake_snapshot_handle.await.unwrap();
 
@@ -401,12 +430,26 @@ async fn test_async_iceberg_snapshot() {
     table.set_iceberg_snapshot_res(iceberg_snapshot_res);
 
     // Load and check iceberg snapshot.
-    let snapshot = iceberg_table_manager.load_snapshot_from_table().await.unwrap();
+    let snapshot = iceberg_table_manager
+        .load_snapshot_from_table()
+        .await
+        .unwrap();
     assert_eq!(snapshot.disk_files.len(), 1);
     assert_eq!(snapshot.indices.file_indices.len(), 1);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 10);
-    // TODO(hjiang): Check parquet file content.
-    let data_file_1 = snapshot.disk_files.iter().next().unwrap().0.clone();
+
+    let (data_file_1, deletion_vector_1) = snapshot.disk_files.iter().next().unwrap();
+    let actual_arrow_batch = load_arrow_batch(&file_io, &data_file_1.file_path())
+        .await
+        .unwrap();
+    assert_eq!(actual_arrow_batch, expected_arrow_batch_1);
+    assert!(deletion_vector_1
+        .batch_deletion_vector
+        .collect_deleted_rows()
+        .is_empty());
+    assert!(deletion_vector_1.puffin_deletion_blob.is_none());
+    validate_recovered_snapshot(&snapshot, &temp_dir.path().to_str().unwrap()).await;
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     // Operation group 3: Append new rows and create mooncake snapshot.
     let row_3 = MoonlinkRow::new(vec![
@@ -414,13 +457,66 @@ async fn test_async_iceberg_snapshot() {
         RowValue::ByteArray("Cat".as_bytes().to_vec()),
         RowValue::Int32(30),
     ]);
-    table.append(row_2.clone()).unwrap();
+    table.append(row_3.clone()).unwrap();
     table.commit(/*lsn=*/ 40);
     table.flush(/*lsn=*/ 40).await.unwrap();
     let mooncake_snapshot_handle = table.create_snapshot().unwrap();
     let (_, iceberg_snapshot_payload) = mooncake_snapshot_handle.await.unwrap();
-    
 
+    // Create iceberg snapshot for the mooncake snapshot.
+    let iceberg_snapshot_handle = table.persist_iceberg_snapshot(iceberg_snapshot_payload.unwrap());
+    let iceberg_snapshot_res = iceberg_snapshot_handle.await.unwrap();
+    table.set_iceberg_snapshot_res(iceberg_snapshot_res);
+
+    // Load and check iceberg snapshot.
+    let (_, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
+    let mut snapshot = iceberg_table_manager
+        .load_snapshot_from_table()
+        .await
+        .unwrap();
+    assert_eq!(snapshot.disk_files.len(), 3);
+    assert_eq!(snapshot.indices.file_indices.len(), 3);
+    assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 40);
+
+    validate_recovered_snapshot(&snapshot, &temp_dir.path().to_str().unwrap()).await;
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
+
+    // Find the key-value pair, which correspond to old snapshot's only key.
+    let mut old_data_file: Option<MooncakeDataFileRef> = None;
+    for (cur_data_file, _) in snapshot.disk_files.iter() {
+        if cur_data_file.file_path() == data_file_1.file_path() {
+            old_data_file = Some(cur_data_file.clone());
+            break;
+        }
+    }
+    let old_data_file = old_data_file.unwrap();
+
+    // Left arrow record 2 and 3, both don't have deletion vector.
+    let deletion_entry = snapshot.disk_files.remove(&old_data_file).unwrap();
+    assert_eq!(
+        deletion_entry.batch_deletion_vector.collect_deleted_rows(),
+        vec![0]
+    );
+    let mut arrow_batch_2_persisted = false;
+    let mut arrow_batch_3_persisted = false;
+    for (cur_data_file, cur_deletion_vector) in snapshot.disk_files.iter() {
+        assert!(cur_deletion_vector.puffin_deletion_blob.is_none());
+        assert!(cur_deletion_vector
+            .batch_deletion_vector
+            .collect_deleted_rows()
+            .is_empty());
+
+        let actual_arrow_batch = load_arrow_batch(&file_io, &cur_data_file.file_path())
+            .await
+            .unwrap();
+        if actual_arrow_batch == expected_arrow_batch_2 {
+            arrow_batch_2_persisted = true;
+        } else if actual_arrow_batch == expected_arrow_batch_3 {
+            arrow_batch_3_persisted = true;
+        }
+    }
+    assert!(arrow_batch_2_persisted, "Arrow batch 2 is not persisted!");
+    assert!(arrow_batch_3_persisted, "Arrow batch 3 is not persisted!");
 }
 
 /// Test util function to check the given row doesn't exist in the snapshot indices.
