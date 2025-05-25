@@ -364,6 +364,7 @@ impl MooncakeTable {
 
     /// Set iceberg snapshot flush LSN, called after a snapshot operation.
     pub(crate) fn set_iceberg_snapshot_res(&mut self, iceberg_snapshot_res: IcebergSnapshotResult) {
+        // ---- Update mooncake table fields ----
         let iceberg_flush_lsn = iceberg_snapshot_res.flush_lsn;
         assert!(
             self.last_iceberg_snapshot_lsn.is_none()
@@ -373,6 +374,10 @@ impl MooncakeTable {
 
         assert!(self.iceberg_table_manager.is_none());
         self.iceberg_table_manager = Some(iceberg_snapshot_res.table_manager);
+
+        // ---- Update next snapshot task fields ---
+        assert!(self.next_snapshot_task.iceberg_flush_lsn.is_none());
+        self.next_snapshot_task.iceberg_flush_lsn = Some(iceberg_flush_lsn);
 
         assert!(self
             .next_snapshot_task
@@ -732,7 +737,7 @@ impl MooncakeTable {
             table_manager: iceberg_table_manager,
             flush_lsn,
             new_data_files,
-            puffin_blob_ref: puffin_blob_ref,
+            puffin_blob_ref,
         }
     }
     pub(crate) fn persist_iceberg_snapshot(

@@ -224,7 +224,7 @@ impl SnapshotTableState {
     }
     /// Util function to decide whether to create iceberg snapshot by deletion vectors.
     fn create_iceberg_snapshot_by_committed_logs(&self, force_create: bool) -> bool {
-        let mut deletion_record_snapshot_threshold = if !force_create {
+        let deletion_record_snapshot_threshold = if !force_create {
             self.mooncake_table_config
                 .iceberg_snapshot_new_committed_deletion_log()
         } else {
