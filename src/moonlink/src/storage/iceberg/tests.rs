@@ -369,7 +369,6 @@ async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {
 async fn test_async_iceberg_snapshot() {
     let temp_dir = tempfile::tempdir().unwrap();
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
-    let mut iceberg_snapshot_payload : Option<IcebergSnapshotPayload> = None;
 
     // Operation group 1: Append new rows and create mooncake snapshot.
     let row_1 = MoonlinkRow::new(vec![
@@ -381,8 +380,7 @@ async fn test_async_iceberg_snapshot() {
     table.commit(/*lsn=*/10);
     table.flush(/*lsn=*/10).await.unwrap();
     let mooncake_snapshot_handle = table.create_snapshot().unwrap();
-    let (_, payload) = mooncake_snapshot_handle.await.unwrap();
-    iceberg_snapshot_payload = payload;
+    let (_, iceberg_snapshot_payload) = mooncake_snapshot_handle.await.unwrap();
 
     // Operation group 2: Append new rows and create mooncake snapshot.
     let row_2 = MoonlinkRow::new(vec![
@@ -395,7 +393,7 @@ async fn test_async_iceberg_snapshot() {
     table.commit(/*lsn=*/ 30);
     table.flush(/*lsn=*/ 30).await.unwrap();
     let mooncake_snapshot_handle = table.create_snapshot().unwrap();
-    let (_, payload) = mooncake_snapshot_handle.await.unwrap();
+    let (_, _) = mooncake_snapshot_handle.await.unwrap();
 
     // Create iceberg snapshot for the first mooncake snapshot.
     let iceberg_snapshot_handle = table.persist_iceberg_snapshot(iceberg_snapshot_payload.unwrap());
@@ -408,8 +406,21 @@ async fn test_async_iceberg_snapshot() {
     assert_eq!(snapshot.indices.file_indices.len(), 1);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 10);
     // TODO(hjiang): Check parquet file content.
+    let data_file_1 = snapshot.disk_files.iter().next().unwrap().0.clone();
 
-    // Create 
+    // Operation group 3: Append new rows and create mooncake snapshot.
+    let row_3 = MoonlinkRow::new(vec![
+        RowValue::Int32(3),
+        RowValue::ByteArray("Cat".as_bytes().to_vec()),
+        RowValue::Int32(30),
+    ]);
+    table.append(row_2.clone()).unwrap();
+    table.commit(/*lsn=*/ 40);
+    table.flush(/*lsn=*/ 40).await.unwrap();
+    let mooncake_snapshot_handle = table.create_snapshot().unwrap();
+    let (_, iceberg_snapshot_payload) = mooncake_snapshot_handle.await.unwrap();
+    
+
 }
 
 /// Test util function to check the given row doesn't exist in the snapshot indices.

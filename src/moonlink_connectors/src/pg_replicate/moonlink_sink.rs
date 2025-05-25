@@ -90,7 +90,7 @@ impl Sink {
                     if let Some(event_sender) = event_sender {
                         event_sender
                             .send(TableEvent::Commit {
-                                lsn: commit_body.commit_lsn(),
+                                lsn: commit_body.end_lsn(),
                             })
                             .await
                             .unwrap();
@@ -109,7 +109,7 @@ impl Sink {
                         if let Some(event_sender) = event_sender {
                             event_sender
                                 .send(TableEvent::StreamCommit {
-                                    lsn: stream_commit_body.commit_lsn(),
+                                    lsn: stream_commit_body.end_lsn(),
                                     xact_id,
                                 })
                                 .await
