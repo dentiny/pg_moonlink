@@ -15,7 +15,9 @@ use crate::storage::iceberg::iceberg_table_manager::{
     IcebergTableConfig, IcebergTableManager, TableManager,
 };
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
-pub(crate) use crate::storage::mooncake_table::table_snapshot::IcebergSnapshotPayload;
+pub(crate) use crate::storage::mooncake_table::table_snapshot::{
+    IcebergSnapshotPayload, IcebergSnapshotResult,
+};
 use futures::executor::block_on;
 use std::collections::HashMap;
 use std::mem::take;
@@ -299,18 +301,6 @@ pub struct MooncakeTable {
 
     /// LSN of the latest iceberg snapshot.
     last_iceberg_snapshot_lsn: Option<u64>,
-}
-
-/// Return type of async iceberg snapshot creation.
-pub(crate) struct IcebergSnapshotResult {
-    /// Table manager is (1) not `Sync` safe; (2) only used at iceberg snapshot creation, so we `move` it around every snapshot.
-    pub(crate) table_manager: Box<dyn TableManager>,
-    /// Iceberg flush LSN.
-    pub(crate) flush_lsn: u64,
-    /// Persisted data files.
-    pub(crate) new_data_files: Vec<MooncakeDataFileRef>,
-    /// Persisted puffin blob reference.
-    pub(crate) puffin_blob_ref: HashMap<MooncakeDataFileRef, PuffinBlobRef>,
 }
 
 impl MooncakeTable {

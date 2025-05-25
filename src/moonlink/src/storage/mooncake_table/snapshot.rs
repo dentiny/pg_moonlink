@@ -51,7 +51,7 @@ pub(crate) struct SnapshotTableState {
     /// ---- Items not persisted to iceberg snapshot ----
     ///
     /// Iceberg snapshot is created in an async style, which means it doesn't correspond 1-1 to mooncake snapshot, so we need to ensure idempotency for iceberg snapshot payload.
-    /// The following fields record unpersisted content, which will be place in iceberg payload everytime.
+    /// The following fields record unpersisted content, which will be placed in iceberg payload everytime.
     unpersisted_iceberg_records: UnpersistedIcebergSnapshotRecords,
 }
 
@@ -276,7 +276,6 @@ impl SnapshotTableState {
         // To reduce iceberg persistence overhead, we only snapshot when (1) there're persisted data files, or (2) accumulated unflushed deletion vector exceeds threshold.
         //
         // TODO(hjiang): Error handling for snapshot sync-up.
-        // TODO(hjiang): Add unit tests for cases we don't flush every time new data files are generated.
         let mut iceberg_snapshot_payload: Option<IcebergSnapshotPayload> = None;
         let flush_by_data_files =
             self.create_iceberg_snapshot_by_data_files(new_data_files.as_slice(), force_create);
