@@ -15,7 +15,7 @@ use crate::storage::storage_utils::{
     RecordLocation,
 };
 use parquet::arrow::AsyncArrowWriter;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::mem::take;
 use std::sync::Arc;
 
@@ -211,7 +211,7 @@ impl SnapshotTableState {
     /// Util function to decide whether to create iceberg snapshot by new data files.
     fn create_iceberg_snapshot_by_data_files(
         &self,
-        new_data_files: &Vec<Arc<MooncakeDataFile>>,
+        new_data_files: &[Arc<MooncakeDataFile>],
         force_create: bool,
     ) -> bool {
         let data_file_snapshot_threshold = if !force_create {
@@ -279,7 +279,7 @@ impl SnapshotTableState {
         // TODO(hjiang): Add unit tests for cases we don't flush every time new data files are generated.
         let mut iceberg_snapshot_payload: Option<IcebergSnapshotPayload> = None;
         let flush_by_data_files =
-            self.create_iceberg_snapshot_by_data_files(&new_data_files, force_create);
+            self.create_iceberg_snapshot_by_data_files(new_data_files.as_slice(), force_create);
         let flush_by_deletion_logs = self.create_iceberg_snapshot_by_committed_logs(force_create);
 
         if self.current_snapshot.data_file_flush_lsn.is_some()
@@ -294,9 +294,7 @@ impl SnapshotTableState {
                 data_files: self
                     .unpersisted_iceberg_records
                     .unpersisted_data_files
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>(),
+                    .to_vec(),
                 new_deletion_vector: aggregated_committed_deletion_logs,
                 file_indices: self.current_snapshot.indices.file_indices.clone(),
             });
