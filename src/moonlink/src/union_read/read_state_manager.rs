@@ -55,10 +55,7 @@ impl ReadStateManager {
             let current_replication_lsn = *replication_lsn_rx.borrow();
 
             let last_commit_lsn_val = last_commit_lsn.load(Ordering::Acquire);
-            if self.can_satisfy_read_from_snapshot(
-                requested_lsn,
-                current_snapshot_lsn,
-            ) {
+            if self.can_satisfy_read_from_snapshot(requested_lsn, current_snapshot_lsn) {
                 return self
                     .read_from_snapshot_and_update_cache(
                         current_snapshot_lsn,
