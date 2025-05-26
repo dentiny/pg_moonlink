@@ -84,10 +84,10 @@ impl ReadStateManager {
         &self,
         requested_lsn: Option<u64>,
         snapshot_lsn: u64,
-        replication_lsn: u64,
-        commit_lsn: u64,
+        _replication_lsn: u64,
+        _commit_lsn: u64,
     ) -> bool {
-        let is_snapshot_clean = snapshot_lsn == commit_lsn;
+        // let is_snapshot_clean = snapshot_lsn == commit_lsn;
         match requested_lsn {
             // If no specific LSN is requested, we can always try to read the latest.
             None => true,
@@ -96,7 +96,7 @@ impl ReadStateManager {
                 // 1. The requested LSN is already covered by the table snapshot.
                 // OR
                 // 2. The requested LSN is covered by replication, AND the snapshot is clean
-                req_lsn_val <= snapshot_lsn || (req_lsn_val <= replication_lsn && is_snapshot_clean)
+                req_lsn_val <= snapshot_lsn
             }
         }
     }
