@@ -99,6 +99,10 @@ impl Sink {
                 self.transaction_state.touched_tables.clear();
             }
             CdcEvent::StreamCommit(stream_commit_body) => {
+
+                println!("plan to send a stream commit!");
+                println!("all stream txns = {:?}, cur txn id = {:?}", self.streaming_transactions_state.keys(), stream_commit_body.xid());
+
                 let xact_id = stream_commit_body.xid();
                 if let Some(tables_in_txn) = self.streaming_transactions_state.get(&xact_id) {
                     for table_id in &tables_in_txn.touched_tables {
@@ -106,6 +110,9 @@ impl Sink {
                             let event_senders_guard = self.event_senders.read().unwrap();
                             event_senders_guard.get(table_id).cloned()
                         };
+
+                        println!("plan to send stream commit, stream commit body = {:?}, event sender is valid ? {}", stream_commit_body, event_sender.is_some());
+
                         if let Some(event_sender) = event_sender {
                             event_sender
                                 .send(TableEvent::StreamCommit {

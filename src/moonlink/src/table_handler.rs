@@ -73,7 +73,10 @@ impl TableHandler {
         mut event_receiver: Receiver<TableEvent>,
         mut table: MooncakeTable,
     ) {
-        let mut periodic_snapshot_interval = time::interval(Duration::from_millis(500));
+
+        println!("start a new eventloop!");
+
+        let mut periodic_snapshot_interval = time::interval(Duration::from_millis(2000));
 
         // Join handle for mooncake snapshot.
         let mut mooncake_snapshot_handle: Option<
@@ -128,6 +131,9 @@ impl TableHandler {
                             };
                         }
                         TableEvent::Commit { lsn } => {
+
+                            println!("batch commit operation!");
+
                             table.commit(lsn);
 
                             // Force create snapshot if
@@ -142,10 +148,16 @@ impl TableHandler {
                                 }
                             }
                             if need_force_snapshot {
+
+                                println!("completely not expected! why do we need force snapshot here?");
+
                                 mooncake_snapshot_handle = table.force_create_snapshot();
                             }
                         }
                         TableEvent::StreamCommit { lsn, xact_id } => {
+
+                            println!("perform a stream commit!");
+
                             // TODO(hiang): Support force snapshot creation.
                             if let Err(e) = table.commit_transaction_stream(xact_id, lsn).await {
                                 println!("Stream commit flush failed: {}", e);
@@ -200,6 +212,8 @@ impl TableHandler {
                         futures::future::pending::<Option<_>>().await
                     }
                 } => {
+                    println!("mooncake snapshot creation ok");
+
                     // Notify read the mooncake table commit of LSN.
                     table.notify_snapshot_reader(lsn);
 
@@ -209,10 +223,12 @@ impl TableHandler {
                     // An optimization is skip generating iceberg snapshot payload at mooncake snapshot if we know it's already taking place, but the risk is missing iceberg snapshot.
                     if iceberg_snapshot_handle.is_none() {
                         if let Some(iceberg_snapshot_payload) = iceberg_snapshot_payload {
+                            println!("create an iceberg snapshot");
                             iceberg_snapshot_handle = Some(table.persist_iceberg_snapshot(iceberg_snapshot_payload));
                         }
                     }
 
+                    println!("now we're reset mooncake_snapshot_handle");
                     mooncake_snapshot_handle = None;
                 }
                 // Wait for iceberg snapshot flush operation to finish.
@@ -231,6 +247,7 @@ impl TableHandler {
                         futures::future::pending::<Option<_>>().await
                     }
                 } => {
+                    println!("create an iceberg snapshot");
                     let iceberg_flush_lsn = iceberg_snapshot_res.flush_lsn;
                     table.set_iceberg_snapshot_res(iceberg_snapshot_res);
                     if force_snapshot_lsn.is_some() && force_snapshot_lsn.unwrap() <= iceberg_flush_lsn {
@@ -243,6 +260,7 @@ impl TableHandler {
                 _ = periodic_snapshot_interval.tick() => {
                     // Only create a periodic snapshot if there isn't already one in progress
                     if mooncake_snapshot_handle.is_some() {
+                        println!("plan to create periodic mooncake snapshot, but already one");
                         continue;
                     }
 
@@ -251,6 +269,7 @@ impl TableHandler {
                         if let Some(commit_lsn) = table_consistent_view_lsn {
                             if requested_lsn <= commit_lsn {
                                 table.flush(/*lsn=*/ commit_lsn).await.unwrap();
+                                println!("don't tink we ar going to ceeate a forced snapshot");
                                 mooncake_snapshot_handle = table.force_create_snapshot();
                                 continue;
                             }
@@ -259,6 +278,12 @@ impl TableHandler {
 
                     // Fallback to normal periodic snapshot.
                     mooncake_snapshot_handle = table.create_snapshot();
+
+                    if mooncake_snapshot_handle.is_none() {
+                        println!("didn't create snapshot because nothign to do!");
+                    } else {
+                        println!("one mooncake snaopdhot operation ceeated!");
+                    }
                 }
                 // If all senders have been dropped, exit the loop
                 else => {
