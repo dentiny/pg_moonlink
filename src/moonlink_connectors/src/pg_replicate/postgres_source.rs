@@ -276,7 +276,6 @@ impl Stream for CdcStream {
         match ready!(this.stream.poll_next(cx)) {
             Some(Ok(msg)) => {
                 let table_schemas = this.table_schemas.read().unwrap();
-                println!("table_schemas: {:?}", table_schemas);
                 match CdcEventConverter::try_from(msg, &table_schemas) {
                     Ok(row) => Poll::Ready(Some(Ok(row))),
                     Err(e) => Poll::Ready(Some(Err(e.into()))),
