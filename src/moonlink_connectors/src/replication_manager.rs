@@ -11,8 +11,10 @@ use std::hash::Hash;
 /// replication. A new replication will automatically be started when a
 /// table is added for a URI that is not currently being replicated.
 pub struct ReplicationManager<T: Eq + Hash> {
+    /// Maps from uri to replication connection.
     connections: HashMap<String, ReplicationConnection>,
     table_base_path: String,
+    /// Maps from table id (string format) to (uri, table id).
     table_info: HashMap<T, (String, TableId)>,
 }
 
