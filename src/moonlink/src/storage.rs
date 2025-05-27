@@ -1,7 +1,7 @@
 mod iceberg;
 mod index;
 pub(crate) mod mooncake_table;
-mod storage_utils;
+pub(crate) mod storage_utils;
 
 pub use iceberg::iceberg_snapshot_state_manager::IcebergSnapshotStateManager;
 pub use iceberg::iceberg_table_manager::{IcebergTableConfig, IcebergTableManager, TableManager};

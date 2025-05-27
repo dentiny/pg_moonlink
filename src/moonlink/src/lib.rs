@@ -5,6 +5,7 @@ mod table_handler;
 mod union_read;
 
 pub use error::*;
+pub use storage::storage_utils::create_data_file;
 pub use storage::{
     IcebergSnapshotStateManager, IcebergTableConfig, IcebergTableManager, MooncakeTable,
     TableConfig, TableManager,
