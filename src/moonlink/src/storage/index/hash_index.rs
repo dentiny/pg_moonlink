@@ -32,16 +32,25 @@ impl MooncakeIndex {
 
 impl Index for MooncakeIndex {
     async fn find_record(&self, raw_record: &RawDeletionRecord) -> Vec<RecordLocation> {
+        println!("Planning to find record {:?}", raw_record);
+
         let mut res: Vec<RecordLocation> = Vec::new();
 
         // Check in-memory indices
         for index in self.in_memory_index.iter() {
-            res.extend(index.0.find_record(raw_record).await);
+            let cur_loc = index.0.find_record(raw_record).await;
+            for l in cur_loc.iter() {
+                println!("Find in-memory location {:?}", l);
+            }
+            res.extend(cur_loc);
         }
 
         // Check file indices
         for file_index_meta in &self.file_indices {
             let locations = file_index_meta.search(&raw_record.lookup_key).await;
+            for l in locations.iter() {
+                println!("Find on-disk location {:?}", l);
+            }
             res.extend(locations);
         }
         res
