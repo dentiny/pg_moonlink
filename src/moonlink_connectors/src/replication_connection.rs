@@ -202,7 +202,13 @@ async fn run_event_loop(stream: CdcStream, mut sink: Sink) -> Result<(), Postgre
             send_status_update = body.reply() == 1;
         }
         let event = event?;
+
+        println!("recieve cdc event {:?}, send status update? {}", event, send_status_update);
+
         let last_lsn = sink.write_cdc_event(event).await.unwrap();
+
+        println!("receive cdc event finish!");
+
         if send_status_update {
             let _ = stream.as_mut().send_status_update(last_lsn).await;
         }

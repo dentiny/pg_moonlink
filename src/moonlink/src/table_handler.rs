@@ -105,13 +105,15 @@ impl TableHandler {
                         TableEvent::Append { row, xact_id } => {
                             let result = match xact_id {
                                 Some(xact_id) => {
-                                    let res = table.append_in_stream_batch(row, xact_id);
+                                    println!("process a streaming append request {:?}", row);
+                                    let res = table.append_in_stream_batch(row.clone(), xact_id);
                                     if table.should_transaction_flush(xact_id) {
                                         println!("Flushing transaction stream");
                                         if let Err(e) = table.flush_transaction_stream(xact_id).await {
                                             println!("Flush failed in Append: {}", e);
                                         }
                                     }
+                                    println!("finish process a streaming append request {:?}", row);
                                     res
                                 },
                                 None => table.append(row),

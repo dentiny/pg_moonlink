@@ -74,6 +74,9 @@ impl IndexBlock {
     ) -> Self {
         let file = tokio::fs::File::open(file_path.clone()).await.unwrap();
         let data = unsafe { Mmap::map(&file).unwrap() };
+
+        println!("initialize new index block over at {:?}:{:?}", file!(), line!());
+
         Self {
             bucket_start_idx,
             bucket_end_idx,
@@ -262,16 +265,32 @@ impl IndexBlockBuilder {
         let bucket_start_offset = (self.current_entry as u64)
             * (metadata.hash_lower_bits + metadata.seg_id_bits + metadata.row_id_bits) as u64;
         let buckets = std::mem::take(&mut self.buckets);
+
+        let writer = self.get_entry_writer().await;
+
+        let len = buckets.len();
         for cur_bucket in buckets {
-            self.get_entry_writer()
-                .await
+                writer
                 .write(metadata.bucket_bits, cur_bucket)
                 .await
                 .unwrap();
         }
-        self.get_entry_writer().await.byte_align().await.unwrap();
-        self.get_entry_writer().await.flush().await.unwrap();
+
+        println!("entry writer write fnished with bucket size {} at {:?}:{:?}", len, file!(), line!());
+
+        writer.byte_align().await.unwrap();
+
+        println!("entry writer byte align fnished {:?}:{:?}", file!(), line!());
+
+        // writer.flush().await.unwrap();
+        let internal_writer = writer.into_writer();
+
+        println!("entry writer flush fnished {:?}:{:?}", file!(), line!());
+
         drop(self.entry_writer);
+
+        println!("entry writer drop fnished {:?}:{:?}", file!(), line!());
+
         IndexBlock::new(
             self.bucket_start_idx,
             self.bucket_end_idx,
@@ -347,12 +366,21 @@ impl GlobalIndexBuilder {
         let mut index_blocks = Vec::new();
         let mut index_block_builder =
             IndexBlockBuilder::new(0, num_buckets + 1, self.directory.clone());
+
+        println!("create index block builder finished {:?}:{:?}", file!(), line!());
+
         for entry in iter {
             index_block_builder
                 .write_entry(entry.0, entry.1, entry.2, &global_index)
                 .await;
         }
+
+        println!("write entry finished {:?}:{:?}", file!(), line!());
+
         index_blocks.push(index_block_builder.build(&global_index).await);
+
+        println!("index block builder finalization finished {:?}:{:?}", file!(), line!());
+
         global_index.index_blocks = index_blocks;
         global_index
     }

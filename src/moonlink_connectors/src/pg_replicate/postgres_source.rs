@@ -260,6 +260,9 @@ impl CdcStream {
     ) -> Result<(), StatusUpdateError> {
         let this = self.project();
         let ts = this.postgres_epoch.elapsed()?.as_micros() as i64;
+
+        println!("ack back lsn to primary {}", lsn);
+
         this.stream
             .standby_status_update(lsn, lsn, lsn, ts, 0)
             .await?;

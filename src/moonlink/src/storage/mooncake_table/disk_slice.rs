@@ -89,8 +89,18 @@ impl DiskSliceWriter {
                 id += 1;
             }
         }
+
+        println!("before write batch to parquet file: {:?}", filtered_batches);
+
         self.write_batch_to_parquet(&filtered_batches).await?;
+
+
+        println!("after write batch to parquet file");
+
         self.remap_index().await?;
+
+        println!("finish index remapping from inmem to ondisk");
+
         Ok(())
     }
 
@@ -174,10 +184,18 @@ impl DiskSliceWriter {
             .old_index
             .remap_into_vec(&self.batch_id_to_idx, &self.row_offset_mapping);
 
+        println!("remap old index to vector!");
+
         let mut index_builder = GlobalIndexBuilder::new();
         index_builder.set_files(self.files.iter().map(|(file, _)| file.clone()).collect());
         index_builder.set_directory(self.dir_path.clone());
-        self.new_index = Some(index_builder.build_from_flush(list).await);
+
+        println!("before build from flush {:?}", list);
+
+        self.new_index = Some(index_builder.build_from_flush(list.clone()).await);
+
+        println!("after build from flush {:?}", list);
+
         Ok(())
     }
 

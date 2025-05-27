@@ -578,6 +578,9 @@ impl MooncakeTable {
         if let Some(stream_state) = self.transaction_stream_states.get_mut(&xact_id) {
             let next_file_id = self.next_file_id;
             self.next_file_id += 1;
+
+            println!("before flush mem slice to disk slice");
+
             let disk_slice = Self::flush_mem_slice(
                 &mut stream_state.mem_slice,
                 &self.metadata,
@@ -587,6 +590,8 @@ impl MooncakeTable {
                 true,
             )
             .await?;
+
+            println!("after flush mem slice to disk slice");
 
             stream_state.new_disk_slices.push(disk_slice);
 
