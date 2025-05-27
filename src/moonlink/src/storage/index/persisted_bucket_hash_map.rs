@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::File as AsyncFile;
 use tokio::io::BufWriter as AsyncBufWriter;
-use tokio::sync::OnceCell;
 use tokio_bitstream_io::{
     BigEndian as AsyncBigEndian, BitRead as AsyncBitRead, BitReader as AsyncBitReader,
     BitWrite as AsyncBitWrite, BitWriter as AsyncBitWriter,
@@ -187,40 +186,30 @@ struct IndexBlockBuilder {
     bucket_end_idx: u32,
     buckets: Vec<u32>,
     file_path: PathBuf,
-    entry_writer: OnceCell<AsyncBitWriter<AsyncBufWriter<AsyncFile>, AsyncBigEndian>>,
+    entry_writer: AsyncBitWriter<AsyncBufWriter<AsyncFile>, AsyncBigEndian>,
     current_bucket: u32,
     current_entry: u32,
 }
 
 /// TODO(hjiang): Error handle for all IO operations.
 impl IndexBlockBuilder {
-    pub fn new(bucket_start_idx: u32, bucket_end_idx: u32, directory: PathBuf) -> Self {
+    pub async fn new(bucket_start_idx: u32, bucket_end_idx: u32, directory: PathBuf) -> Self {
         let file_name = format!("index_block_{}.bin", uuid::Uuid::new_v4());
         let file_path = directory.join(&file_name);
+
+        let file = AsyncFile::create(&file_path).await.unwrap();
+        let buf_writer = AsyncBufWriter::new(file);
+        let entry_writer = AsyncBitWriter::endian(buf_writer, AsyncBigEndian);
 
         Self {
             bucket_start_idx,
             bucket_end_idx,
             buckets: vec![0; (bucket_end_idx - bucket_start_idx) as usize],
             file_path,
-            entry_writer: OnceCell::new(),
+            entry_writer,
             current_bucket: bucket_start_idx,
             current_entry: 0,
         }
-    }
-
-    /// Initialize entry writer for once.
-    async fn get_entry_writer(
-        &mut self,
-    ) -> &mut AsyncBitWriter<AsyncBufWriter<AsyncFile>, AsyncBigEndian> {
-        self.entry_writer
-            .get_or_init(|| async {
-                let file = AsyncFile::create(self.file_path.clone()).await.unwrap();
-                let buf_writer = AsyncBufWriter::new(file);
-                AsyncBitWriter::endian(buf_writer, AsyncBigEndian)
-            })
-            .await;
-        self.entry_writer.get_mut().unwrap()
     }
 
     pub async fn write_entry(
@@ -234,21 +223,18 @@ impl IndexBlockBuilder {
             self.current_bucket += 1;
             self.buckets[self.current_bucket as usize] = self.current_entry;
         }
-        self.get_entry_writer()
-            .await
+        self.entry_writer
             .write(
                 metadata.hash_lower_bits,
                 hash & ((1 << metadata.hash_lower_bits) - 1),
             )
             .await
             .unwrap();
-        self.get_entry_writer()
-            .await
+        self.entry_writer
             .write(metadata.seg_id_bits, seg_idx as u32)
             .await
             .unwrap();
-        self.get_entry_writer()
-            .await
+        self.entry_writer
             .write(metadata.row_id_bits, row_idx as u32)
             .await
             .unwrap();
@@ -263,14 +249,13 @@ impl IndexBlockBuilder {
             * (metadata.hash_lower_bits + metadata.seg_id_bits + metadata.row_id_bits) as u64;
         let buckets = std::mem::take(&mut self.buckets);
         for cur_bucket in buckets {
-            self.get_entry_writer()
-                .await
+            self.entry_writer
                 .write(metadata.bucket_bits, cur_bucket)
                 .await
                 .unwrap();
         }
-        self.get_entry_writer().await.byte_align().await.unwrap();
-        self.get_entry_writer().await.flush().await.unwrap();
+        self.entry_writer.byte_align().await.unwrap();
+        self.entry_writer.flush().await.unwrap();
         drop(self.entry_writer);
         IndexBlock::new(
             self.bucket_start_idx,
@@ -346,7 +331,7 @@ impl GlobalIndexBuilder {
         let (num_buckets, mut global_index) = self.create_global_index();
         let mut index_blocks = Vec::new();
         let mut index_block_builder =
-            IndexBlockBuilder::new(0, num_buckets + 1, self.directory.clone());
+            IndexBlockBuilder::new(0, num_buckets + 1, self.directory.clone()).await;
         for entry in iter {
             index_block_builder
                 .write_entry(entry.0, entry.1, entry.2, &global_index)
@@ -391,7 +376,7 @@ impl GlobalIndexBuilder {
         let (num_buckets, mut global_index) = self.create_global_index();
         let mut index_blocks = Vec::new();
         let mut index_block_builder =
-            IndexBlockBuilder::new(0, num_buckets + 1, self.directory.clone());
+            IndexBlockBuilder::new(0, num_buckets + 1, self.directory.clone()).await;
         while let Some(entry) = iter._next().await {
             index_block_builder
                 .write_entry(entry.0, entry.1, entry.2, &global_index)
