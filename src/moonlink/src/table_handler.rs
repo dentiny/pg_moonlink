@@ -38,7 +38,7 @@ pub enum TableEvent {
 /// Handler for table operations
 pub struct TableHandler {
     /// Handle to the event processing task
-    _event_handle: Option<JoinHandle<()>>,
+    _event_handle: Option<std::thread::JoinHandle<()>>,
 
     /// Sender for the event queue
     event_sender: Sender<TableEvent>,
@@ -51,13 +51,21 @@ impl TableHandler {
         let (event_sender, event_receiver) = mpsc::channel(100);
 
         // Spawn the task with the oneshot receiver
-        let event_handle = Some(tokio::spawn(async move {
-            Self::event_loop(iceberg_snapshot_completion_tx, event_receiver, table).await;
-        }));
+        let event_handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(100)
+                .enable_all()
+                .build()
+                .unwrap();
+        
+            rt.block_on(async move {
+                Self::event_loop(iceberg_snapshot_completion_tx, event_receiver, table).await;
+            });
+        });
 
         // Create the handler
         Self {
-            _event_handle: event_handle,
+            _event_handle: Some(event_handle),
             event_sender,
         }
     }
