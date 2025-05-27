@@ -284,6 +284,7 @@ impl IndexBlockBuilder {
 
         // writer.flush().await.unwrap();
         let internal_writer = writer.into_writer();
+        intern
 
         println!("entry writer flush fnished {:?}:{:?}", file!(), line!());
 
