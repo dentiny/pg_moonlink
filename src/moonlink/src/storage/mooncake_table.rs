@@ -18,7 +18,6 @@ use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 pub(crate) use crate::storage::mooncake_table::table_snapshot::{
     IcebergSnapshotPayload, IcebergSnapshotResult,
 };
-use futures::executor::block_on;
 use std::collections::HashMap;
 use std::mem::take;
 use std::path::{Path, PathBuf};
@@ -529,17 +528,12 @@ impl MooncakeTable {
     /// specifies the commit LSN for the flushed data.  When `lsn` is `None` the
     /// caller is responsible for setting the final LSN on the returned
     /// `DiskSliceWriter`.
-    ///
-    /// `sync_write` controls whether the write should be executed synchronously
-    /// using `block_on`.  Streaming flushes currently rely on synchronous writes
-    /// whereas normal flushes run asynchronously.
     async fn flush_mem_slice(
         mem_slice: &mut MemSlice,
         metadata: &Arc<TableMetadata>,
         next_file_id: u32,
         lsn: Option<u64>,
         snapshot_task: Option<&mut SnapshotTask>,
-        sync_write: bool,
     ) -> Result<DiskSliceWriter> {
         // Finalize the current batch (if needed)
         let (new_batch, batches, index) = mem_slice.drain().unwrap();
@@ -564,13 +558,7 @@ impl MooncakeTable {
             index,
         );
 
-        if sync_write {
-            // TODO(nbiscaro): Find longer term solution that allows async write
-            block_on(disk_slice.write())?;
-        } else {
-            disk_slice.write().await?;
-        }
-
+        disk_slice.write().await?;
         Ok(disk_slice)
     }
 
@@ -584,7 +572,6 @@ impl MooncakeTable {
                 next_file_id,
                 None,
                 None,
-                true,
             )
             .await?;
 
@@ -618,15 +605,9 @@ impl MooncakeTable {
             let next_file_id = self.next_file_id;
             self.next_file_id += 1;
             // Flush any remaining rows in the xact mem slice
-            let disk_slice = Self::flush_mem_slice(
-                xact_mem_slice,
-                &self.metadata,
-                next_file_id,
-                None,
-                None,
-                true,
-            )
-            .await?;
+            let disk_slice =
+                Self::flush_mem_slice(xact_mem_slice, &self.metadata, next_file_id, None, None)
+                    .await?;
             stream_state.new_disk_slices.push(disk_slice);
 
             // Update the LSN of all disk slices from pre-commit flushes
@@ -669,7 +650,6 @@ impl MooncakeTable {
             next_file_id,
             Some(lsn),
             Some(&mut self.next_snapshot_task),
-            false,
         )
         .await?;
         self.next_snapshot_task.new_disk_slices.push(disk_slice);
