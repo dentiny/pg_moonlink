@@ -48,6 +48,7 @@ impl ReadState {
 }
 
 #[cfg(test)]
+#[allow(clippy::type_complexity)]
 pub fn decode_read_state_for_testing(
     read_state: &ReadState,
 ) -> (
