@@ -28,12 +28,14 @@ impl Drop for ReadState {
 impl ReadState {
     pub(super) fn new(
         data_files: Vec<String>,
+        puffin_files: Vec<String>,
         deletion_vectors_at_read: Vec<PuffinDeletionBlobAtRead>,
         position_deletes: Vec<(u32 /*file_index*/, u32 /*row_index*/)>,
         associated_files: Vec<String>,
     ) -> Self {
         let metadata = TableMetadata {
             data_files,
+            puffin_files,
             deletion_vectors: deletion_vectors_at_read,
             position_deletes,
         };
@@ -48,10 +50,16 @@ impl ReadState {
 #[cfg(test)]
 pub fn decode_read_state_for_testing(
     read_state: &ReadState,
-) -> (Vec<String>, Vec<PuffinDeletionBlobAtRead>, Vec<(u32, u32)>) {
+) -> (
+    Vec<String>, /*data_file_paths*/
+    Vec<String>, /*puffin_file_paths*/
+    Vec<PuffinDeletionBlobAtRead>,
+    Vec<(u32, u32)>,
+) {
     let metadata = TableMetadata::decode(&read_state.data);
     (
         metadata.data_files,
+        metadata.puffin_files,
         metadata.deletion_vectors,
         metadata.position_deletes,
     )

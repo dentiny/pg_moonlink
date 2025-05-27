@@ -59,7 +59,8 @@ pub(crate) struct SnapshotTableState {
 pub struct PuffinDeletionBlobAtRead {
     /// Index of local data files.
     pub data_file_index: u32,
-    pub puffin_filepath: String,
+    /// Index of puffin filepaths.
+    pub puffin_file_index: u32,
     pub start_offset: u32,
     pub blob_size: u32,
 }
@@ -74,7 +75,9 @@ pub struct ReadOutput {
     /// Contains two parts:
     /// 1. Committed and persisted data files.
     /// 2. Associated files, which include committed but un-persisted records.
-    pub file_paths: Vec<String>,
+    pub data_file_paths: Vec<String>,
+    /// Puffin file paths.
+    pub puffin_file_paths: Vec<String>,
     /// Deletion vectors persisted in puffin files.
     pub deletion_vectors: Vec<PuffinDeletionBlobAtRead>,
     /// Committed but un-persisted positional deletion records.
@@ -556,6 +559,7 @@ impl SnapshotTableState {
     fn get_deletion_records(
         &self,
     ) -> (
+        Vec<String>,                   /*puffin filepaths*/
         Vec<PuffinDeletionBlobAtRead>, /*deletion vector puffin*/
         Vec<(
             u32, /*index of disk file in snapshot*/
@@ -563,6 +567,7 @@ impl SnapshotTableState {
         )>,
     ) {
         // Get puffin blobs for deletion vector.
+        let mut puffin_filepaths = vec![];
         let mut deletion_vector_blob_at_read = vec![];
         for (idx, (_, disk_deletion_vector)) in self.current_snapshot.disk_files.iter().enumerate()
         {
@@ -570,9 +575,10 @@ impl SnapshotTableState {
                 continue;
             }
             let puffin_deletion_blob = disk_deletion_vector.puffin_deletion_blob.as_ref().unwrap();
+            puffin_filepaths.push(puffin_deletion_blob.puffin_filepath.clone());
             deletion_vector_blob_at_read.push(PuffinDeletionBlobAtRead {
                 data_file_index: idx as u32,
-                puffin_filepath: puffin_deletion_blob.puffin_filepath.clone(),
+                puffin_file_index: idx as u32,
                 start_offset: puffin_deletion_blob.start_offset,
                 blob_size: puffin_deletion_blob.blob_size,
             });
@@ -590,14 +596,15 @@ impl SnapshotTableState {
                 }
             }
         }
-        (deletion_vector_blob_at_read, ret)
+        (puffin_filepaths, deletion_vector_blob_at_read, ret)
     }
 
     pub(crate) async fn request_read(&self) -> Result<ReadOutput> {
-        let mut file_paths = Vec::with_capacity(self.current_snapshot.disk_files.len());
+        let mut data_file_paths = Vec::with_capacity(self.current_snapshot.disk_files.len());
         let mut associated_files = Vec::new();
-        let (deletion_vectors_at_read, position_deletes) = self.get_deletion_records();
-        file_paths.extend(
+        let (puffin_file_paths, deletion_vectors_at_read, position_deletes) =
+            self.get_deletion_records();
+        data_file_paths.extend(
             self.current_snapshot
                 .disk_files
                 .keys()
@@ -608,10 +615,11 @@ impl SnapshotTableState {
         let file_path = self.current_snapshot.get_name_for_inmemory_file();
         let filepath_exists = tokio::fs::try_exists(&file_path).await?;
         if filepath_exists {
-            file_paths.push(file_path.to_string_lossy().to_string());
+            data_file_paths.push(file_path.to_string_lossy().to_string());
             associated_files.push(file_path.to_string_lossy().to_string());
             return Ok(ReadOutput {
-                file_paths,
+                data_file_paths,
+                puffin_file_paths,
                 deletion_vectors: deletion_vectors_at_read,
                 position_deletes,
                 associated_files,
@@ -660,12 +668,13 @@ impl SnapshotTableState {
                     parquet_writer.write(batch).await?;
                 }
                 parquet_writer.close().await?;
-                file_paths.push(file_path.to_string_lossy().to_string());
+                data_file_paths.push(file_path.to_string_lossy().to_string());
                 associated_files.push(file_path.to_string_lossy().to_string());
             }
         }
         Ok(ReadOutput {
-            file_paths,
+            data_file_paths,
+            puffin_file_paths,
             deletion_vectors: deletion_vectors_at_read,
             position_deletes,
             associated_files,

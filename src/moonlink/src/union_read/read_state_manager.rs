@@ -23,6 +23,7 @@ impl ReadStateManager {
             last_read_lsn: AtomicU64::new(0),
             last_read_state: RwLock::new(Arc::new(ReadState::new(
                 /*data_files=*/ vec![],
+                /*puffin_files=*/ vec![],
                 /*deletion_vectors_at_read=*/ vec![],
                 /*position_deletes=*/ vec![],
                 /*associated_files=*/ vec![],
@@ -125,7 +126,8 @@ impl ReadStateManager {
 
             self.last_read_lsn.store(effective_lsn, Ordering::Release);
             *last_read_state_guard = Arc::new(ReadState::new(
-                read_output.file_paths,
+                read_output.data_file_paths,
+                read_output.puffin_file_paths,
                 read_output.deletion_vectors,
                 read_output.position_deletes,
                 read_output.associated_files,
