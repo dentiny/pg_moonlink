@@ -576,9 +576,10 @@ impl SnapshotTableState {
             }
             let puffin_deletion_blob = disk_deletion_vector.puffin_deletion_blob.as_ref().unwrap();
             puffin_filepaths.push(puffin_deletion_blob.puffin_filepath.clone());
+            let puffin_file_index = puffin_filepaths.len() - 1;
             deletion_vector_blob_at_read.push(PuffinDeletionBlobAtRead {
                 data_file_index: idx as u32,
-                puffin_file_index: idx as u32,
+                puffin_file_index: puffin_file_index as u32,
                 start_offset: puffin_deletion_blob.start_offset,
                 blob_size: puffin_deletion_blob.blob_size,
             });

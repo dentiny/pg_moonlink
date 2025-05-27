@@ -39,6 +39,7 @@ impl Encode for TableMetadata {
         // Write deletion vector puffin blob information.
         for cur_puffin_blob in &self.deletion_vectors {
             write_u32(writer, cur_puffin_blob.data_file_index)?;
+            write_u32(writer, cur_puffin_blob.puffin_file_index)?;
             write_u32(writer, cur_puffin_blob.start_offset)?;
             write_u32(writer, cur_puffin_blob.blob_size)?;
         }
@@ -110,13 +111,14 @@ impl TableMetadata {
 
         // Read deletion vector blobs.
         let mut deletion_vectors_blobs = Vec::with_capacity(puffin_files_len);
-        for puffin_file_index in 0..puffin_files_len {
+        for _ in 0..puffin_files_len {
             let data_file_index = read_u32(data, &mut cursor);
+            let puffin_file_index = read_u32(data, &mut cursor);
             let start_offset = read_u32(data, &mut cursor);
             let blob_size = read_u32(data, &mut cursor);
             deletion_vectors_blobs.push(PuffinDeletionBlobAtRead {
                 data_file_index,
-                puffin_file_index: puffin_file_index as u32,
+                puffin_file_index,
                 start_offset,
                 blob_size,
             });
