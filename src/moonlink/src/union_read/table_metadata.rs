@@ -26,22 +26,21 @@ impl Encode for TableMetadata {
 
         // Write deletion vector puffin blob filepaths offsets.
         // Arrange all offsets together (instead of mixing with blob start offset and blob size), so decode side could directly operate on `uint32_t` pointers.
-        write_usize(writer, self.deletion_vectors.len())?;
+        write_usize(writer, self.puffin_files.len())?;
         let mut offset = 0;
-        for cur_puffin_blob in &self.deletion_vectors {
+        for puffin_file in &self.puffin_files {
             write_usize(writer, offset)?;
-            offset = offset.saturating_add(
-                self.puffin_files[cur_puffin_blob.puffin_file_index as usize].len(),
-            );
+            offset = offset.saturating_add(puffin_file.len());
         }
         write_usize(writer, offset)?;
 
         // Write deletion vector puffin blob information.
-        for cur_puffin_blob in &self.deletion_vectors {
-            write_u32(writer, cur_puffin_blob.data_file_index)?;
-            write_u32(writer, cur_puffin_blob.puffin_file_index)?;
-            write_u32(writer, cur_puffin_blob.start_offset)?;
-            write_u32(writer, cur_puffin_blob.blob_size)?;
+        write_usize(writer, self.deletion_vectors.len())?;
+        for deletion_vector in &self.deletion_vectors {
+            write_u32(writer, deletion_vector.data_file_index)?;
+            write_u32(writer, deletion_vector.puffin_file_index)?;
+            write_u32(writer, deletion_vector.start_offset)?;
+            write_u32(writer, deletion_vector.blob_size)?;
         }
 
         // Write positional deletion records.
@@ -57,7 +56,7 @@ impl Encode for TableMetadata {
         }
 
         // Write puffin filepaths.
-        for puffin_file in self.puffin_files.iter() {
+        for puffin_file in &self.puffin_files {
             writer.write(puffin_file.as_bytes())?;
         }
 
