@@ -238,6 +238,9 @@ impl SnapshotTableState {
         mut task: SnapshotTask,
         force_create: bool,
     ) -> (u64, Option<IcebergSnapshotPayload>) {
+        println!("when create snapshot, snapshot task disk slice size = {}", task.new_disk_slices.len());
+        println!("when create snapshot, snapshot task mem indices size = {}", task.new_mem_indices.len());
+
         // Reflect iceberg snapshot to mooncake snapshot.
         self.prune_committed_deletion_logs(&task);
         self.prune_persisted_data_files(std::mem::take(&mut task.iceberg_persisted_data_files));
@@ -253,6 +256,11 @@ impl SnapshotTableState {
         self.merge_mem_indices(&mut task);
         self.finalize_batches(&mut task);
         self.integrate_disk_slices(&mut task);
+
+        println!("before process deletion log, in-memory index size = {}, on-disk index size = {}",
+            self.current_snapshot.indices.in_memory_index.len(),
+            self.current_snapshot.indices.file_indices.len(),
+        );
 
         self.rows = take(&mut task.new_rows);
         self.process_deletion_log(&mut task).await;
@@ -306,6 +314,7 @@ impl SnapshotTableState {
     }
 
     fn merge_mem_indices(&mut self, task: &mut SnapshotTask) {
+        println!("when create snapshot, task mem indices len = {}", task.new_mem_indices.len());
         for idx in take(&mut task.new_mem_indices) {
             self.current_snapshot.indices.insert_memory_index(idx);
         }
@@ -374,9 +383,11 @@ impl SnapshotTableState {
 
             // swap indices and drop in-memory batches that were flushed
             if let Some(on_disk_index) = slice.take_index() {
+                println!("insert on disk index to snapshot {:?}", on_disk_index);
                 self.current_snapshot
                     .indices
                     .insert_file_index(on_disk_index);
+                println!("total on disk index is {:?}", self.current_snapshot.indices.file_indices);
             }
             self.current_snapshot
                 .indices

@@ -73,7 +73,7 @@ impl TableHandler {
         mut event_receiver: Receiver<TableEvent>,
         mut table: MooncakeTable,
     ) {
-        let mut periodic_snapshot_interval = time::interval(Duration::from_millis(500));
+        let mut periodic_snapshot_interval = time::interval(Duration::from_millis(100000));
 
         // Join handle for mooncake snapshot.
         let mut mooncake_snapshot_handle: Option<
@@ -200,6 +200,8 @@ impl TableHandler {
                         futures::future::pending::<Option<_>>().await
                     }
                 } => {
+                    println!("mooncake snapshot created!");
+
                     // Notify read the mooncake table commit of LSN.
                     table.notify_snapshot_reader(lsn);
 
@@ -245,6 +247,8 @@ impl TableHandler {
                     if mooncake_snapshot_handle.is_some() {
                         continue;
                     }
+
+                    println!("create mooncake snapshot");
 
                     // Check whether a flush and force snapshot is needed.
                     if let Some(requested_lsn) = force_snapshot_lsn {

@@ -405,6 +405,8 @@ impl MooncakeTable {
     }
 
     pub async fn delete(&mut self, row: MoonlinkRow, lsn: u64) {
+        println!("create new deletion for row {:?}", row);
+
         let lookup_key = self.metadata.identity.get_lookup_key(&row);
         let mut record = RawDeletionRecord {
             lookup_key,

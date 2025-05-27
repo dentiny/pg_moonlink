@@ -3,11 +3,15 @@ use crate::storage::index::*;
 
 impl Index for MemIndex {
     async fn find_record(&self, raw_record: &RawDeletionRecord) -> Vec<RecordLocation> {
+        println!("find record {:?} in memory", raw_record);
+
         match self {
             MemIndex::SinglePrimitive(map) => {
                 if let Some(entry) = map.find(raw_record.lookup_key, |_| true) {
+                    println!("in-memory index found for single primitive {:?}", entry);
                     vec![entry.location.clone()]
                 } else {
+                    println!("in-memory index not found for single primitive");
                     vec![]
                 }
             }
@@ -15,15 +19,19 @@ impl Index for MemIndex {
                 if let Some(entry) = map.find(raw_record.lookup_key, |k| {
                     k.identity.values == raw_record.row_identity.as_ref().unwrap().values
                 }) {
+                    println!("in-memory index found for keys {:?}", entry);
                     vec![entry.location.clone()]
                 } else {
+                    println!("in-memory index not found for key");
                     vec![]
                 }
             }
             MemIndex::FullRow(map) => {
                 if let Some(locations) = map.get_vec(&raw_record.lookup_key) {
+                    println!("in-memory index found for full row {:?}", locations);
                     locations.clone()
                 } else {
+                    println!("in-memory index not found for full row!");
                     vec![]
                 }
             }
@@ -90,8 +98,11 @@ impl MemIndex {
         identity_for_key: Option<MoonlinkRow>,
         location: RecordLocation,
     ) {
+        println!("insert mem index with location {:?}", location);
+
         match self {
             MemIndex::SinglePrimitive(map) => {
+                println!("insert new mem index for single primitive");
                 assert!(identity_for_key.is_none());
                 map.insert_unique(
                     key,
@@ -103,6 +114,8 @@ impl MemIndex {
                 );
             }
             MemIndex::Key(map) => {
+                println!("insert new mem index for keys");
+
                 let key_with_id = KeyWithIdentity {
                     hash: key,
                     identity: identity_for_key.unwrap(),
@@ -111,6 +124,8 @@ impl MemIndex {
                 map.insert_unique(key, key_with_id, |k| k.hash);
             }
             MemIndex::FullRow(map) => {
+                println!("insert new mem index for full row");
+
                 assert!(identity_for_key.is_none());
                 map.insert(key, location);
             }
