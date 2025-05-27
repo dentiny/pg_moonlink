@@ -398,6 +398,7 @@ impl SnapshotTableState {
         }
 
         // Locate all candidate positions for this record that have **not** yet been deleted.
+        println!("check record {:?}", deletion);
         let mut candidates: Vec<RecordLocation> = self
             .current_snapshot
             .indices
@@ -406,6 +407,7 @@ impl SnapshotTableState {
             .into_iter()
             .filter(|loc| !self.is_deleted(loc))
             .collect();
+        println!("check record over, len = {}", candidates.len());
 
         match candidates.len() {
             0 => panic!("can't find deletion record {:?}", deletion),
@@ -542,6 +544,8 @@ impl SnapshotTableState {
     /// Convert raw deletions discovered by the snapshot task and either commit
     /// them or defer until their LSN becomes visible.
     async fn apply_new_deletions(&mut self, task: &mut SnapshotTask) {
+        println!("new deletion = {:?}", task.new_deletions);
+
         for raw in take(&mut task.new_deletions) {
             let processed = self.process_delete_record(raw).await;
             if processed.lsn <= task.new_commit_lsn {
