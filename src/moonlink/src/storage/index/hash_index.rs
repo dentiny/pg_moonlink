@@ -36,12 +36,15 @@ impl Index for MooncakeIndex {
 
         // Check in-memory indices
         for index in self.in_memory_index.iter() {
+            println!("in-mem index check");
             res.extend(index.0.find_record(raw_record).await);
         }
 
         // Check file indices
         for file_index_meta in &self.file_indices {
+            println!("on-disk index check");
             let locations = file_index_meta.search(&raw_record.lookup_key).await;
+            println!("foubd location size = {}", locations.len());
             res.extend(locations);
         }
         res

@@ -3173,3 +3173,58 @@ async fn test_state_7_6() -> IcebergResult<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_duplicate_deletion() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = temp_dir.path().to_path_buf();
+    let warehouse_uri = path.clone().to_str().unwrap().to_string();
+
+    let iceberg_table_config = IcebergTableConfig {
+        warehouse_uri: warehouse_uri.clone(),
+        namespace: vec!["namespace".to_string()],
+        table_name: "test_table".to_string(),
+        drop_table_if_exists: false,
+    };
+    let mooncake_table_metadata = Arc::new(MooncakeTableMetadata {
+        name: "test_table".to_string(),
+        id: 0,
+        schema: create_test_arrow_schema(),
+        config: MooncakeTableConfig::new(),
+        path: PathBuf::from(warehouse_uri.clone()),
+        identity: RowIdentity::SinglePrimitiveKey(0),
+    });
+    let identity_property = mooncake_table_metadata.identity.clone();
+
+    // Create iceberg snapshot whenever `create_snapshot` is called.
+    let mut mooncake_table_config = MooncakeTableConfig::new();
+    mooncake_table_config.iceberg_snapshot_new_data_file_count = 0;
+    let mut table = MooncakeTable::new(
+        create_test_arrow_schema().as_ref().clone(),
+        "test_table".to_string(),
+        /*version=*/ 1,
+        path,
+        identity_property,
+        iceberg_table_config.clone(),
+        mooncake_table_config,
+    )
+    .await;
+    
+    let old_row = MoonlinkRow::new(vec![
+        RowValue::Int32(1),
+        RowValue::ByteArray("John".as_bytes().to_vec()),
+        RowValue::Int32(30),
+    ]);
+    table.append(old_row.clone()).unwrap();
+    table.commit(/*lsn=*/ 100);
+    table.flush(/*lsn=*/ 100).await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
+
+    // Update operation.
+    let new_row = old_row.clone();
+    table.delete(/*row=*/ old_row.clone(), /*lsn=*/ 200).await;
+    table.append(new_row.clone()).unwrap();
+    table.commit(/*lsn=*/ 200);
+    table.flush(/*lsn=*/ 200).await.unwrap();        
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
+}
