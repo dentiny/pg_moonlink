@@ -109,8 +109,9 @@ impl TableMetadata {
         }
 
         // Read deletion vector blobs.
-        let mut deletion_vectors_blobs = Vec::with_capacity(puffin_files_len);
-        for _ in 0..puffin_files_len {
+        let puffin_blob_len = read_usize(data, &mut cursor);
+        let mut deletion_vectors_blobs = Vec::with_capacity(puffin_blob_len);
+        for _ in 0..puffin_blob_len {
             let data_file_index = read_u32(data, &mut cursor);
             let puffin_file_index = read_u32(data, &mut cursor);
             let start_offset = read_u32(data, &mut cursor);
