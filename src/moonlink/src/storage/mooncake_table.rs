@@ -61,7 +61,7 @@ impl TableConfig {
     #[cfg(debug_assertions)]
     pub(super) const DEFAULT_SNAPSHOT_DELETION_RECORD_COUNT: usize = 1000;
     #[cfg(debug_assertions)]
-    pub(crate) const DEFAULT_BATCH_SIZE: usize = 4;
+    pub(crate) const DEFAULT_BATCH_SIZE: usize = 2048;
     #[cfg(debug_assertions)]
     pub(crate) const DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT: usize = 1;
     #[cfg(debug_assertions)]
@@ -566,7 +566,7 @@ impl MooncakeTable {
 
         if sync_write {
             // TODO(nbiscaro): Find longer term solution that allows async write
-            block_on(disk_slice.write())?;
+            disk_slice.write().await?;
         } else {
             disk_slice.write().await?;
         }
@@ -578,6 +578,9 @@ impl MooncakeTable {
         if let Some(stream_state) = self.transaction_stream_states.get_mut(&xact_id) {
             let next_file_id = self.next_file_id;
             self.next_file_id += 1;
+
+            println!("before flush mem slice to disk slice");
+
             let disk_slice = Self::flush_mem_slice(
                 &mut stream_state.mem_slice,
                 &self.metadata,
@@ -587,6 +590,8 @@ impl MooncakeTable {
                 true,
             )
             .await?;
+
+            println!("after flush mem slice to disk slice");
 
             stream_state.new_disk_slices.push(disk_slice);
 

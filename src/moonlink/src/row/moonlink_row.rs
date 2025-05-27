@@ -8,7 +8,7 @@ use parquet::arrow::ProjectionMask;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MoonlinkRow {
     pub values: Vec<RowValue>,
 }

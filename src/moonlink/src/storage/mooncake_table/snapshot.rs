@@ -281,23 +281,23 @@ impl SnapshotTableState {
             self.create_iceberg_snapshot_by_data_files(new_data_files.as_slice(), force_create);
         let flush_by_deletion_logs = self.create_iceberg_snapshot_by_committed_logs(force_create);
 
-        if self.current_snapshot.data_file_flush_lsn.is_some()
-            && (flush_by_data_files || flush_by_deletion_logs)
-        {
-            let flush_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
-            let aggregated_committed_deletion_logs =
-                self.aggregate_committed_deletion_logs(flush_lsn);
+        // if self.current_snapshot.data_file_flush_lsn.is_some()
+        //     && (flush_by_data_files || flush_by_deletion_logs)
+        // {
+        //     let flush_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
+        //     let aggregated_committed_deletion_logs =
+        //         self.aggregate_committed_deletion_logs(flush_lsn);
 
-            iceberg_snapshot_payload = Some(IcebergSnapshotPayload {
-                flush_lsn,
-                data_files: self
-                    .unpersisted_iceberg_records
-                    .unpersisted_data_files
-                    .to_vec(),
-                new_deletion_vector: aggregated_committed_deletion_logs,
-                file_indices: self.current_snapshot.indices.file_indices.clone(),
-            });
-        }
+        //     iceberg_snapshot_payload = Some(IcebergSnapshotPayload {
+        //         flush_lsn,
+        //         data_files: self
+        //             .unpersisted_iceberg_records
+        //             .unpersisted_data_files
+        //             .to_vec(),
+        //         new_deletion_vector: aggregated_committed_deletion_logs,
+        //         file_indices: self.current_snapshot.indices.file_indices.clone(),
+        //     });
+        // }
 
         (
             self.current_snapshot.snapshot_version,

@@ -89,8 +89,18 @@ impl DiskSliceWriter {
                 id += 1;
             }
         }
+
+        println!("before write batch to parquet file: {:?}", filtered_batches);
+
         self.write_batch_to_parquet(&filtered_batches).await?;
+
+
+        println!("after write batch to parquet file");
+
         self.remap_index().await?;
+
+        println!("finish index remapping from inmem to ondisk");
+
         Ok(())
     }
 
@@ -137,10 +147,14 @@ impl DiskSliceWriter {
                 );
                 let file_path = get_random_file_name_in_dir(dir_path);
                 data_file = Some(create_data_file(file_id, file_path));
+
+                println!("before tokio file creation at {:?}:{:?}", file!(), line!());
                 let file =
                     tokio::fs::File::create(dir_path.join(data_file.as_ref().unwrap().file_path()))
                         .await
                         .map_err(Error::Io)?;
+                
+                println!("before async arrow writer creation at {:?}:{:?}", file!(), line!());
                 writer = Some(AsyncArrowWriter::try_new(file, self.schema.clone(), None)?);
                 out_row_idx = 0;
             }
@@ -149,17 +163,24 @@ impl DiskSliceWriter {
                 out_row_idx += 1;
             }
             // Write the batch
+
+            println!("before async arrow writer write at for {:?} {:?}:{:?}", batch, file!(), line!());
             writer.as_mut().unwrap().write(batch).await?;
             if writer.as_ref().unwrap().memory_size() > Self::PARQUET_FILE_SIZE {
                 // Finalize the writer
+                println!("before async arrow writer close at {:?}:{:?}", file!(), line!());
                 writer.unwrap().close().await?;
+
+                println!("after async arrow writer close at {:?}:{:?}", file!(), line!());
                 writer = None;
                 files.push((data_file.unwrap(), out_row_idx));
                 data_file = None;
             }
         }
-        if let Some(writer) = writer {
+        if let Some(writer) = writer.take() {
+            println!("before async arrow writer close at {:?}:{:?}", file!(), line!());
             writer.close().await?;
+            println!("after async arrow writer close at {:?}:{:?}", file!(), line!());
             files.push((data_file.unwrap(), out_row_idx));
         }
         self.files = files;
@@ -174,10 +195,18 @@ impl DiskSliceWriter {
             .old_index
             .remap_into_vec(&self.batch_id_to_idx, &self.row_offset_mapping);
 
+        println!("remap old index to vector!");
+
         let mut index_builder = GlobalIndexBuilder::new();
         index_builder.set_files(self.files.iter().map(|(file, _)| file.clone()).collect());
         index_builder.set_directory(self.dir_path.clone());
-        self.new_index = Some(index_builder.build_from_flush(list).await);
+
+        println!("before build from flush {:?}", list);
+
+        self.new_index = Some(index_builder.build_from_flush(list.clone()).await);
+
+        println!("after build from flush {:?}", list);
+
         Ok(())
     }
 
@@ -423,5 +452,29 @@ mod tests {
         temp_dir.close().map_err(Error::Io)?;
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stuck_file_write() {
+        let filepath = "/tmp/temp_teet/filepath".to_string();
+        let file = tokio::fs::File::create(&filepath).await.unwrap();
+        
+        let mut metadata_a = HashMap::new();
+        metadata_a.insert("PARQUET:field_id".to_string(), "1".to_string());
+        let field_a = Field::new("a", DataType::Int32, false).with_metadata(metadata_a);
+
+        let mut metadata_b = HashMap::new();
+        metadata_b.insert("PARQUET:field_id".to_string(), "2".to_string());
+        let field_b = Field::new("b", DataType::Utf8, true).with_metadata(metadata_b);
+
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+        let mut writer = AsyncArrowWriter::try_new(file, schema.clone(), None).unwrap();
+        
+        let int_array = Int32Array::from(vec![113, 114, 115, 116]);
+        let str_array = StringArray::from(vec!["val_113", "val_114", "val_115", "val_116"]);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(int_array), Arc::new(str_array)]).unwrap();
+        writer.write(&batch).await.unwrap();
+
+        writer.close().await.unwrap();
     }
 }

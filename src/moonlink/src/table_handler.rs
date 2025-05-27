@@ -38,7 +38,7 @@ pub enum TableEvent {
 /// Handler for table operations
 pub struct TableHandler {
     /// Handle to the event processing task
-    _event_handle: Option<JoinHandle<()>>,
+    _event_handle: Option<std::thread::JoinHandle<()>>,
 
     /// Sender for the event queue
     event_sender: Sender<TableEvent>,
@@ -51,13 +51,21 @@ impl TableHandler {
         let (event_sender, event_receiver) = mpsc::channel(100);
 
         // Spawn the task with the oneshot receiver
-        let event_handle = Some(tokio::spawn(async move {
-            Self::event_loop(iceberg_snapshot_completion_tx, event_receiver, table).await;
-        }));
+        let event_handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(100)
+                .enable_all()
+                .build()
+                .unwrap();
+        
+            rt.block_on(async move {
+                Self::event_loop(iceberg_snapshot_completion_tx, event_receiver, table).await;
+            });
+        });
 
         // Create the handler
         Self {
-            _event_handle: event_handle,
+            _event_handle: Some(event_handle),
             event_sender,
         }
     }
@@ -105,13 +113,15 @@ impl TableHandler {
                         TableEvent::Append { row, xact_id } => {
                             let result = match xact_id {
                                 Some(xact_id) => {
-                                    let res = table.append_in_stream_batch(row, xact_id);
+                                    println!("process a streaming append request {:?}", row);
+                                    let res = table.append_in_stream_batch(row.clone(), xact_id);
                                     if table.should_transaction_flush(xact_id) {
                                         println!("Flushing transaction stream");
                                         if let Err(e) = table.flush_transaction_stream(xact_id).await {
                                             println!("Flush failed in Append: {}", e);
                                         }
                                     }
+                                    println!("finish process a streaming append request {:?}", row);
                                     res
                                 },
                                 None => table.append(row),

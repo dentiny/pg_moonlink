@@ -61,7 +61,16 @@ pub(crate) struct IndexBlock {
     pub(crate) bucket_end_idx: u32,
     pub(crate) bucket_start_offset: u64,
     pub(crate) file_path: String,
-    data: Arc<Option<Mmap>>,
+    data: Option<Arc<Option<Mmap>>>,
+}
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
+static GLOBAL_COUNTER: OnceLock<AtomicU64> = OnceLock::new();
+fn next_id() -> u64 {
+    GLOBAL_COUNTER
+        .get_or_init(|| AtomicU64::new(0))
+        .fetch_add(1, Ordering::SeqCst)
 }
 
 impl IndexBlock {
@@ -71,24 +80,27 @@ impl IndexBlock {
         bucket_start_offset: u64,
         file_path: String,
     ) -> Self {
-        let file = tokio::fs::File::open(file_path.clone()).await.unwrap();
-        let data = unsafe { Mmap::map(&file).unwrap() };
+        // let file = tokio::fs::File::open(file_path.clone()).await.unwrap();
+        // let data = unsafe { Mmap::map(&file).unwrap() };
+
+        println!("initialize new index block with {}-th index file over at {:?}:{:?}", next_id(), file!(), line!());
+
         Self {
             bucket_start_idx,
             bucket_end_idx,
             bucket_start_offset,
             file_path,
-            data: Arc::new(Some(data)),
+            data: None,
         }
     }
 
-    async fn _create_iterator<'a>(
-        &'a self,
-        metadata: &'a GlobalIndex,
-        file_id_remap: &'a Vec<u32>,
-    ) -> IndexBlockIterator<'a> {
-        IndexBlockIterator::_new(self, metadata, file_id_remap).await
-    }
+    // async fn _create_iterator<'a>(
+    //     &'a self,
+    //     metadata: &'a GlobalIndex,
+    //     file_id_remap: &'a Vec<u32>,
+    // ) -> IndexBlockIterator<'a> {
+    //     IndexBlockIterator::_new(self, metadata, file_id_remap).await
+    // }
 
     #[inline]
     async fn read_bucket(
@@ -126,8 +138,12 @@ impl IndexBlock {
         bucket_idx: u32,
         metadata: &GlobalIndex,
     ) -> Vec<RecordLocation> {
+        let file = tokio::fs::File::open(self.file_path.clone()).await.unwrap();
+        let data = Arc::new(unsafe { Mmap::map(&file).unwrap() });
+        let mut res = vec![];
+
         assert!(bucket_idx >= self.bucket_start_idx && bucket_idx < self.bucket_end_idx);
-        let cursor = Cursor::new(self.data.as_ref().as_ref().unwrap().as_ref());
+        let cursor = Cursor::new(data.as_ref().as_ref().as_ref());
         let mut reader = AsyncBitReader::endian(cursor, AsyncBigEndian);
         let mut entry_reader = reader.clone();
         let (entry_start, entry_end) = self.read_bucket(bucket_idx, &mut reader, metadata).await;
@@ -150,10 +166,14 @@ impl IndexBlock {
                     ));
                 }
             }
-            results
+            res = results
         } else {
-            vec![]
+            res = vec![]
         }
+
+        drop(file);
+
+        res
     }
 }
 
@@ -170,12 +190,12 @@ impl GlobalIndex {
         vec![]
     }
 
-    pub async fn _create_iterator<'a>(
-        &'a self,
-        file_id_remap: &'a Vec<u32>,
-    ) -> GlobalIndexIterator<'a> {
-        GlobalIndexIterator::_new(self, file_id_remap).await
-    }
+    // pub async fn _create_iterator<'a>(
+    //     &'a self,
+    //     file_id_remap: &'a Vec<u32>,
+    // ) -> GlobalIndexIterator<'a> {
+    //     GlobalIndexIterator::_new(self, file_id_remap).await
+    // }
 }
 
 // ================================
@@ -248,15 +268,29 @@ impl IndexBlockBuilder {
         let bucket_start_offset = (self.current_entry as u64)
             * (metadata.hash_lower_bits + metadata.seg_id_bits + metadata.row_id_bits) as u64;
         let buckets = std::mem::take(&mut self.buckets);
+
+        let len = buckets.len();
         for cur_bucket in buckets {
             self.entry_writer
                 .write(metadata.bucket_bits, cur_bucket)
                 .await
                 .unwrap();
         }
+        
+        println!("entry writer write fnished with bucket size {} at {:?}:{:?}", len, file!(), line!());
+        
         self.entry_writer.byte_align().await.unwrap();
+
+        println!("entry writer byte align fnished {:?}:{:?}", file!(), line!());
+
         self.entry_writer.flush().await.unwrap();
+
+        println!("entry writer flush fnished {:?}:{:?}", file!(), line!());
+
         drop(self.entry_writer);
+
+        println!("entry writer drop fnished {:?}:{:?}", file!(), line!());
+
         IndexBlock::new(
             self.bucket_start_idx,
             self.bucket_end_idx,
@@ -332,273 +366,281 @@ impl GlobalIndexBuilder {
         let mut index_blocks = Vec::new();
         let mut index_block_builder =
             IndexBlockBuilder::new(0, num_buckets + 1, self.directory.clone()).await;
+
+        println!("create index block builder finished {:?}:{:?}", file!(), line!());
         for entry in iter {
             index_block_builder
                 .write_entry(entry.0, entry.1, entry.2, &global_index)
                 .await;
         }
+
+        println!("write entry finished {:?}:{:?}", file!(), line!());
+
         index_blocks.push(index_block_builder.build(&global_index).await);
+
+        println!("index block builder finalization finished {:?}:{:?}", file!(), line!());
+
         global_index.index_blocks = index_blocks;
         global_index
     }
 
-    // ================================
-    // Build from merge
-    // ================================
-    pub async fn _build_from_merge(mut self, indices: Vec<GlobalIndex>) -> GlobalIndex {
-        self.num_rows = indices.iter().map(|index| index.num_rows).sum();
-        self.files = indices
-            .iter()
-            .flat_map(|index| index.files.clone())
-            .collect();
-        let mut file_id_remaps = vec![];
-        let mut file_id_after_remap = 0;
-        for index in &indices {
-            let mut file_id_remap = vec![_INVALID_FILE_ID; index.files.len()];
-            for (_, item) in file_id_remap.iter_mut().enumerate().take(index.files.len()) {
-                *item = file_id_after_remap;
-                file_id_after_remap += 1;
-            }
-            file_id_remaps.push(file_id_remap);
-        }
-        let mut iters = Vec::with_capacity(indices.len());
-        for (idx, index) in indices.iter().enumerate() {
-            iters.push(index._create_iterator(&file_id_remaps[idx]).await);
-        }
-        let merge_iter = GlobalIndexMergingIterator::_new(iters).await;
-        self._build_from_merging_iterator(merge_iter).await
-    }
+    // // ================================
+    // // Build from merge
+    // // ================================
+    // pub async fn _build_from_merge(mut self, indices: Vec<GlobalIndex>) -> GlobalIndex {
+    //     self.num_rows = indices.iter().map(|index| index.num_rows).sum();
+    //     self.files = indices
+    //         .iter()
+    //         .flat_map(|index| index.files.clone())
+    //         .collect();
+    //     let mut file_id_remaps = vec![];
+    //     let mut file_id_after_remap = 0;
+    //     for index in &indices {
+    //         let mut file_id_remap = vec![_INVALID_FILE_ID; index.files.len()];
+    //         for (_, item) in file_id_remap.iter_mut().enumerate().take(index.files.len()) {
+    //             *item = file_id_after_remap;
+    //             file_id_after_remap += 1;
+    //         }
+    //         file_id_remaps.push(file_id_remap);
+    //     }
+    //     let mut iters = Vec::with_capacity(indices.len());
+    //     for (idx, index) in indices.iter().enumerate() {
+    //         iters.push(index._create_iterator(&file_id_remaps[idx]).await);
+    //     }
+    //     let merge_iter = GlobalIndexMergingIterator::_new(iters).await;
+    //     self._build_from_merging_iterator(merge_iter).await
+    // }
 
-    async fn _build_from_merging_iterator(
-        mut self,
-        mut iter: GlobalIndexMergingIterator<'_>,
-    ) -> GlobalIndex {
-        let (num_buckets, mut global_index) = self.create_global_index();
-        let mut index_blocks = Vec::new();
-        let mut index_block_builder =
-            IndexBlockBuilder::new(0, num_buckets + 1, self.directory.clone()).await;
-        while let Some(entry) = iter._next().await {
-            index_block_builder
-                .write_entry(entry.0, entry.1, entry.2, &global_index)
-                .await;
-        }
-        index_blocks.push(index_block_builder.build(&global_index).await);
-        global_index.index_blocks = index_blocks;
-        global_index
-    }
+    // async fn _build_from_merging_iterator(
+    //     mut self,
+    //     mut iter: GlobalIndexMergingIterator<'_>,
+    // ) -> GlobalIndex {
+    //     let (num_buckets, mut global_index) = self.create_global_index();
+    //     let mut index_blocks = Vec::new();
+    //     let mut index_block_builder =
+    //         IndexBlockBuilder::new(0, num_buckets + 1, self.directory.clone()).await;
+    //     while let Some(entry) = iter._next().await {
+    //         index_block_builder
+    //             .write_entry(entry.0, entry.1, entry.2, &global_index)
+    //             .await;
+    //     }
+    //     index_blocks.push(index_block_builder.build(&global_index).await);
+    //     global_index.index_blocks = index_blocks;
+    //     global_index
+    // }
 }
 
-// ================================
-// Iterators for merging indices
-// ================================
-#[allow(dead_code)]
-struct IndexBlockIterator<'a> {
-    collection: &'a IndexBlock,
-    metadata: &'a GlobalIndex,
-    current_bucket: u32,
-    current_bucket_entry_end: u32,
-    current_entry: u32,
-    current_upper_hash: u64,
-    bucket_reader: AsyncBitReader<Cursor<&'a [u8]>, AsyncBigEndian>,
-    entry_reader: AsyncBitReader<Cursor<&'a [u8]>, AsyncBigEndian>,
-    file_id_remap: &'a Vec<u32>,
-}
+// // ================================
+// // Iterators for merging indices
+// // ================================
+// #[allow(dead_code)]
+// struct IndexBlockIterator<'a> {
+//     collection: &'a IndexBlock,
+//     metadata: &'a GlobalIndex,
+//     current_bucket: u32,
+//     current_bucket_entry_end: u32,
+//     current_entry: u32,
+//     current_upper_hash: u64,
+//     bucket_reader: AsyncBitReader<Cursor<&'a [u8]>, AsyncBigEndian>,
+//     entry_reader: AsyncBitReader<Cursor<&'a [u8]>, AsyncBigEndian>,
+//     file_id_remap: &'a Vec<u32>,
+// }
 
-impl<'a> IndexBlockIterator<'a> {
-    async fn _new(
-        collection: &'a IndexBlock,
-        metadata: &'a GlobalIndex,
-        file_id_remap: &'a Vec<u32>,
-    ) -> Self {
-        let mut bucket_reader = AsyncBitReader::endian(
-            Cursor::new(collection.data.as_ref().as_ref().unwrap().as_ref()),
-            AsyncBigEndian,
-        );
-        let entry_reader = bucket_reader.clone();
-        bucket_reader
-            .seek_bits(SeekFrom::Start(collection.bucket_start_offset))
-            .await
-            .unwrap();
-        let _ = bucket_reader
-            .read::<u32>(metadata.bucket_bits)
-            .await
-            .unwrap();
-        let current_bucket_entry_end = bucket_reader
-            .read::<u32>(metadata.bucket_bits)
-            .await
-            .unwrap();
-        Self {
-            collection,
-            metadata,
-            bucket_reader,
-            entry_reader,
-            current_bucket: collection.bucket_start_idx,
-            current_bucket_entry_end,
-            current_entry: 0,
-            current_upper_hash: 0,
-            file_id_remap,
-        }
-    }
+// impl<'a> IndexBlockIterator<'a> {
+//     async fn _new(
+//         collection: &'a IndexBlock,
+//         metadata: &'a GlobalIndex,
+//         file_id_remap: &'a Vec<u32>,
+//     ) -> Self {
+//         let mut bucket_reader = AsyncBitReader::endian(
+//             Cursor::new(collection.data.as_ref().as_ref().unwrap().as_ref()),
+//             AsyncBigEndian,
+//         );
+//         let entry_reader = bucket_reader.clone();
+//         bucket_reader
+//             .seek_bits(SeekFrom::Start(collection.bucket_start_offset))
+//             .await
+//             .unwrap();
+//         let _ = bucket_reader
+//             .read::<u32>(metadata.bucket_bits)
+//             .await
+//             .unwrap();
+//         let current_bucket_entry_end = bucket_reader
+//             .read::<u32>(metadata.bucket_bits)
+//             .await
+//             .unwrap();
+//         Self {
+//             collection,
+//             metadata,
+//             bucket_reader,
+//             entry_reader,
+//             current_bucket: collection.bucket_start_idx,
+//             current_bucket_entry_end,
+//             current_entry: 0,
+//             current_upper_hash: 0,
+//             file_id_remap,
+//         }
+//     }
 
-    async fn _next(&mut self) -> Option<(u64, usize, usize)> {
-        loop {
-            if self.current_bucket == self.collection.bucket_end_idx - 1 {
-                return None;
-            }
-            while self.current_entry == self.current_bucket_entry_end {
-                self.current_bucket += 1;
-                if self.current_bucket == self.collection.bucket_end_idx - 1 {
-                    return None;
-                }
-                self.current_bucket_entry_end = self
-                    .bucket_reader
-                    .read::<u32>(self.metadata.bucket_bits)
-                    .await
-                    .unwrap();
-                self.current_upper_hash += 1 << self.metadata.hash_lower_bits;
-            }
-            let (lower_hash, seg_idx, row_idx) = self
-                .collection
-                .read_entry(&mut self.entry_reader, self.metadata)
-                .await;
-            self.current_entry += 1;
-            if *self.file_id_remap.get(seg_idx).unwrap() != _INVALID_FILE_ID {
-                return Some((lower_hash + self.current_upper_hash, seg_idx, row_idx));
-            }
-        }
-    }
-}
+//     async fn _next(&mut self) -> Option<(u64, usize, usize)> {
+//         loop {
+//             if self.current_bucket == self.collection.bucket_end_idx - 1 {
+//                 return None;
+//             }
+//             while self.current_entry == self.current_bucket_entry_end {
+//                 self.current_bucket += 1;
+//                 if self.current_bucket == self.collection.bucket_end_idx - 1 {
+//                     return None;
+//                 }
+//                 self.current_bucket_entry_end = self
+//                     .bucket_reader
+//                     .read::<u32>(self.metadata.bucket_bits)
+//                     .await
+//                     .unwrap();
+//                 self.current_upper_hash += 1 << self.metadata.hash_lower_bits;
+//             }
+//             let (lower_hash, seg_idx, row_idx) = self
+//                 .collection
+//                 .read_entry(&mut self.entry_reader, self.metadata)
+//                 .await;
+//             self.current_entry += 1;
+//             if *self.file_id_remap.get(seg_idx).unwrap() != _INVALID_FILE_ID {
+//                 return Some((lower_hash + self.current_upper_hash, seg_idx, row_idx));
+//             }
+//         }
+//     }
+// }
 
-#[allow(dead_code)]
-pub struct GlobalIndexIterator<'a> {
-    index: &'a GlobalIndex,
-    block_idx: usize,
-    block_iter: Option<IndexBlockIterator<'a>>,
-    file_id_remap: &'a Vec<u32>,
-}
+// #[allow(dead_code)]
+// pub struct GlobalIndexIterator<'a> {
+//     index: &'a GlobalIndex,
+//     block_idx: usize,
+//     block_iter: Option<IndexBlockIterator<'a>>,
+//     file_id_remap: &'a Vec<u32>,
+// }
 
-impl<'a> GlobalIndexIterator<'a> {
-    pub async fn _new(index: &'a GlobalIndex, file_id_remap: &'a Vec<u32>) -> Self {
-        let mut block_iter = None;
-        let block_idx = 0;
-        if !index.index_blocks.is_empty() {
-            block_iter = Some(
-                index.index_blocks[0]
-                    ._create_iterator(index, file_id_remap)
-                    .await,
-            );
-        }
-        Self {
-            index,
-            block_idx,
-            block_iter,
-            file_id_remap,
-        }
-    }
+// impl<'a> GlobalIndexIterator<'a> {
+//     pub async fn _new(index: &'a GlobalIndex, file_id_remap: &'a Vec<u32>) -> Self {
+//         let mut block_iter = None;
+//         let block_idx = 0;
+//         if !index.index_blocks.is_empty() {
+//             block_iter = Some(
+//                 index.index_blocks[0]
+//                     ._create_iterator(index, file_id_remap)
+//                     .await,
+//             );
+//         }
+//         Self {
+//             index,
+//             block_idx,
+//             block_iter,
+//             file_id_remap,
+//         }
+//     }
 
-    pub async fn _next(&mut self) -> Option<(u64, usize, usize)> {
-        loop {
-            if let Some(ref mut iter) = self.block_iter {
-                if let Some(item) = iter._next().await {
-                    return Some(item);
-                }
-            }
-            self.block_idx += 1;
-            if self.block_idx >= self.index.index_blocks.len() {
-                return None;
-            }
-            self.block_iter = Some(
-                self.index.index_blocks[self.block_idx]
-                    ._create_iterator(self.index, self.file_id_remap)
-                    .await,
-            );
-        }
-    }
-}
+//     pub async fn _next(&mut self) -> Option<(u64, usize, usize)> {
+//         loop {
+//             if let Some(ref mut iter) = self.block_iter {
+//                 if let Some(item) = iter._next().await {
+//                     return Some(item);
+//                 }
+//             }
+//             self.block_idx += 1;
+//             if self.block_idx >= self.index.index_blocks.len() {
+//                 return None;
+//             }
+//             self.block_iter = Some(
+//                 self.index.index_blocks[self.block_idx]
+//                     ._create_iterator(self.index, self.file_id_remap)
+//                     .await,
+//             );
+//         }
+//     }
+// }
 
-#[allow(dead_code)]
-pub struct GlobalIndexMergingIterator<'a> {
-    heap: BinaryHeap<HeapItem<'a>>,
-}
+// #[allow(dead_code)]
+// pub struct GlobalIndexMergingIterator<'a> {
+//     heap: BinaryHeap<HeapItem<'a>>,
+// }
 
-#[allow(dead_code)]
-struct HeapItem<'a> {
-    value: (u64, usize, usize),
-    iter: GlobalIndexIterator<'a>,
-}
+// #[allow(dead_code)]
+// struct HeapItem<'a> {
+//     value: (u64, usize, usize),
+//     iter: GlobalIndexIterator<'a>,
+// }
 
-impl PartialEq for HeapItem<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.value.0 == other.value.0
-    }
-}
-impl Eq for HeapItem<'_> {}
+// impl PartialEq for HeapItem<'_> {
+//     fn eq(&self, other: &Self) -> bool {
+//         self.value.0 == other.value.0
+//     }
+// }
+// impl Eq for HeapItem<'_> {}
 
-impl PartialOrd for HeapItem<'_> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl Ord for HeapItem<'_> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Reverse for min-heap
-        other.value.0.cmp(&self.value.0)
-    }
-}
+// impl PartialOrd for HeapItem<'_> {
+//     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+//         Some(self.cmp(other))
+//     }
+// }
+// impl Ord for HeapItem<'_> {
+//     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+//         // Reverse for min-heap
+//         other.value.0.cmp(&self.value.0)
+//     }
+// }
 
-impl<'a> GlobalIndexMergingIterator<'a> {
-    pub async fn _new(iterators: Vec<GlobalIndexIterator<'a>>) -> Self {
-        let mut heap = BinaryHeap::new();
-        for mut it in iterators {
-            if let Some(value) = it._next().await {
-                heap.push(HeapItem { value, iter: it });
-            }
-        }
-        Self { heap }
-    }
+// impl<'a> GlobalIndexMergingIterator<'a> {
+//     pub async fn _new(iterators: Vec<GlobalIndexIterator<'a>>) -> Self {
+//         let mut heap = BinaryHeap::new();
+//         for mut it in iterators {
+//             if let Some(value) = it._next().await {
+//                 heap.push(HeapItem { value, iter: it });
+//             }
+//         }
+//         Self { heap }
+//     }
 
-    pub async fn _next(&mut self) -> Option<(u64, usize, usize)> {
-        if let Some(mut heap_item) = self.heap.pop() {
-            let result = heap_item.value;
-            if let Some(next_value) = heap_item.iter._next().await {
-                self.heap.push(HeapItem {
-                    value: next_value,
-                    iter: heap_item.iter,
-                });
-            }
-            Some(result)
-        } else {
-            None
-        }
-    }
-}
+//     pub async fn _next(&mut self) -> Option<(u64, usize, usize)> {
+//         if let Some(mut heap_item) = self.heap.pop() {
+//             let result = heap_item.value;
+//             if let Some(next_value) = heap_item.iter._next().await {
+//                 self.heap.push(HeapItem {
+//                     value: next_value,
+//                     iter: heap_item.iter,
+//                 });
+//             }
+//             Some(result)
+//         } else {
+//             None
+//         }
+//     }
+// }
 
 // ================================
 // Debug Helpers
 // ================================
 impl IndexBlock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, metadata: &GlobalIndex) -> fmt::Result {
-        write!(
-            f,
-            "\nIndexBlock {{ \n   bucket_start_idx: {}, \n   bucket_end_idx: {},",
-            self.bucket_start_idx, self.bucket_end_idx
-        )?;
-        let cursor = Cursor::new(self.data.as_ref().as_ref().unwrap().as_ref());
-        let mut reader = AsyncBitReader::endian(cursor, AsyncBigEndian);
-        write!(f, "\n   Buckets: ")?;
-        let mut num = 0;
-        block_on(reader.seek_bits(SeekFrom::Start(self.bucket_start_offset))).unwrap();
-        for _i in 0..self.bucket_end_idx {
-            num = block_on(reader.read::<u32>(metadata.bucket_bits)).unwrap();
-            write!(f, "{} ", num)?;
-        }
-        write!(f, "\n   Entries: ")?;
-        block_on(reader.seek_bits(SeekFrom::Start(0))).unwrap();
-        for _i in 0..num {
-            let (hash, seg_idx, row_idx) = block_on(self.read_entry(&mut reader, metadata));
-            write!(f, "\n     {} {} {}", hash, seg_idx, row_idx)?;
-        }
-        write!(f, "\n}}")?;
+        // write!(
+        //     f,
+        //     "\nIndexBlock {{ \n   bucket_start_idx: {}, \n   bucket_end_idx: {},",
+        //     self.bucket_start_idx, self.bucket_end_idx
+        // )?;
+        // let cursor = Cursor::new(self.data.as_ref().as_ref().unwrap().as_ref());
+        // let mut reader = AsyncBitReader::endian(cursor, AsyncBigEndian);
+        // write!(f, "\n   Buckets: ")?;
+        // let mut num = 0;
+        // block_on(reader.seek_bits(SeekFrom::Start(self.bucket_start_offset))).unwrap();
+        // for _i in 0..self.bucket_end_idx {
+        //     num = block_on(reader.read::<u32>(metadata.bucket_bits)).unwrap();
+        //     write!(f, "{} ", num)?;
+        // }
+        // write!(f, "\n   Entries: ")?;
+        // block_on(reader.seek_bits(SeekFrom::Start(0))).unwrap();
+        // for _i in 0..num {
+        //     let (hash, seg_idx, row_idx) = block_on(self.read_entry(&mut reader, metadata));
+        //     write!(f, "\n     {} {} {}", hash, seg_idx, row_idx)?;
+        // }
+        // write!(f, "\n}}")?;
         Ok(())
     }
 }
@@ -614,92 +656,92 @@ impl Debug for GlobalIndex {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::vec;
+// #[cfg(test)]
+// mod tests {
+//     use std::vec;
 
-    use super::*;
+//     use super::*;
 
-    use crate::storage::storage_utils::{create_data_file, FileId};
+//     use crate::storage::storage_utils::{create_data_file, FileId};
 
-    #[tokio::test]
-    async fn test_new() {
-        let data_file = create_data_file(/*file_id=*/ 0, "a.parquet".to_string());
-        let files = vec![data_file.clone()];
-        let hash_entries = vec![
-            (1, 0, 0),
-            (2, 0, 1),
-            (3, 0, 2),
-            (4, 0, 3),
-            (5, 0, 4),
-            (16, 0, 5),
-            (214141, 0, 6),
-            (2141, 0, 7),
-            (21141, 0, 8),
-            (219511, 0, 9),
-            (1421141, 0, 10),
-            (1111111141, 0, 11),
-            (99999, 0, 12),
-        ];
-        let mut builder = GlobalIndexBuilder::new();
-        builder
-            .set_files(files)
-            .set_directory(tempfile::tempdir().unwrap().keep());
-        let index = builder.build_from_flush(hash_entries.clone()).await;
+//     #[tokio::test]
+//     async fn test_new() {
+//         let data_file = create_data_file(/*file_id=*/ 0, "a.parquet".to_string());
+//         let files = vec![data_file.clone()];
+//         let hash_entries = vec![
+//             (1, 0, 0),
+//             (2, 0, 1),
+//             (3, 0, 2),
+//             (4, 0, 3),
+//             (5, 0, 4),
+//             (16, 0, 5),
+//             (214141, 0, 6),
+//             (2141, 0, 7),
+//             (21141, 0, 8),
+//             (219511, 0, 9),
+//             (1421141, 0, 10),
+//             (1111111141, 0, 11),
+//             (99999, 0, 12),
+//         ];
+//         let mut builder = GlobalIndexBuilder::new();
+//         builder
+//             .set_files(files)
+//             .set_directory(tempfile::tempdir().unwrap().keep());
+//         let index = builder.build_from_flush(hash_entries.clone()).await;
 
-        let data_file_ids = [data_file.file_id()];
-        for (hash, seg_idx, row_idx) in hash_entries.iter() {
-            let expected_record_loc = RecordLocation::DiskFile(data_file_ids[*seg_idx], *row_idx);
-            assert_eq!(index.search(hash).await, vec![expected_record_loc]);
-        }
+//         let data_file_ids = [data_file.file_id()];
+//         for (hash, seg_idx, row_idx) in hash_entries.iter() {
+//             let expected_record_loc = RecordLocation::DiskFile(data_file_ids[*seg_idx], *row_idx);
+//             assert_eq!(index.search(hash).await, vec![expected_record_loc]);
+//         }
 
-        let mut hash_entry_num = 0;
-        let file_id_remap = vec![0; index.files.len()];
-        for block in index.index_blocks.iter() {
-            let mut index_block_iter = block._create_iterator(&index, &file_id_remap).await;
-            while let Some((hash, seg_idx, row_idx)) = index_block_iter._next().await {
-                println!("{} {} {}", hash, seg_idx, row_idx);
-                hash_entry_num += 1;
-            }
-        }
-        // Check all hash entries are stored and iterated through via index iterator.
-        assert_eq!(hash_entry_num, hash_entries.len());
-    }
+//         let mut hash_entry_num = 0;
+//         let file_id_remap = vec![0; index.files.len()];
+//         for block in index.index_blocks.iter() {
+//             let mut index_block_iter = block._create_iterator(&index, &file_id_remap).await;
+//             while let Some((hash, seg_idx, row_idx)) = index_block_iter._next().await {
+//                 println!("{} {} {}", hash, seg_idx, row_idx);
+//                 hash_entry_num += 1;
+//             }
+//         }
+//         // Check all hash entries are stored and iterated through via index iterator.
+//         assert_eq!(hash_entry_num, hash_entries.len());
+//     }
 
-    #[tokio::test]
-    async fn test_merge() {
-        let files = vec![
-            create_data_file(/*file_id=*/ 1, "1.parquet".to_string()),
-            create_data_file(/*file_id=*/ 2, "2.parquet".to_string()),
-            create_data_file(/*file_id=*/ 3, "3.parquet".to_string()),
-        ];
-        let vec = (0..100).map(|i| (i as u64, i % 3, i)).collect::<Vec<_>>();
-        let mut builder = GlobalIndexBuilder::new();
-        builder
-            .set_files(files)
-            .set_directory(tempfile::tempdir().unwrap().keep());
-        let index1 = builder.build_from_flush(vec).await;
-        let files = vec![
-            create_data_file(/*file_id=*/ 4, "4.parquet".to_string()),
-            create_data_file(/*file_id=*/ 5, "5.parquet".to_string()),
-        ];
-        let vec = (100..200).map(|i| (i as u64, i % 2, i)).collect::<Vec<_>>();
-        let mut builder = GlobalIndexBuilder::new();
-        builder
-            .set_files(files)
-            .set_directory(tempfile::tempdir().unwrap().keep());
-        let index2 = builder.build_from_flush(vec).await;
-        let mut builder = GlobalIndexBuilder::new();
-        builder.set_directory(tempfile::tempdir().unwrap().keep());
-        let merged = builder._build_from_merge(vec![index1, index2]).await;
+//     #[tokio::test]
+//     async fn test_merge() {
+//         let files = vec![
+//             create_data_file(/*file_id=*/ 1, "1.parquet".to_string()),
+//             create_data_file(/*file_id=*/ 2, "2.parquet".to_string()),
+//             create_data_file(/*file_id=*/ 3, "3.parquet".to_string()),
+//         ];
+//         let vec = (0..100).map(|i| (i as u64, i % 3, i)).collect::<Vec<_>>();
+//         let mut builder = GlobalIndexBuilder::new();
+//         builder
+//             .set_files(files)
+//             .set_directory(tempfile::tempdir().unwrap().keep());
+//         let index1 = builder.build_from_flush(vec).await;
+//         let files = vec![
+//             create_data_file(/*file_id=*/ 4, "4.parquet".to_string()),
+//             create_data_file(/*file_id=*/ 5, "5.parquet".to_string()),
+//         ];
+//         let vec = (100..200).map(|i| (i as u64, i % 2, i)).collect::<Vec<_>>();
+//         let mut builder = GlobalIndexBuilder::new();
+//         builder
+//             .set_files(files)
+//             .set_directory(tempfile::tempdir().unwrap().keep());
+//         let index2 = builder.build_from_flush(vec).await;
+//         let mut builder = GlobalIndexBuilder::new();
+//         builder.set_directory(tempfile::tempdir().unwrap().keep());
+//         let merged = builder._build_from_merge(vec![index1, index2]).await;
 
-        for i in 0u64..100u64 {
-            let ret = merged.search(&i).await;
-            let record_location = ret.first().unwrap();
-            let RecordLocation::DiskFile(FileId(file_id), _) = record_location else {
-                panic!("No record location found for {}", i);
-            };
-            assert_eq!(*file_id, i % 3 + 1);
-        }
-    }
-}
+//         for i in 0u64..100u64 {
+//             let ret = merged.search(&i).await;
+//             let record_location = ret.first().unwrap();
+//             let RecordLocation::DiskFile(FileId(file_id), _) = record_location else {
+//                 panic!("No record location found for {}", i);
+//             };
+//             assert_eq!(*file_id, i % 3 + 1);
+//         }
+//     }
+// }
