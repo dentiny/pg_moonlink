@@ -3,6 +3,7 @@ use crate::pg_replicate::{
     table::{LookupKey, TableSchema},
 };
 use arrow::datatypes::{DataType, Field, Schema};
+use arrow_schema::{DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
 use chrono::Timelike;
 use moonlink::row::RowValue;
 use moonlink::row::{IdentityProp, MoonlinkRow};
@@ -11,8 +12,23 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_postgres::types::{Kind, Type};
 
+fn numeric_precision_scale(modifier: i32) -> Option<(u8, i8)> {
+    const VARHDRSZ: i32 = 4;
+    if modifier < VARHDRSZ {
+        return None;
+    }
+    let typmod = modifier - VARHDRSZ;
+    // Derived from: [https://github.com/postgres/postgres/blob/4fbb46f61271f4b7f46ecad3de608fc2f4d7d80f/src/backend/utils/adt/numeric.c#L929v]
+    let precision = ((typmod >> 16) & 0xffff) as u8;
+    // Derived from: [https://github.com/postgres/postgres/blob/4fbb46f61271f4b7f46ecad3de608fc2f4d7d80f/src/backend/utils/adt/numeric.c#L944]
+    let raw_scale = (typmod & 0x7fff);
+    let scale = ((raw_scale ^ 1024) - 1024) as i8;
+    Some((precision, scale))
+}
+
 fn postgres_primitive_to_arrow_type(
     typ: &Type,
+    modifier: i32,
     name: &str,
     nullable: bool,
     field_id: &mut i32,
@@ -24,7 +40,11 @@ fn postgres_primitive_to_arrow_type(
         Type::INT8 => (DataType::Int64, None),
         Type::FLOAT4 => (DataType::Float32, None),
         Type::FLOAT8 => (DataType::Float64, None),
-        Type::NUMERIC => (DataType::Decimal128(38, 10), None),
+        Type::NUMERIC => {
+            let (precision, scale) = numeric_precision_scale(modifier)
+                .unwrap_or((DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE));
+            (DataType::Decimal128(precision, scale), None)
+        }
         Type::VARCHAR | Type::TEXT | Type::BPCHAR | Type::CHAR | Type::NAME => {
             (DataType::Utf8, None)
         }
@@ -67,15 +87,17 @@ fn postgres_primitive_to_arrow_type(
 
 fn postgres_type_to_arrow_type(
     typ: &Type,
+    modifier: i32,
     name: &str,
     nullable: bool,
     field_id: &mut i32,
 ) -> Field {
     match typ.kind() {
-        Kind::Simple => postgres_primitive_to_arrow_type(typ, name, nullable, field_id),
+        Kind::Simple => postgres_primitive_to_arrow_type(typ, modifier, name, nullable, field_id),
         Kind::Array(inner) => {
             let item_type = postgres_type_to_arrow_type(
-                inner, /*name=*/ "item", /*nullable=*/ false, field_id,
+                inner, /*modifier=*/ -1, /*name=*/ "item", /*nullable=*/ false,
+                field_id,
             );
             let field = Field::new_list(name, Arc::new(item_type), nullable);
             let mut metadata = HashMap::new();
@@ -89,6 +111,7 @@ fn postgres_type_to_arrow_type(
                 .map(|f| {
                     postgres_type_to_arrow_type(
                         f.type_(),
+                        /*modifier=*/ -1,
                         f.name(),
                         /*nullable=*/ true,
                         field_id,
@@ -110,7 +133,15 @@ pub fn postgres_schema_to_moonlink_schema(table_schema: &TableSchema) -> (Schema
     let fields: Vec<Field> = table_schema
         .column_schemas
         .iter()
-        .map(|col| postgres_type_to_arrow_type(&col.typ, &col.name, col.nullable, &mut field_id))
+        .map(|col| {
+            postgres_type_to_arrow_type(
+                &col.typ,
+                col.modifier,
+                &col.name,
+                col.nullable,
+                &mut field_id,
+            )
+        })
         .collect();
 
     let identity = match &table_schema.lookup_key {
@@ -311,7 +342,18 @@ impl From<PostgresTableRow> for MoonlinkRow {
                 Cell::Numeric(value) => {
                     match value {
                         PgNumeric::Value(bigdecimal) => {
-                            values.push(RowValue::Decimal(bigdecimal.to_i128().unwrap()));
+                            let (int_val, scale) = bigdecimal.as_bigint_and_exponent();
+                            let multiplier = 10_i128.pow(scale as u32);
+                            if let Some(scaled_integer) =
+                                int_val.to_i128().and_then(|v| v.checked_mul(multiplier))
+                            {
+                                values.push(RowValue::Decimal(scaled_integer));
+                            } else {
+                                values.push(RowValue::Null); // handle overflow safely
+                                eprintln!(
+                                    "Decimal value too large to fit in i128 — storing as NULL"
+                                );
+                            }
                         }
                         _ => {
                             // DevNote:
@@ -387,7 +429,7 @@ mod tests {
                 ColumnSchema {
                     name: "numeric_field".to_string(),
                     typ: Type::NUMERIC,
-                    modifier: 0,
+                    modifier: ((12 << 16) | 5) + 4, // NUMERIC(12,5)
                     nullable: true,
                 },
                 ColumnSchema {
@@ -515,10 +557,10 @@ mod tests {
         assert_eq!(arrow_schema.field(5).data_type(), &DataType::Float64);
 
         assert_eq!(arrow_schema.field(6).name(), "numeric_field");
-        assert!(matches!(
+        assert_eq!(
             arrow_schema.field(6).data_type(),
-            DataType::Decimal128(_, _)
-        ));
+            &DataType::Decimal128(12, 5)
+        );
 
         assert_eq!(arrow_schema.field(7).name(), "varchar_field");
         assert_eq!(arrow_schema.field(7).data_type(), &DataType::Utf8);

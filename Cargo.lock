@@ -2807,6 +2807,7 @@ name = "moonlink_connectors"
 version = "0.0.1"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "async-trait",
  "bigdecimal",
  "byteorder",
