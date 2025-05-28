@@ -82,6 +82,7 @@ pub async fn test_table(
         TableConfig::new(),
     )
     .await
+    .unwrap()
 }
 
 pub fn read_batch(reader: ParquetRecordBatchReader) -> Option<RecordBatch> {

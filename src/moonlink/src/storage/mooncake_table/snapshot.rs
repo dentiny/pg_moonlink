@@ -90,16 +90,13 @@ impl SnapshotTableState {
     pub(super) async fn new(
         metadata: Arc<TableMetadata>,
         iceberg_table_manager: &mut dyn TableManager,
-    ) -> Self {
+    ) -> Result<Self> {
         let mut batches = BTreeMap::new();
         batches.insert(0, InMemoryBatch::new(metadata.config.batch_size));
 
-        let snapshot = iceberg_table_manager
-            .load_snapshot_from_table()
-            .await
-            .unwrap();
+        let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
 
-        Self {
+        Ok(Self {
             mooncake_table_config: metadata.config.clone(),
             current_snapshot: snapshot,
             batches,
@@ -110,7 +107,7 @@ impl SnapshotTableState {
             unpersisted_iceberg_records: UnpersistedIcebergSnapshotRecords {
                 unpersisted_data_files: Vec::new(),
             },
-        }
+        })
     }
 
     /// Aggregate committed deletion logs, which could be persisted into iceberg snapshot.

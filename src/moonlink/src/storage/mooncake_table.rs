@@ -313,7 +313,7 @@ impl MooncakeTable {
         identity: IdentityProp,
         iceberg_table_config: IcebergTableConfig,
         table_config: TableConfig,
-    ) -> Self {
+    ) -> Result<Self> {
         let schema = Arc::new(schema);
         let metadata = Arc::new(TableMetadata {
             name,
@@ -328,7 +328,7 @@ impl MooncakeTable {
             metadata.clone(),
             iceberg_table_config,
         ));
-        Self {
+        Ok(Self {
             mem_slice: MemSlice::new(
                 metadata.schema.clone(),
                 metadata.config.batch_size,
@@ -336,7 +336,7 @@ impl MooncakeTable {
             ),
             metadata: metadata.clone(),
             snapshot: Arc::new(RwLock::new(
-                SnapshotTableState::new(metadata, &mut *iceberg_table_manager).await,
+                SnapshotTableState::new(metadata, &mut *iceberg_table_manager).await?,
             )),
             next_snapshot_task: SnapshotTask::new(table_config),
             transaction_stream_states: HashMap::new(),
@@ -346,7 +346,7 @@ impl MooncakeTable {
             iceberg_table_manager: Some(iceberg_table_manager),
             last_commit_lsn: Arc::new(AtomicU64::new(0)),
             last_iceberg_snapshot_lsn: None,
-        }
+        })
     }
 
     /// Set iceberg snapshot flush LSN, called after a snapshot operation.

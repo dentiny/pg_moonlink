@@ -91,7 +91,8 @@ impl TestEnvironment {
             iceberg_table_config,
             mooncake_table_config,
         )
-        .await;
+        .await
+        .unwrap();
 
         let (replication_tx, replication_rx) = watch::channel(0u64);
 
