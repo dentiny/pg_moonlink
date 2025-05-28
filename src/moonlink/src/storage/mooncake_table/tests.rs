@@ -1,7 +1,10 @@
 use super::test_utils::*;
-#[cfg(test)]
 use super::*;
+use crate::storage::iceberg::iceberg_table_manager::MockTableManager;
 use crate::storage::mooncake_table::snapshot::ReadOutput;
+use crate::storage::mooncake_table::Snapshot as MooncakeSnapshot;
+use crate::storage::mooncake_table::TableConfig as MooncakeTableConfig;
+use iceberg::{Error as IcebergError, ErrorKind};
 use rstest::*;
 use rstest_reuse::{self, *};
 
@@ -21,8 +24,10 @@ async fn test_append_commit_snapshot(#[case] identity: IdentityProp) -> Result<(
     table.commit(1);
     snapshot(&mut table).await;
     let snapshot = table.snapshot.read().await;
-    let ReadOutput { file_paths, .. } = snapshot.request_read().await?;
-    verify_file_contents(&file_paths[0], &[1, 2], Some(2));
+    let ReadOutput {
+        data_file_paths, ..
+    } = snapshot.request_read().await?;
+    verify_file_contents(&data_file_paths[0], &[1, 2], Some(2));
     Ok(())
 }
 
@@ -34,8 +39,10 @@ async fn test_flush_basic(#[case] identity: IdentityProp) -> Result<()> {
     let rows = vec![test_row(1, "Alice", 30), test_row(2, "Bob", 25)];
     append_commit_flush_snapshot(&mut table, rows, 1).await?;
     let snapshot = table.snapshot.read().await;
-    let ReadOutput { file_paths, .. } = snapshot.request_read().await?;
-    verify_file_contents(&file_paths[0], &[1, 2], Some(2));
+    let ReadOutput {
+        data_file_paths, ..
+    } = snapshot.request_read().await?;
+    verify_file_contents(&data_file_paths[0], &[1, 2], Some(2));
     Ok(())
 }
 
@@ -61,12 +68,20 @@ async fn test_delete_and_append(#[case] identity: IdentityProp) -> Result<()> {
 
     let snapshot = table.snapshot.read().await;
     let ReadOutput {
-        file_paths,
+        data_file_paths,
+        puffin_file_paths,
         position_deletes,
         deletion_vectors,
         ..
     } = snapshot.request_read().await?;
-    verify_files_and_deletions(&file_paths, position_deletes, deletion_vectors, &[1, 3, 4]).await;
+    verify_files_and_deletions(
+        &data_file_paths,
+        &puffin_file_paths,
+        position_deletes,
+        deletion_vectors,
+        &[1, 3, 4],
+    )
+    .await;
     Ok(())
 }
 
@@ -85,8 +100,10 @@ async fn test_deletion_before_flush(#[case] identity: IdentityProp) -> Result<()
     snapshot(&mut table).await;
 
     let snapshot = table.snapshot.read().await;
-    let ReadOutput { file_paths, .. } = snapshot.request_read().await?;
-    verify_file_contents(&file_paths[0], &[1, 3], None);
+    let ReadOutput {
+        data_file_paths, ..
+    } = snapshot.request_read().await?;
+    verify_file_contents(&data_file_paths[0], &[1, 3], None);
     Ok(())
 }
 
@@ -104,12 +121,12 @@ async fn test_deletion_after_flush(#[case] identity: IdentityProp) -> Result<()>
 
     let snapshot = table.snapshot.read().await;
     let ReadOutput {
-        file_paths,
+        data_file_paths,
         position_deletes,
         ..
     } = snapshot.request_read().await?;
-    assert_eq!(file_paths.len(), 1);
-    let mut ids = read_ids_from_parquet(&file_paths[0]);
+    assert_eq!(data_file_paths.len(), 1);
+    let mut ids = read_ids_from_parquet(&data_file_paths[0]);
 
     for deletion in position_deletes {
         ids[deletion.1 as usize] = None;
@@ -184,13 +201,15 @@ async fn test_full_row_with_duplication_and_identical() -> Result<()> {
     {
         let table_snapshot = table.snapshot.read().await;
         let ReadOutput {
-            file_paths,
+            data_file_paths,
+            puffin_file_paths,
             position_deletes,
             deletion_vectors,
             ..
         } = table_snapshot.request_read().await?;
         verify_files_and_deletions(
-            &file_paths,
+            &data_file_paths,
+            &puffin_file_paths,
             position_deletes,
             deletion_vectors,
             &[1, 2, 2, 3, 3],
@@ -211,13 +230,15 @@ async fn test_full_row_with_duplication_and_identical() -> Result<()> {
     {
         let table_snapshot = table.snapshot.read().await;
         let ReadOutput {
-            file_paths,
+            data_file_paths,
+            puffin_file_paths,
             position_deletes,
             deletion_vectors,
             ..
         } = table_snapshot.request_read().await?;
         verify_files_and_deletions(
-            &file_paths,
+            &data_file_paths,
+            &puffin_file_paths,
             position_deletes,
             deletion_vectors,
             &[1, 2, 3, 3],
@@ -233,14 +254,99 @@ async fn test_full_row_with_duplication_and_identical() -> Result<()> {
     {
         let table_snapshot = table.snapshot.read().await;
         let ReadOutput {
-            file_paths,
+            data_file_paths,
+            puffin_file_paths,
             position_deletes,
             deletion_vectors,
             ..
         } = table_snapshot.request_read().await?;
-        verify_files_and_deletions(&file_paths, position_deletes, deletion_vectors, &[1, 2, 3])
-            .await;
+        verify_files_and_deletions(
+            &data_file_paths,
+            &puffin_file_paths,
+            position_deletes,
+            deletion_vectors,
+            &[1, 2, 3],
+        )
+        .await;
     }
 
     Ok(())
+}
+
+/// ---- Mock unit test ----
+#[tokio::test]
+async fn test_snapshot_load_failure() {
+    let mut mock_manager = MockTableManager::new();
+    mock_manager
+        .expect_load_snapshot_from_table()
+        .times(1)
+        .returning(|| {
+            Box::pin(async move {
+                Err(IcebergError::new(
+                    ErrorKind::Unexpected,
+                    "Intended error for unit test",
+                ))
+            })
+        });
+
+    let metadata = Arc::new(TableMetadata {
+        name: "test_table".to_string(),
+        id: 1,
+        schema: Arc::new(test_schema()),
+        config: TableConfig::new(),
+        path: PathBuf::new(),
+        identity: IdentityProp::Keys(vec![0]),
+    });
+    let snapshot_table_state = SnapshotTableState::new(metadata, &mut mock_manager).await;
+    assert!(snapshot_table_state.is_err());
+}
+
+#[tokio::test]
+async fn test_snapshot_store_failure() {
+    let table_metadata = Arc::new(TableMetadata {
+        name: "test_table".to_string(),
+        id: 1,
+        schema: Arc::new(test_schema()),
+        config: TableConfig::new(),
+        path: PathBuf::new(),
+        identity: IdentityProp::Keys(vec![0]),
+    });
+    let table_metadata_copy = table_metadata.clone();
+
+    let mut mock_table_manager = MockTableManager::new();
+    mock_table_manager
+        .expect_load_snapshot_from_table()
+        .times(1)
+        .returning(move || {
+            let table_metadata_copy = table_metadata_copy.clone();
+            Box::pin(async move { Ok(MooncakeSnapshot::new(table_metadata_copy)) })
+        });
+    mock_table_manager
+        .expect_sync_snapshot()
+        .times(1)
+        .returning(|_| {
+            Box::pin(async move {
+                Err(IcebergError::new(
+                    ErrorKind::Unexpected,
+                    "Intended error for unit test",
+                ))
+            })
+        });
+
+    let mut table = MooncakeTable::new_with_table_manager(
+        table_metadata,
+        Box::new(mock_table_manager),
+        MooncakeTableConfig::default(),
+    )
+    .await
+    .unwrap();
+
+    let row = test_row(1, "A", 20);
+    table.append(row).unwrap();
+    table.commit(/*lsn=*/ 100);
+    table.flush(/*lsn=*/ 100).await.unwrap();
+    let mooncake_snapshot_handle = table.create_snapshot().unwrap();
+    let (_, iceberg_snapshot_payload) = mooncake_snapshot_handle.await.unwrap();
+    let iceberg_snapshot_handle = table.persist_iceberg_snapshot(iceberg_snapshot_payload.unwrap());
+    assert!(iceberg_snapshot_handle.await.is_err());
 }

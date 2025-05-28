@@ -313,40 +313,47 @@ impl MooncakeTable {
         identity: IdentityProp,
         iceberg_table_config: IcebergTableConfig,
         table_config: TableConfig,
-    ) -> Self {
-        let schema = Arc::new(schema);
+    ) -> Result<Self> {
         let metadata = Arc::new(TableMetadata {
             name,
             id: version,
-            schema,
+            schema: Arc::new(schema.clone()),
             config: table_config.clone(),
             path: base_path,
             identity,
         });
-        let (table_snapshot_watch_sender, table_snapshot_watch_receiver) = watch::channel(0);
-        let mut iceberg_table_manager = Box::new(IcebergTableManager::new(
+        let iceberg_table_manager = Box::new(IcebergTableManager::new(
             metadata.clone(),
             iceberg_table_config,
         ));
-        Self {
+        Self::new_with_table_manager(metadata, iceberg_table_manager, table_config).await
+    }
+
+    pub(crate) async fn new_with_table_manager(
+        table_metadata: Arc<TableMetadata>,
+        mut table_manager: Box<dyn TableManager>,
+        table_config: TableConfig,
+    ) -> Result<Self> {
+        let (table_snapshot_watch_sender, table_snapshot_watch_receiver) = watch::channel(0);
+        Ok(Self {
             mem_slice: MemSlice::new(
-                metadata.schema.clone(),
-                metadata.config.batch_size,
-                metadata.identity.clone(),
+                table_metadata.schema.clone(),
+                table_metadata.config.batch_size,
+                table_metadata.identity.clone(),
             ),
-            metadata: metadata.clone(),
+            metadata: table_metadata.clone(),
             snapshot: Arc::new(RwLock::new(
-                SnapshotTableState::new(metadata, &mut *iceberg_table_manager).await,
+                SnapshotTableState::new(table_metadata, &mut *table_manager).await?,
             )),
             next_snapshot_task: SnapshotTask::new(table_config),
             transaction_stream_states: HashMap::new(),
             table_snapshot_watch_sender,
             table_snapshot_watch_receiver,
             next_file_id: 0,
-            iceberg_table_manager: Some(iceberg_table_manager),
+            iceberg_table_manager: Some(table_manager),
             last_commit_lsn: Arc::new(AtomicU64::new(0)),
             last_iceberg_snapshot_lsn: None,
-        }
+        })
     }
 
     /// Set iceberg snapshot flush LSN, called after a snapshot operation.

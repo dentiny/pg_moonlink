@@ -1,4 +1,5 @@
 use crate::pg_replicate::table::TableId;
+use crate::Result;
 use crate::{PostgresSourceError, ReplicationConnection};
 use moonlink::{IcebergSnapshotStateManager, ReadStateManager};
 use std::collections::HashMap;
@@ -36,7 +37,7 @@ impl<T: Eq + Hash> ReplicationManager<T> {
         uri: &str,
         external_table_id: T,
         table_name: &str,
-    ) -> Result<(), PostgresSourceError> {
+    ) -> Result<()> {
         if !self.connections.contains_key(uri) {
             // Lazily create the directory that will hold all tables.
             // This will not overwrite any existing directory.

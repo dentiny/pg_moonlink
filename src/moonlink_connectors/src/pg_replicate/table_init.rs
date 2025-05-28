@@ -1,6 +1,7 @@
 use crate::pg_replicate::replication_state::ReplicationState;
 use crate::pg_replicate::table::TableSchema;
 use crate::pg_replicate::util::postgres_schema_to_moonlink_schema;
+use crate::{Error, Result};
 use moonlink::{
     IcebergSnapshotStateManager, IcebergTableConfig, MooncakeTable, ReadStateManager, TableConfig,
     TableEvent, TableHandler,
@@ -28,7 +29,7 @@ pub async fn build_table_components(
     table_schema: &TableSchema,
     base_path: &Path,
     replication_state: &ReplicationState,
-) -> TableResources {
+) -> Result<TableResources> {
     let table_path = PathBuf::from(base_path).join(table_schema.table_name.to_string());
     tokio::fs::create_dir_all(&table_path).await.unwrap();
     let (arrow_schema, identity) = postgres_schema_to_moonlink_schema(table_schema);
@@ -48,7 +49,7 @@ pub async fn build_table_components(
         iceberg_table_config,
         TableConfig::new(),
     )
-    .await;
+    .await?;
 
     let read_state_manager = ReadStateManager::new(&table, replication_state.subscribe());
 
@@ -58,9 +59,9 @@ pub async fn build_table_components(
         IcebergSnapshotStateManager::new(handler.get_event_sender(), snapshot_completion_rx);
     let event_sender = handler.get_event_sender();
 
-    TableResources {
+    Ok(TableResources {
         event_sender,
         read_state_manager,
         iceberg_snapshot_manager,
-    }
+    })
 }

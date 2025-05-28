@@ -91,7 +91,8 @@ impl TestEnvironment {
             iceberg_table_config,
             mooncake_table_config,
         )
-        .await;
+        .await
+        .unwrap();
 
         let (replication_tx, replication_rx) = watch::channel(0u64);
 
@@ -240,15 +241,23 @@ pub async fn check_read_snapshot(
     expected_ids: &[i32],
 ) {
     let read_state = read_manager.try_read(Some(target_lsn)).await.unwrap();
-    let (files, deletion_vectors, position_deletes) = decode_read_state_for_testing(&read_state);
+    let (data_files, puffin_files, deletion_vectors, position_deletes) =
+        decode_read_state_for_testing(&read_state);
 
-    if files.is_empty() && !expected_ids.is_empty() {
+    if data_files.is_empty() && !expected_ids.is_empty() {
         unreachable!(
             "No snapshot files returned for LSN {} when rows (IDs: {:?}) were expected. Expected files because expected_ids is not empty.",
             target_lsn, expected_ids
         );
     }
-    verify_files_and_deletions(&files, position_deletes, deletion_vectors, expected_ids).await;
+    verify_files_and_deletions(
+        &data_files,
+        &puffin_files,
+        position_deletes,
+        deletion_vectors,
+        expected_ids,
+    )
+    .await;
 }
 
 /// Test util function to load all arrow batch from the given local parquet file.

@@ -1,10 +1,9 @@
 use crate::pg_replicate::conversions::cdc_event::{CdcEvent, CdcEventConversionError};
 use crate::pg_replicate::moonlink_sink::Sink;
 use crate::pg_replicate::postgres_source::CdcStream;
-use crate::pg_replicate::postgres_source::{
-    CdcStreamError, PostgresSource, PostgresSourceError, TableNamesFrom,
-};
+use crate::pg_replicate::postgres_source::{CdcStreamError, PostgresSource, TableNamesFrom};
 use crate::pg_replicate::table_init::build_table_components;
+use crate::Result;
 use moonlink::{IcebergSnapshotStateManager, ReadStateManager};
 use std::sync::{Arc, RwLock};
 use tokio::pin;
@@ -23,7 +22,7 @@ pub struct ReplicationConnection {
     uri: String,
     table_base_path: String,
     postgres_client: Client,
-    handle: Option<JoinHandle<Result<(), PostgresSourceError>>>,
+    handle: Option<JoinHandle<Result<()>>>,
     table_readers: HashMap<TableId, ReadStateManager>,
     iceberg_snapshot_managers: HashMap<TableId, IcebergSnapshotStateManager>,
     event_senders: Arc<RwLock<HashMap<TableId, Sender<TableEvent>>>>,
@@ -32,7 +31,7 @@ pub struct ReplicationConnection {
 }
 
 impl ReplicationConnection {
-    pub async fn new(uri: String, table_base_path: String) -> Result<Self, PostgresSourceError> {
+    pub async fn new(uri: String, table_base_path: String) -> Result<Self> {
         let (postgres_client, connection) = connect(&uri, NoTls).await.unwrap();
         tokio::spawn(async move {
             if let Err(e) = connection.await {
@@ -67,10 +66,7 @@ impl ReplicationConnection {
         })
     }
 
-    async fn alter_table_replica_identity(
-        &self,
-        table_name: &str,
-    ) -> Result<(), PostgresSourceError> {
+    async fn alter_table_replica_identity(&self, table_name: &str) -> Result<()> {
         self.postgres_client
             .simple_query(&format!(
                 "ALTER TABLE {} REPLICA IDENTITY FULL;",
@@ -81,7 +77,7 @@ impl ReplicationConnection {
         Ok(())
     }
 
-    async fn add_table_to_publication(&self, table_name: &str) -> Result<(), PostgresSourceError> {
+    async fn add_table_to_publication(&self, table_name: &str) -> Result<()> {
         self.postgres_client
             .simple_query(&format!(
                 "ALTER PUBLICATION moonlink_pub ADD TABLE {};",
@@ -110,10 +106,7 @@ impl ReplicationConnection {
         self.iceberg_snapshot_managers.get_mut(&table_id).unwrap()
     }
 
-    async fn spawn_replication_task(
-        &mut self,
-        sink: Sink,
-    ) -> JoinHandle<Result<(), PostgresSourceError>> {
+    async fn spawn_replication_task(&mut self, sink: Sink) -> JoinHandle<Result<()>> {
         self.source
             .commit_transaction()
             .await
@@ -132,17 +125,14 @@ impl ReplicationConnection {
         tokio::spawn(async move { run_event_loop(stream, sink).await })
     }
 
-    async fn add_table_to_replication(
-        &mut self,
-        schema: &TableSchema,
-    ) -> Result<(), PostgresSourceError> {
+    async fn add_table_to_replication(&mut self, schema: &TableSchema) -> Result<()> {
         let table_id = schema.table_id;
         let resources = build_table_components(
             schema,
             Path::new(&self.table_base_path),
             &self.replication_state,
         )
-        .await;
+        .await?;
 
         self.table_readers
             .insert(table_id, resources.read_state_manager);
@@ -156,7 +146,7 @@ impl ReplicationConnection {
         Ok(())
     }
 
-    pub async fn start_replication(&mut self) -> Result<(), PostgresSourceError> {
+    pub async fn start_replication(&mut self) -> Result<()> {
         let table_schemas = self.source.get_table_schemas().await;
         for schema in table_schemas.values() {
             self.add_table_to_replication(schema).await?;
@@ -168,7 +158,7 @@ impl ReplicationConnection {
         Ok(())
     }
 
-    pub async fn add_table(&mut self, table_name: &str) -> Result<TableId, PostgresSourceError> {
+    pub async fn add_table(&mut self, table_name: &str) -> Result<TableId> {
         // TODO: We should not naively alter the replica identity of a table. We should only do this if we are sure that the table does not already have a FULL replica identity. [https://github.com/Mooncake-Labs/moonlink/issues/104]
         self.alter_table_replica_identity(table_name).await?;
         let table_schema = self.source.fetch_table_schema(table_name, None).await?;
@@ -185,7 +175,7 @@ impl ReplicationConnection {
     }
 }
 
-async fn run_event_loop(stream: CdcStream, mut sink: Sink) -> Result<(), PostgresSourceError> {
+async fn run_event_loop(stream: CdcStream, mut sink: Sink) -> Result<()> {
     //TODO: add separate stream for initial table copy.
     // This assumes the table is empty and we can naively begin copying rows immediatley. If a table already contains data, this is not the case. We will need to use the get_table_copy_stream method to get the initial rows and write them into a new table. In parallel, we will need to buffer the cdc events for this table until the initial rows are written. For simplicity, we will assume that the table is empty at this point, and add a new stream for initial table copy later.
 

@@ -54,15 +54,17 @@ fn bench_write_mooncake_table(c: &mut Criterion) {
         drop_table_if_exists: false,
     };
     let rt = Runtime::new().unwrap();
-    let mut table = rt.block_on(MooncakeTable::new(
-        schema,
-        table_name.to_string(),
-        1,
-        base_path,
-        IdentityProp::SinglePrimitiveKey(0),
-        iceberg_table_config,
-        TableConfig::new(),
-    ));
+    let mut table = rt
+        .block_on(MooncakeTable::new(
+            schema,
+            table_name.to_string(),
+            1,
+            base_path,
+            IdentityProp::SinglePrimitiveKey(0),
+            iceberg_table_config,
+            TableConfig::new(),
+        ))
+        .unwrap();
 
     let mut total_appended = 0;
 

@@ -82,6 +82,7 @@ pub async fn test_table(
         TableConfig::new(),
     )
     .await
+    .unwrap()
 }
 
 pub fn read_batch(reader: ParquetRecordBatchReader) -> Option<RecordBatch> {
@@ -178,7 +179,8 @@ fn verify_files_and_deletions_impl(
 }
 
 pub async fn verify_files_and_deletions(
-    files: &[String],
+    data_file_paths: &[String],
+    puffin_file_paths: &[String],
     position_deletes: Vec<(u32, u32)>,
     deletion_vectors: Vec<PuffinDeletionBlobAtRead>,
     expected_ids: &[i32],
@@ -188,8 +190,12 @@ pub async fn verify_files_and_deletions(
     let mut position_deletes = position_deletes;
     let mut load_blob_futures = Vec::with_capacity(deletion_vectors.len());
     for cur_blob in deletion_vectors.iter() {
-        let get_blob_future =
-            puffin_utils::load_blob_from_puffin_file(file_io.clone(), &cur_blob.puffin_filepath);
+        let get_blob_future = puffin_utils::load_blob_from_puffin_file(
+            file_io.clone(),
+            puffin_file_paths
+                .get(cur_blob.puffin_file_index as usize)
+                .unwrap(),
+        );
         load_blob_futures.push(get_blob_future);
     }
 
@@ -208,5 +214,5 @@ pub async fn verify_files_and_deletions(
         );
     }
 
-    verify_files_and_deletions_impl(files, &position_deletes, expected_ids)
+    verify_files_and_deletions_impl(data_file_paths, &position_deletes, expected_ids)
 }

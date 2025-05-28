@@ -61,7 +61,8 @@ fn bench_write(c: &mut Criterion) {
                     iceberg_table_config,
                     TableConfig::new(),
                 )
-                .await;
+                .await
+                .unwrap();
                 for row in batches.iter() {
                     let _ = table.append(MoonlinkRow {
                         values: row.values.clone(),
@@ -91,7 +92,8 @@ fn bench_write(c: &mut Criterion) {
                     iceberg_table_config,
                     TableConfig::new(),
                 )
-                .await;
+                .await
+                .unwrap();
                 for row in batches.iter() {
                     let _ = table.append_in_stream_batch(
                         MoonlinkRow {
@@ -115,15 +117,17 @@ fn bench_write(c: &mut Criterion) {
                 let iceberg_table_config = IcebergTableConfig::builder()
                     .warehouse_uri(temp_warehouse_uri)
                     .build();
-                let mut table = rt.block_on(MooncakeTable::new(
-                    schema.clone(),
-                    "test_table".to_string(),
-                    1,
-                    temp_dir.path().to_path_buf(),
-                    IdentityProp::SinglePrimitiveKey(0),
-                    iceberg_table_config,
-                    TableConfig::new(),
-                ));
+                let mut table = rt
+                    .block_on(MooncakeTable::new(
+                        schema.clone(),
+                        "test_table".to_string(),
+                        1,
+                        temp_dir.path().to_path_buf(),
+                        IdentityProp::SinglePrimitiveKey(0),
+                        iceberg_table_config,
+                        TableConfig::new(),
+                    ))
+                    .unwrap();
                 rt.block_on(async {
                     for row in batches.iter() {
                         let _ = table.append_in_stream_batch(

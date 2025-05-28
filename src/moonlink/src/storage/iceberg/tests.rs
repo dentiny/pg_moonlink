@@ -646,7 +646,8 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         iceberg_table_config.clone(),
         mooncake_table_config,
     )
-    .await;
+    .await
+    .unwrap();
 
     // Perform a few table write operations.
     //
@@ -1033,7 +1034,8 @@ async fn test_drop_table_at_creation() -> IcebergResult<()> {
         iceberg_table_config.clone(),
         mooncake_table_config,
     )
-    .await;
+    .await
+    .unwrap();
     let row = MoonlinkRow::new(vec![
         RowValue::Int32(1),
         RowValue::ByteArray("John".as_bytes().to_vec()),
@@ -1110,7 +1112,8 @@ async fn create_table_and_iceberg_manager(
         iceberg_table_config.clone(),
         mooncake_table_config,
     )
-    .await;
+    .await
+    .unwrap();
 
     let iceberg_table_manager = IcebergTableManager::new(
         mooncake_table_metadata.clone(),
