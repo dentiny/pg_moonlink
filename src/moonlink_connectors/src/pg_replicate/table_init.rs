@@ -3,8 +3,8 @@ use crate::pg_replicate::table::TableSchema;
 use crate::pg_replicate::util::postgres_schema_to_moonlink_schema;
 use crate::{Error, Result};
 use moonlink::{
-    IcebergSnapshotStateManager, IcebergTableConfig, MooncakeTable, ReadStateManager, TableConfig,
-    TableEvent, TableHandler,
+    IcebergEventSyncReceiver, IcebergEventSyncSender, IcebergSnapshotStateManager,
+    IcebergTableConfig, MooncakeTable, ReadStateManager, TableConfig, TableEvent, TableHandler,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -53,10 +53,19 @@ pub async fn build_table_components(
 
     let read_state_manager = ReadStateManager::new(&table, replication_state.subscribe());
 
-    let (snapshot_completion_tx, snapshot_completion_rx) = mpsc::channel(1);
-    let handler = TableHandler::new(table, snapshot_completion_tx);
+    let (iceberg_snapshot_completion_tx, iceberg_snapshot_completion_rx) = mpsc::channel(1);
+    let (iceberg_drop_table_completion_tx, iceberg_drop_table_completion_rx) = mpsc::channel(1);
+    let iceberg_event_sync_sender = IcebergEventSyncSender {
+        iceberg_drop_table_completion_tx,
+        iceberg_snapshot_completion_tx,
+    };
+    let iceberg_event_sync_receiver = IcebergEventSyncReceiver {
+        iceberg_drop_table_completion_rx,
+        iceberg_snapshot_completion_rx,
+    };
+    let handler = TableHandler::new(table, iceberg_event_sync_sender);
     let iceberg_snapshot_manager =
-        IcebergSnapshotStateManager::new(handler.get_event_sender(), snapshot_completion_rx);
+        IcebergSnapshotStateManager::new(handler.get_event_sender(), iceberg_event_sync_receiver);
     let event_sender = handler.get_event_sender();
 
     Ok(TableResources {

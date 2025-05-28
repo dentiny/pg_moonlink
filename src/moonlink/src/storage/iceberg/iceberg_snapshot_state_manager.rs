@@ -4,22 +4,34 @@ use tokio::sync::mpsc;
 use crate::Result;
 use crate::TableEvent;
 
+/// Contains a few receivers, which get notified after certain iceberg events completion.
+pub struct IcebergEventSyncReceiver {
+    /// Gets notified when iceberg snapshot completes.
+    pub iceberg_snapshot_completion_rx: mpsc::Receiver<()>,
+
+    /// Get notified when iceberg drop table completes.
+    pub iceberg_drop_table_completion_rx: mpsc::Receiver<()>,
+}
+
 /// At most one outstanding snapshot request is allowed.
 pub struct IcebergSnapshotStateManager {
     /// Used to initiate a mooncake and iceberg snapshot operation.
     table_event_tx: mpsc::Sender<TableEvent>,
     /// Used to synchronize on the completion of an iceberg snapshot.
     snapshot_completion_rx: mpsc::Receiver<()>,
+    /// Used to synchronize on the completion of an iceberg drop table.
+    drop_table_completion_rx: mpsc::Receiver<()>,
 }
 
 impl IcebergSnapshotStateManager {
     pub fn new(
         table_event_tx: mpsc::Sender<TableEvent>,
-        snapshot_completion_rx: mpsc::Receiver<()>,
+        iceberg_event_sync_rx: IcebergEventSyncReceiver,
     ) -> Self {
         Self {
             table_event_tx,
-            snapshot_completion_rx,
+            snapshot_completion_rx: iceberg_event_sync_rx.iceberg_snapshot_completion_rx,
+            drop_table_completion_rx: iceberg_event_sync_rx.iceberg_drop_table_completion_rx,
         }
     }
 
@@ -38,5 +50,11 @@ impl IcebergSnapshotStateManager {
     }
 
     /// Initiate an iceberg drop table event.
-    pub async fn drop_table(&mut self) {}
+    pub async fn drop_table(&mut self) {
+        self.table_event_tx
+            .send(TableEvent::DropIcebergTable)
+            .await
+            .unwrap();
+        self.drop_table_completion_rx.recv().await.unwrap();
+    }
 }

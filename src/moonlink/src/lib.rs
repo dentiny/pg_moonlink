@@ -7,10 +7,10 @@ mod union_read;
 pub use error::*;
 pub use storage::storage_utils::create_data_file;
 pub use storage::{
-    IcebergSnapshotStateManager, IcebergTableConfig, IcebergTableManager, MooncakeTable,
-    TableConfig, TableManager,
+    IcebergEventSyncReceiver, IcebergSnapshotStateManager, IcebergTableConfig, IcebergTableManager,
+    MooncakeTable, TableConfig, TableManager,
 };
-pub use table_handler::{TableEvent, TableHandler};
+pub use table_handler::{IcebergEventSyncSender, TableEvent, TableHandler};
 pub use union_read::{ReadState, ReadStateManager};
 
 #[cfg(test)]

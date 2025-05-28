@@ -5,6 +5,7 @@ use crate::storage::MooncakeTable;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
+
 /// Event types that can be processed by the TableHandler
 #[derive(Debug)]
 pub enum TableEvent {
@@ -46,15 +47,24 @@ pub struct TableHandler {
     event_sender: Sender<TableEvent>,
 }
 
+/// Contains a few senders, which notifies after certain iceberg events completion.
+pub struct IcebergEventSyncSender {
+    /// Notifies when iceberg snapshot completes.
+    pub iceberg_snapshot_completion_tx: mpsc::Sender<()>,
+
+    /// Notifies when iceberg drop table completes.
+    pub iceberg_drop_table_completion_tx: mpsc::Sender<()>,
+}
+
 impl TableHandler {
     /// Create a new TableHandler for the given schema and table name
-    pub fn new(table: MooncakeTable, iceberg_snapshot_completion_tx: mpsc::Sender<()>) -> Self {
+    pub fn new(table: MooncakeTable, iceberg_event_sync_sender: IcebergEventSyncSender) -> Self {
         // Create channel for events
         let (event_sender, event_receiver) = mpsc::channel(100);
 
         // Spawn the task with the oneshot receiver
         let event_handle = Some(tokio::spawn(async move {
-            Self::event_loop(iceberg_snapshot_completion_tx, event_receiver, table).await;
+            Self::event_loop(iceberg_event_sync_sender, event_receiver, table).await;
         }));
 
         // Create the handler
@@ -71,7 +81,7 @@ impl TableHandler {
 
     /// Main event processing loop
     async fn event_loop(
-        iceberg_snapshot_completion_tx: Sender<()>,
+        iceberg_event_sync_sender: IcebergEventSyncSender,
         mut event_receiver: Receiver<TableEvent>,
         mut table: MooncakeTable,
     ) {
@@ -177,7 +187,7 @@ impl TableHandler {
                             // Fast-path: if iceberg snapshot requirement is already satisfied, notify directly.
                             let last_iceberg_snapshot_lsn = table.get_iceberg_snapshot_lsn();
                             if last_iceberg_snapshot_lsn.is_some() && lsn <= last_iceberg_snapshot_lsn.unwrap() {
-                                iceberg_snapshot_completion_tx.send(()).await.unwrap();
+                                iceberg_event_sync_sender.iceberg_snapshot_completion_tx.send(()).await.unwrap();
                             }
                             // Iceberg snapshot LSN requirement is not met, record the required LSN, so later commit will pick up.
                             else {
@@ -187,7 +197,10 @@ impl TableHandler {
                         // Branch to drop the iceberg table, only used when the whole table requested to drop.
                         // So we block wait for asynchronous request completion.
                         TableEvent::DropIcebergTable => {
-
+                            if let Err(e) = table.drop_iceberg_table().await {
+                                println!("Drop iceberg table failed: {}", e);
+                            }
+                            iceberg_event_sync_sender.iceberg_drop_table_completion_tx.send(()).await.unwrap();
                         }
                     }
                 }
@@ -241,7 +254,7 @@ impl TableHandler {
                     let iceberg_flush_lsn = iceberg_snapshot_res.flush_lsn;
                     table.set_iceberg_snapshot_res(iceberg_snapshot_res);
                     if force_snapshot_lsn.is_some() && force_snapshot_lsn.unwrap() <= iceberg_flush_lsn {
-                        iceberg_snapshot_completion_tx.send(()).await.unwrap();
+                        iceberg_event_sync_sender.iceberg_snapshot_completion_tx.send(()).await.unwrap();
                         force_snapshot_lsn = None;
                     }
                     iceberg_snapshot_handle = None;

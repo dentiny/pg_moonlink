@@ -5,9 +5,12 @@ use crate::storage::mooncake_table::{
 use crate::storage::IcebergTableConfig;
 use crate::storage::{load_blob_from_puffin_file, DeletionVector};
 use crate::storage::{verify_files_and_deletions, MooncakeTable};
-use crate::table_handler::{TableEvent, TableHandler}; // Ensure this path is correct
+use crate::table_handler::{IcebergEventSyncSender, TableEvent, TableHandler}; // Ensure this path is correct
 use crate::union_read::{decode_read_state_for_testing, ReadStateManager};
-use crate::{IcebergSnapshotStateManager, IcebergTableManager, TableConfig as MooncakeTableConfig};
+use crate::{
+    IcebergEventSyncReceiver, IcebergSnapshotStateManager, IcebergTableManager,
+    TableConfig as MooncakeTableConfig,
+};
 
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_array::RecordBatch;
@@ -98,10 +101,21 @@ impl TestEnvironment {
 
         let read_state_manager = Arc::new(ReadStateManager::new(&mooncake_table, replication_rx));
 
-        let (snapshot_completion_tx, snapshot_completion_rx) = mpsc::channel(1);
-        let handler = TableHandler::new(mooncake_table, snapshot_completion_tx);
-        let iceberg_snapshot_manager =
-            IcebergSnapshotStateManager::new(handler.get_event_sender(), snapshot_completion_rx);
+        let (iceberg_snapshot_completion_tx, iceberg_snapshot_completion_rx) = mpsc::channel(1);
+        let (iceberg_drop_table_completion_tx, iceberg_drop_table_completion_rx) = mpsc::channel(1);
+        let iceberg_event_sync_sender = IcebergEventSyncSender {
+            iceberg_drop_table_completion_tx,
+            iceberg_snapshot_completion_tx,
+        };
+        let iceberg_event_sync_receiver = IcebergEventSyncReceiver {
+            iceberg_drop_table_completion_rx,
+            iceberg_snapshot_completion_rx,
+        };
+        let handler = TableHandler::new(mooncake_table, iceberg_event_sync_sender);
+        let iceberg_snapshot_manager = IcebergSnapshotStateManager::new(
+            handler.get_event_sender(),
+            iceberg_event_sync_receiver,
+        );
         let event_sender = handler.get_event_sender();
 
         Self {
