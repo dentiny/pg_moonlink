@@ -3,7 +3,7 @@ mod index;
 pub(crate) mod mooncake_table;
 pub(crate) mod storage_utils;
 
-pub use iceberg::iceberg_snapshot_state_manager::{
+pub use iceberg::iceberg_table_event_manager::{
     IcebergEventSyncReceiver, IcebergTableEventManager,
 };
 pub use iceberg::iceberg_table_manager::{IcebergTableConfig, IcebergTableManager, TableManager};
