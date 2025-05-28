@@ -1,7 +1,9 @@
 use super::test_utils::*;
-#[cfg(test)]
 use super::*;
+use crate::storage::iceberg::iceberg_table_manager::MockTableManager;
 use crate::storage::mooncake_table::snapshot::ReadOutput;
+use iceberg::{Error as IcebergError, ErrorKind};
+use rand::rngs::mock;
 use rstest::*;
 use rstest_reuse::{self, *};
 
@@ -268,4 +270,32 @@ async fn test_full_row_with_duplication_and_identical() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// ---- Mock unit test ----
+#[tokio::test]
+async fn test_snapshot_creation() {
+    let mut mock_manager = MockTableManager::new();
+    mock_manager
+        .expect_load_snapshot_from_table()
+        .times(1)
+        .returning(|| {
+            Box::pin(async move {
+                Err(IcebergError::new(
+                    ErrorKind::Unexpected,
+                    "Intended error for unit test",
+                ))
+            })
+        });
+
+    let metadata = Arc::new(TableMetadata {
+        name: "test_table".to_string(),
+        id: 1,
+        schema: Arc::new(test_schema()),
+        config: TableConfig::new(),
+        path: PathBuf::new(),
+        identity: IdentityProp::Keys(vec![0]),
+    });
+    let result = SnapshotTableState::new(metadata, &mut mock_manager).await;
+    assert!(result.is_err());
 }
