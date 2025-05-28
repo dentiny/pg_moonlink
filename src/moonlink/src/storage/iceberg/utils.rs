@@ -13,7 +13,7 @@ use uuid::Uuid;
 use arrow_schema::Schema as ArrowSchema;
 use iceberg::arrow as IcebergArrow;
 use iceberg::io::FileIOBuilder;
-use iceberg::spec::DataFile;
+use iceberg::spec::{DataFile, DataFileBuilder, Struct};
 use iceberg::spec::{DataContentType, DataFileFormat, ManifestEntry};
 use iceberg::table::Table as IcebergTable;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
