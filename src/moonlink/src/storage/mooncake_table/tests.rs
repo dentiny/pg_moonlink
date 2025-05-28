@@ -7,6 +7,7 @@ use crate::storage::mooncake_table::TableConfig as MooncakeTableConfig;
 use iceberg::{Error as IcebergError, ErrorKind};
 use rstest::*;
 use rstest_reuse::{self, *};
+use tempfile::TempDir;
 
 #[template]
 #[rstest]
@@ -303,12 +304,13 @@ async fn test_snapshot_load_failure() {
 
 #[tokio::test]
 async fn test_snapshot_store_failure() {
+    let temp_dir = TempDir::new().unwrap();
     let table_metadata = Arc::new(TableMetadata {
         name: "test_table".to_string(),
         id: 1,
         schema: Arc::new(test_schema()),
         config: TableConfig::new(),
-        path: PathBuf::new(),
+        path: PathBuf::from(temp_dir.path()),
         identity: IdentityProp::Keys(vec![0]),
     });
     let table_metadata_copy = table_metadata.clone();
