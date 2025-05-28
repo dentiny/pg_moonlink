@@ -1,6 +1,8 @@
 services:
   devcontainer:
-    image: mcr.microsoft.com/devcontainers/rust:latest
+    build: 
+      context: .
+      dockerfile: Dockerfile
     volumes:
       - ..:/workspaces/pg_moonlink:cached
     networks:
