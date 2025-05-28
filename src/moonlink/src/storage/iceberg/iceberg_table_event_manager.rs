@@ -48,7 +48,7 @@ impl IcebergTableEventManager {
             .unwrap()
     }
 
-    /// Initiate an iceberg drop table event.
+    /// Drop an iceberg table.
     pub async fn drop_table(&mut self) {
         self.table_event_tx
             .send(TableEvent::DropIcebergTable)

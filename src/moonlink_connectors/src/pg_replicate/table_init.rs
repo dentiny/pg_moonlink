@@ -24,6 +24,21 @@ pub struct TableResources {
     pub iceberg_snapshot_manager: IcebergTableEventManager,
 }
 
+/// Create iceberg table event manager sender and receiver.
+fn create_iceberg_event_syncer() -> (IcebergEventSyncSender, IcebergEventSyncReceiver) {
+    let (iceberg_snapshot_completion_tx, iceberg_snapshot_completion_rx) = mpsc::channel(1);
+    let (iceberg_drop_table_completion_tx, iceberg_drop_table_completion_rx) = mpsc::channel(1);
+    let iceberg_event_sync_sender = IcebergEventSyncSender {
+        iceberg_drop_table_completion_tx,
+        iceberg_snapshot_completion_tx,
+    };
+    let iceberg_event_sync_receiver = IcebergEventSyncReceiver {
+        iceberg_drop_table_completion_rx,
+        iceberg_snapshot_completion_rx,
+    };
+    (iceberg_event_sync_sender, iceberg_event_sync_receiver)
+}
+
 /// Build all components needed to replicate `table_schema`.
 pub async fn build_table_components(
     table_schema: &TableSchema,
@@ -52,17 +67,7 @@ pub async fn build_table_components(
     .await?;
 
     let read_state_manager = ReadStateManager::new(&table, replication_state.subscribe());
-
-    let (iceberg_snapshot_completion_tx, iceberg_snapshot_completion_rx) = mpsc::channel(1);
-    let (iceberg_drop_table_completion_tx, iceberg_drop_table_completion_rx) = mpsc::channel(1);
-    let iceberg_event_sync_sender = IcebergEventSyncSender {
-        iceberg_drop_table_completion_tx,
-        iceberg_snapshot_completion_tx,
-    };
-    let iceberg_event_sync_receiver = IcebergEventSyncReceiver {
-        iceberg_drop_table_completion_rx,
-        iceberg_snapshot_completion_rx,
-    };
+    let (iceberg_event_sync_sender, iceberg_event_sync_receiver) = create_iceberg_event_syncer();
     let handler = TableHandler::new(table, iceberg_event_sync_sender);
     let iceberg_snapshot_manager =
         IcebergTableEventManager::new(handler.get_event_sender(), iceberg_event_sync_receiver);
