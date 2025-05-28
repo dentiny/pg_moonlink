@@ -17,22 +17,26 @@
 
 // Code adapted from iceberg-rust: https://github.com/apache/iceberg-rust
 
+use iceberg::arrow::DEFAULT_MAP_FIELD_NAME;
+use iceberg::io::{FileIO, FileIOBuilder};
 use iceberg::spec::{
-    DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
-    NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
-    StructType, TableMetadata, Type, visit_schema, PrimitiveLiteral
+    visit_schema, DataContentType, DataFile, DataFileBuilder, DataFileFormat, Datum, ListType,
+    Literal, MapType, NestedFieldRef, PartitionSpec, PrimitiveLiteral, PrimitiveType, Schema,
+    SchemaRef, SchemaVisitor, Struct, StructType, TableMetadata, Type,
 };
 use iceberg::Result as IcebergResult;
-use iceberg::{ErrorKind, Error};
+use iceberg::{Error as IcebergError, ErrorKind};
 use itertools::Itertools;
+use num_bigint::BigInt;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::statistics::Statistics;
-use iceberg::arrow::DEFAULT_MAP_FIELD_NAME;
 use parquet::format::FileMetaData;
-use num_bigint::BigInt;
 use uuid::Uuid;
 
-use crate::storage::iceberg::parquet_stats_utils::{MinMaxColAggregator, get_parquet_stat_min_as_datum, get_parquet_stat_max_as_datum};
+use crate::storage::iceberg::parquet_metadata_utils;
+use crate::storage::iceberg::parquet_stats_utils::{
+    get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum, MinMaxColAggregator,
+};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -137,7 +141,12 @@ impl SchemaVisitor for IndexByParquetPathName {
         Ok(())
     }
 
-    fn map(&mut self, _map: &MapType, _key_value: Self::T, _value: Self::T) -> IcebergResult<Self::T> {
+    fn map(
+        &mut self,
+        _map: &MapType,
+        _key_value: Self::T,
+        _value: Self::T,
+    ) -> IcebergResult<Self::T> {
         Ok(())
     }
 
@@ -145,7 +154,7 @@ impl SchemaVisitor for IndexByParquetPathName {
         let full_name = self.field_names.iter().map(String::as_str).join(".");
         let field_id = self.field_id;
         if let Some(existing_field_id) = self.name_to_id.get(full_name.as_str()) {
-            return Err(Error::new(
+            return Err(IcebergError::new(
                 ErrorKind::DataInvalid,
                 format!(
                     "Invalid schema: multiple fields for name {full_name}: {field_id} and {existing_field_id}"
@@ -238,4 +247,40 @@ pub(crate) fn parquet_to_data_file_builder(
         );
 
     Ok(builder)
+}
+
+// ================================
+// get_data_file_from_local_parquet_file
+// ================================
+
+// Get iceberg `DataFile` which is used to import into iceberg table from a local parquet file.
+pub(crate) async fn get_data_file_from_local_parquet_file(
+    local_parquet_file: &str,
+    remote_parquet_file: String,
+    table_metadata: &TableMetadata,
+) -> IcebergResult<DataFile> {
+    let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+    let input_file = file_io.new_input(local_parquet_file)?;
+    let file_metadata = input_file.metadata().await?;
+    let file_size_in_bytes = file_metadata.size as usize;
+    let reader = input_file.reader().await?;
+
+    let parquet_metadata =
+        parquet_metadata_utils::get_parquet_metadata(file_metadata, input_file).await?;
+    let mut builder = parquet_to_data_file_builder(
+        table_metadata.current_schema().clone(),
+        Arc::new(parquet_metadata),
+        file_size_in_bytes,
+        remote_parquet_file,
+        // TODO: Implement nan_value_counts here
+        HashMap::new(),
+    )?;
+    builder.partition_spec_id(table_metadata.default_partition_spec_id());
+    let data_file = builder.build().map_err(|e| {
+        IcebergError::new(
+            ErrorKind::Unexpected,
+            format!("Failed to get data file because {:?}", e),
+        )
+    });
+    data_file
 }

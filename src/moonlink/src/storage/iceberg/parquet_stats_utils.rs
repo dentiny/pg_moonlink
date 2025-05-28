@@ -17,19 +17,19 @@
 
 // Code adapted from iceberg-rust: https://github.com/apache/iceberg-rust
 
+use iceberg::arrow::DEFAULT_MAP_FIELD_NAME;
 use iceberg::spec::{
-    DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
-    NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
-    StructType, TableMetadata, Type, visit_schema, PrimitiveLiteral
+    visit_schema, DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal,
+    MapType, NestedFieldRef, PartitionSpec, PrimitiveLiteral, PrimitiveType, Schema, SchemaRef,
+    SchemaVisitor, Struct, StructType, TableMetadata, Type,
 };
 use iceberg::Result as IcebergResult;
-use iceberg::{ErrorKind, Error};
+use iceberg::{Error, ErrorKind};
+use num_bigint::BigInt;
+use num_traits::cast::ToPrimitive;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::statistics::Statistics;
-use iceberg::arrow::DEFAULT_MAP_FIELD_NAME;
-use num_traits::cast::ToPrimitive;
 use parquet::format::FileMetaData;
-use num_bigint::BigInt;
 use uuid::Uuid;
 
 use std::collections::HashMap;

@@ -372,6 +372,7 @@ impl IcebergTableManager {
             let iceberg_data_file = utils::write_record_batch_to_iceberg(
                 self.iceberg_table.as_ref().unwrap(),
                 local_data_file.file_path(),
+                self.iceberg_table.as_ref().unwrap().metadata(),
             )
             .await?;
             local_data_file_to_remote.insert(
