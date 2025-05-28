@@ -349,7 +349,7 @@ async fn test_drop_table() {
 
     // Perform whitebox testing, which assume the table directory on local filesystem, to check whether table are correctly created or dropped.
     let mut table_directory = PathBuf::from(tmp_dir.path());
-    table_directory.push(config.namespace.get(0).unwrap());
+    table_directory.push(config.namespace.first().unwrap());
     table_directory.push(config.table_name);
     let directory_exists = tokio::fs::try_exists(&table_directory).await.unwrap();
     assert!(directory_exists);
