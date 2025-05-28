@@ -328,6 +328,38 @@ async fn test_sync_snapshots() -> IcebergResult<()> {
     Ok(())
 }
 
+/// Test iceberg table manager drop table.
+#[tokio::test]
+async fn test_drop_table() {
+    let tmp_dir = tempdir().unwrap();
+    let mooncake_table_metadata =
+        create_test_table_metadata(tmp_dir.path().to_str().unwrap().to_string());
+    let config = IcebergTableConfig {
+        warehouse_uri: tmp_dir.path().to_str().unwrap().to_string(),
+        namespace: vec!["namespace".to_string()],
+        table_name: "test_table".to_string(),
+        drop_table_if_exists: false,
+    };
+    let mut iceberg_table_manager =
+        IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone());
+    iceberg_table_manager
+        .initialize_iceberg_table()
+        .await
+        .unwrap();
+
+    // Perform whitebox testing, which assume the table directory on local filesystem, to check whether table are correctly created or dropped.
+    let mut table_directory = PathBuf::from(tmp_dir.path());
+    table_directory.push(config.namespace.get(0).unwrap());
+    table_directory.push(config.table_name);
+    let directory_exists = tokio::fs::try_exists(&table_directory).await.unwrap();
+    assert!(directory_exists);
+
+    // Drop table and check directory existence.
+    iceberg_table_manager.drop_table().await.unwrap();
+    let directory_exists = tokio::fs::try_exists(&table_directory).await.unwrap();
+    assert!(!directory_exists);
+}
+
 /// Testing scenario: attempt an iceberg snapshot when no data file, deletion vector or index files generated.
 #[tokio::test]
 async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {

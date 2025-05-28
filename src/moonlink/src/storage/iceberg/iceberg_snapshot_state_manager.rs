@@ -1,6 +1,7 @@
 /// This module interacts with iceberg snapshot status.
 use tokio::sync::mpsc;
 
+use crate::Result;
 use crate::TableEvent;
 
 /// At most one outstanding snapshot request is allowed.
@@ -35,4 +36,7 @@ impl IcebergSnapshotStateManager {
             .await
             .unwrap()
     }
+
+    /// Initiate an iceberg drop table event.
+    pub async fn drop_table(&mut self) {}
 }

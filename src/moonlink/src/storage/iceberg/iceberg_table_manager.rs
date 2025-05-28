@@ -29,7 +29,7 @@ use iceberg::table::Table as IcebergTable;
 use iceberg::transaction::Transaction;
 use iceberg::writer::file_writer::location_generator::DefaultLocationGenerator;
 use iceberg::writer::file_writer::location_generator::LocationGenerator;
-use iceberg::Result as IcebergResult;
+use iceberg::{NamespaceIdent, Result as IcebergResult, TableIdent};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
@@ -51,6 +51,8 @@ pub struct IcebergTableConfig {
     #[builder(default = "table".to_string())]
     pub table_name: String,
     /// Whether to drop the old table at creation.
+    ///
+    /// TODO(hjiang): After confirming `drop_table` implementation no problem, discard the feature flag.
     #[builder(default = false)]
     pub drop_table_if_exists: bool,
 }
@@ -87,6 +89,10 @@ pub trait TableManager: Send {
     /// Notice this function is supposed to call **only once**.
     #[allow(async_fn_in_trait)]
     async fn load_snapshot_from_table(&mut self) -> IcebergResult<MooncakeSnapshot>;
+
+    /// Drop the current iceberg table.
+    #[allow(async_fn_in_trait)]
+    async fn drop_table(&mut self) -> IcebergResult<()>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -158,7 +164,7 @@ impl IcebergTableManager {
     }
 
     /// Get or create an iceberg table based on the iceberg manager config.
-    async fn initialize_iceberg_table(&mut self) -> IcebergResult<()> {
+    pub(crate) async fn initialize_iceberg_table(&mut self) -> IcebergResult<()> {
         if self.iceberg_table.is_none() {
             let table = utils::get_iceberg_table(
                 &*self.catalog,
@@ -581,5 +587,13 @@ impl TableManager for IcebergTableManager {
 
         let mooncake_snapshot = self.transform_to_mooncake_snapshot(loaded_file_indices, flush_lsn);
         Ok(mooncake_snapshot)
+    }
+
+    async fn drop_table(&mut self) -> IcebergResult<()> {
+        let table_ident = TableIdent::new(
+            NamespaceIdent::from_strs(&self.config.namespace).unwrap(),
+            self.config.table_name.clone(),
+        );
+        self.catalog.drop_table(&table_ident).await
     }
 }

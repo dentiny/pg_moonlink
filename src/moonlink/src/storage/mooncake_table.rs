@@ -697,7 +697,9 @@ impl MooncakeTable {
         self.table_snapshot_watch_sender.send(lsn).unwrap();
     }
 
-    // TODO(hjiang): Better error handling at TableHandler eventloop.
+    /// Persist an iceberg snapshot.
+    ///
+    /// TODO(hjiang): Better error handling at TableHandler eventloop.
     async fn persist_iceberg_snapshot_impl(
         mut iceberg_table_manager: Box<dyn TableManager>,
         snapshot_payload: IcebergSnapshotPayload,
@@ -724,6 +726,17 @@ impl MooncakeTable {
             iceberg_table_manager,
             snapshot_payload,
         ))
+    }
+
+    /// Drop an iceberg table.
+    pub(crate) async fn drop_iceberg_table(&mut self) -> Result<()> {
+        assert!(self.iceberg_table_manager.is_some());
+        self.iceberg_table_manager
+            .as_mut()
+            .unwrap()
+            .drop_table()
+            .await?;
+        Ok(())
     }
 
     async fn create_snapshot_async(

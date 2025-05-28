@@ -33,6 +33,8 @@ pub enum TableEvent {
     _Shutdown,
     /// Force a mooncake and iceberg snapshot.
     ForceSnapshot { lsn: u64 },
+    /// Drop table.
+    DropIcebergTable,
 }
 
 /// Handler for table operations
@@ -181,6 +183,11 @@ impl TableHandler {
                             else {
                                 force_snapshot_lsn = Some(lsn);
                             }
+                        }
+                        // Branch to drop the iceberg table, only used when the whole table requested to drop.
+                        // So we block wait for asynchronous request completion.
+                        TableEvent::DropIcebergTable => {
+
                         }
                     }
                 }
