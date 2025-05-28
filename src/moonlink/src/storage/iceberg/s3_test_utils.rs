@@ -35,7 +35,7 @@ pub(crate) fn create_minio_s3_catalog(bucket: &str, warehouse_uri: &str) -> File
         bucket: bucket.to_string(),
         endpoint: MINIO_ENDPOINT.to_string(),
     };
-    FileCatalog::new(warehouse_uri.to_string(), catalog_config)
+    FileCatalog::new(warehouse_uri.to_string(), catalog_config).unwrap()
 }
 
 #[allow(dead_code)]

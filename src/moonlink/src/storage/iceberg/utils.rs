@@ -102,7 +102,7 @@ pub fn create_catalog(warehouse_uri: &str) -> IcebergResult<Box<dyn MoonlinkCata
         return Ok(Box::new(FileCatalog::new(
             absolute_path.to_string(),
             CatalogConfig::FileSystem {},
-        )));
+        )?));
     }
 
     // TODO(hjiang): Fallback to object storage for all warehouse uris.

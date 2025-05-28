@@ -146,7 +146,7 @@ impl TestEnvironment {
             table_name.to_string(),
             self.temp_dir.path().to_str().unwrap().to_string(),
         );
-        IcebergTableManager::new(mooncake_table_metadata, iceberg_table_config)
+        IcebergTableManager::new(mooncake_table_metadata, iceberg_table_config).unwrap()
     }
 
     async fn send_event(&self, event: TableEvent) {

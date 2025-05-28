@@ -135,16 +135,16 @@ impl IcebergTableManager {
     pub fn new(
         mooncake_table_metadata: Arc<MooncakeTableMetadata>,
         config: IcebergTableConfig,
-    ) -> IcebergTableManager {
-        let catalog = utils::create_catalog(&config.warehouse_uri).unwrap();
-        Self {
+    ) -> IcebergResult<IcebergTableManager> {
+        let catalog = utils::create_catalog(&config.warehouse_uri)?;
+        Ok(Self {
             config,
             mooncake_table_metadata,
             catalog,
             iceberg_table: None,
             persisted_data_files: HashMap::new(),
             persisted_file_index_ids: HashSet::new(),
-        }
+        })
     }
 
     /// Get a unique puffin filepath under table warehouse uri.

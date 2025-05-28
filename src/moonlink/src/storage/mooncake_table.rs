@@ -325,7 +325,7 @@ impl MooncakeTable {
         let iceberg_table_manager = Box::new(IcebergTableManager::new(
             metadata.clone(),
             iceberg_table_config,
-        ));
+        )?);
         Self::new_with_table_manager(metadata, iceberg_table_manager, table_config).await
     }
 

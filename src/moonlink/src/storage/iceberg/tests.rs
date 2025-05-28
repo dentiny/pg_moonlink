@@ -323,7 +323,7 @@ async fn test_sync_snapshots() -> IcebergResult<()> {
         table_name: "test_table".to_string(),
         drop_table_if_exists: false,
     };
-    let mut iceberg_table_manager = IcebergTableManager::new(mooncake_table_metadata, config);
+    let mut iceberg_table_manager = IcebergTableManager::new(mooncake_table_metadata, config)?;
     test_store_and_load_snapshot_impl(&mut iceberg_table_manager).await?;
     Ok(())
 }
@@ -341,7 +341,7 @@ async fn test_drop_table() {
         drop_table_if_exists: false,
     };
     let mut iceberg_table_manager =
-        IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone());
+        IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone()).unwrap();
     iceberg_table_manager
         .initialize_iceberg_table()
         .await
@@ -373,7 +373,7 @@ async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {
         drop_table_if_exists: false,
     };
     let mut iceberg_table_manager =
-        IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone());
+        IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone())?;
     let iceberg_snapshot_payload = IcebergSnapshotPayload {
         flush_lsn: 0,
         data_files: vec![],
@@ -386,7 +386,7 @@ async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {
 
     // Recover from iceberg snapshot, and check mooncake table snapshot version.
     let mut iceberg_table_manager =
-        IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone());
+        IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone())?;
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
     assert!(snapshot.disk_files.is_empty());
     assert!(snapshot.indices.in_memory_index.is_empty());
@@ -743,7 +743,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
     let mut iceberg_table_manager = IcebergTableManager::new(
         mooncake_table_metadata.clone(),
         iceberg_table_config.clone(),
-    );
+    )?;
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
     assert_eq!(
         snapshot.disk_files.len(),
@@ -814,7 +814,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
     let mut iceberg_table_manager = IcebergTableManager::new(
         mooncake_table_metadata.clone(),
         iceberg_table_config.clone(),
-    );
+    )?;
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
     assert_eq!(
         snapshot.disk_files.len(),
@@ -876,7 +876,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
     let mut iceberg_table_manager = IcebergTableManager::new(
         mooncake_table_metadata.clone(),
         iceberg_table_config.clone(),
-    );
+    )?;
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
     assert_eq!(
         snapshot.disk_files.len(),
@@ -955,7 +955,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
     let mut iceberg_table_manager = IcebergTableManager::new(
         mooncake_table_metadata.clone(),
         iceberg_table_config.clone(),
-    );
+    )?;
     let mut snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
     assert_eq!(
         snapshot.disk_files.len(),
@@ -1081,7 +1081,7 @@ async fn test_drop_table_at_creation() -> IcebergResult<()> {
     let mut iceberg_table_manager = IcebergTableManager::new(
         mooncake_table_metadata.clone(),
         iceberg_table_config.clone(),
-    );
+    )?;
     let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
     assert!(snapshot.disk_files.is_empty());
     assert!(snapshot.indices.file_indices.is_empty());
@@ -1150,7 +1150,8 @@ async fn create_table_and_iceberg_manager(
     let iceberg_table_manager = IcebergTableManager::new(
         mooncake_table_metadata.clone(),
         iceberg_table_config.clone(),
-    );
+    )
+    .unwrap();
 
     (table, iceberg_table_manager)
 }
