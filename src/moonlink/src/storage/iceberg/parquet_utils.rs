@@ -167,7 +167,7 @@ impl SchemaVisitor for IndexByParquetPathName {
 // ================================
 //
 // `ParquetMetadata` to data file builder
-pub(crate) fn parquet_to_data_file_builder(
+fn parquet_to_data_file_builder(
     schema: SchemaRef,
     metadata: Arc<ParquetMetaData>,
     written_size: usize,
@@ -244,26 +244,39 @@ pub(crate) fn parquet_to_data_file_builder(
 }
 
 // ================================
+// get_parquet_metadata
+// ================================
+//
+// Get parquet metadata and file size for the given local parquet file.
+async fn get_parquet_metadata(
+    local_parquet_file: &str,
+) -> IcebergResult<(ParquetMetaData, usize /*file size*/)> {
+    let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+    let input_file = file_io.new_input(local_parquet_file)?;
+    let file_metadata = input_file.metadata().await?;
+    let file_size = file_metadata.size as usize;
+
+    let parquet_metadata =
+        parquet_metadata_utils::get_parquet_metadata(file_metadata, input_file).await?;
+
+    Ok((parquet_metadata, file_size))
+}
+
+// ================================
 // get_data_file_from_local_parquet_file
 // ================================
-
+//
 // Get iceberg `DataFile` which is used to import into iceberg table from a local parquet file.
 pub(crate) async fn get_data_file_from_local_parquet_file(
     local_parquet_file: &str,
     remote_parquet_file: String,
     table_metadata: &TableMetadata,
 ) -> IcebergResult<DataFile> {
-    let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-    let input_file = file_io.new_input(local_parquet_file)?;
-    let file_metadata = input_file.metadata().await?;
-    let file_size_in_bytes = file_metadata.size as usize;
-
-    let parquet_metadata =
-        parquet_metadata_utils::get_parquet_metadata(file_metadata, input_file).await?;
+    let (parquet_metadata, file_size) = get_parquet_metadata(local_parquet_file).await?;
     let mut builder = parquet_to_data_file_builder(
         table_metadata.current_schema().clone(),
         Arc::new(parquet_metadata),
-        file_size_in_bytes,
+        file_size,
         remote_parquet_file,
         // TODO: Implement nan_value_counts here
         HashMap::new(),
@@ -276,4 +289,73 @@ pub(crate) async fn get_data_file_from_local_parquet_file(
             format!("Failed to get data file because {:?}", e),
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use arrow::record_batch::RecordBatch;
+    use arrow_array::{Int32Array, Int64Array};
+    use iceberg::arrow as IcebergArrow;
+    use parquet::{arrow::AsyncArrowWriter, file::properties::WriterProperties};
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_get_data_file_from_parquet() {
+        // Write parquet files to local filesystem.
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int32, false)
+                .with_metadata(HashMap::from([(
+                    "PARQUET:field_id".to_string(),
+                    "1".to_string(),
+                )])),
+            arrow::datatypes::Field::new("age", arrow::datatypes::DataType::Int64, false)
+                .with_metadata(HashMap::from([(
+                    "PARQUET:field_id".to_string(),
+                    "2".to_string(),
+                )])),
+        ]));
+        let record_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(Int64Array::from(vec![10, 20, 30, 40])),
+            ],
+        )
+        .unwrap();
+
+        let tmp_dir = tempdir().unwrap();
+        let local_filepath = tmp_dir.path().join("src.parquet");
+        let remote_filepath = tmp_dir.path().join("dst.parquet");
+        let file = tokio::fs::File::create(&local_filepath).await.unwrap();
+        let props = WriterProperties::builder()
+            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+            .build();
+
+        let mut writer = AsyncArrowWriter::try_new(file, schema.clone(), Some(props)).unwrap();
+        writer.write(&record_batch).await.unwrap();
+        writer.close().await.unwrap();
+
+        // Get data file from local parquet file.
+        let (parquet_metadata, file_size) = get_parquet_metadata(local_filepath.to_str().unwrap())
+            .await
+            .unwrap();
+        let iceberg_schema = IcebergArrow::arrow_schema_to_schema(&schema).unwrap();
+        let mut data_file_builder = parquet_to_data_file_builder(
+            Arc::new(iceberg_schema),
+            Arc::new(parquet_metadata),
+            file_size,
+            remote_filepath.to_str().unwrap().to_string(),
+            /*nan_value_counts=*/ HashMap::new(),
+        )
+        .unwrap();
+        data_file_builder.partition_spec_id(0);
+        let data_file = data_file_builder.build().unwrap();
+
+        assert_eq!(data_file.content_type(), DataContentType::Data);
+        assert_eq!(data_file.file_path(), remote_filepath.to_str().unwrap());
+        assert_eq!(data_file.file_format(), DataFileFormat::Parquet);
+        assert_eq!(data_file.record_count(), 4);
+    }
 }

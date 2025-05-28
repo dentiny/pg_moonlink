@@ -1,7 +1,7 @@
 use iceberg::{arrow::ArrowFileReader, io::FileMetadata, io::InputFile, Result as IcebergResult};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 
-/// Get parquet metadata.
+/// Get parquet metadata from the given file.
 pub(crate) async fn get_parquet_metadata(
     file_metadata: FileMetadata,
     input_file: InputFile,
@@ -11,6 +11,7 @@ pub(crate) async fn get_parquet_metadata(
     let mut arrow_file_reader = ArrowFileReader::new(file_metadata, reader);
 
     // TODO(hjiang): Check IO operation number and decide reader options.
+    // As of now it's only accessing local files and will cached by filesystem.
     let parquet_meta_data_reader = ParquetMetaDataReader::new()
         .with_prefetch_hint(None)
         .with_column_indexes(true)
