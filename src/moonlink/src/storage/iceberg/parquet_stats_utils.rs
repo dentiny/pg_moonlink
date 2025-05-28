@@ -17,23 +17,15 @@
 
 // Code adapted from iceberg-rust: https://github.com/apache/iceberg-rust
 
-use iceberg::arrow::DEFAULT_MAP_FIELD_NAME;
-use iceberg::spec::{
-    visit_schema, DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal,
-    MapType, NestedFieldRef, PartitionSpec, PrimitiveLiteral, PrimitiveType, Schema, SchemaRef,
-    SchemaVisitor, Struct, StructType, TableMetadata, Type,
-};
+use iceberg::spec::{Datum, PrimitiveType, SchemaRef, Type};
 use iceberg::Result as IcebergResult;
 use iceberg::{Error, ErrorKind};
 use num_bigint::BigInt;
 use num_traits::cast::ToPrimitive;
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::statistics::Statistics;
-use parquet::format::FileMetaData;
 use uuid::Uuid;
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 // ================================
 // get_parquet_stat_min_as_datum

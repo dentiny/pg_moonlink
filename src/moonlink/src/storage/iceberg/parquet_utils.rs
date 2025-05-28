@@ -18,25 +18,19 @@
 // Code adapted from iceberg-rust: https://github.com/apache/iceberg-rust
 
 use iceberg::arrow::DEFAULT_MAP_FIELD_NAME;
-use iceberg::io::{FileIO, FileIOBuilder};
+use iceberg::io::FileIOBuilder;
 use iceberg::spec::{
-    visit_schema, DataContentType, DataFile, DataFileBuilder, DataFileFormat, Datum, ListType,
-    Literal, MapType, NestedFieldRef, PartitionSpec, PrimitiveLiteral, PrimitiveType, Schema,
-    SchemaRef, SchemaVisitor, Struct, StructType, TableMetadata, Type,
+    visit_schema, DataContentType, DataFile, DataFileBuilder, DataFileFormat, ListType, MapType,
+    NestedFieldRef, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct, StructType,
+    TableMetadata,
 };
 use iceberg::Result as IcebergResult;
 use iceberg::{Error as IcebergError, ErrorKind};
 use itertools::Itertools;
-use num_bigint::BigInt;
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
-use parquet::file::statistics::Statistics;
-use parquet::format::FileMetaData;
-use uuid::Uuid;
+use parquet::file::metadata::ParquetMetaData;
 
 use crate::storage::iceberg::parquet_metadata_utils;
-use crate::storage::iceberg::parquet_stats_utils::{
-    get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum, MinMaxColAggregator,
-};
+use crate::storage::iceberg::parquet_stats_utils::MinMaxColAggregator;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -263,7 +257,6 @@ pub(crate) async fn get_data_file_from_local_parquet_file(
     let input_file = file_io.new_input(local_parquet_file)?;
     let file_metadata = input_file.metadata().await?;
     let file_size_in_bytes = file_metadata.size as usize;
-    let reader = input_file.reader().await?;
 
     let parquet_metadata =
         parquet_metadata_utils::get_parquet_metadata(file_metadata, input_file).await?;
@@ -276,11 +269,11 @@ pub(crate) async fn get_data_file_from_local_parquet_file(
         HashMap::new(),
     )?;
     builder.partition_spec_id(table_metadata.default_partition_spec_id());
-    let data_file = builder.build().map_err(|e| {
+
+    builder.build().map_err(|e| {
         IcebergError::new(
             ErrorKind::Unexpected,
             format!("Failed to get data file because {:?}", e),
         )
-    });
-    data_file
+    })
 }

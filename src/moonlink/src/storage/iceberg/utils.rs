@@ -5,31 +5,23 @@ use crate::storage::iceberg::parquet_utils;
 use crate::storage::iceberg::s3_test_utils;
 use crate::storage::iceberg::table_property;
 
-use futures::TryStreamExt;
 use std::collections::HashMap;
 use std::path::Path;
 use url::Url;
-use uuid::Uuid;
 
 use arrow_schema::Schema as ArrowSchema;
 use iceberg::arrow as IcebergArrow;
 use iceberg::io::FileIOBuilder;
+use iceberg::spec::DataFile;
 use iceberg::spec::TableMetadata as IcebergTableMetadata;
 use iceberg::spec::{DataContentType, DataFileFormat, ManifestEntry};
-use iceberg::spec::{DataFile, DataFileBuilder, Struct};
 use iceberg::table::Table as IcebergTable;
-use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
-    DefaultFileNameGenerator, DefaultLocationGenerator, LocationGenerator,
+    DefaultLocationGenerator, LocationGenerator,
 };
-use iceberg::writer::file_writer::ParquetWriterBuilder;
-use iceberg::writer::IcebergWriter;
-use iceberg::writer::IcebergWriterBuilder;
 use iceberg::{
     Error as IcebergError, NamespaceIdent, Result as IcebergResult, TableCreation, TableIdent,
 };
-use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
-use parquet::file::properties::WriterProperties;
 
 /// Return whether the given manifest entry represents data files.
 pub fn is_data_file_entry(entry: &ManifestEntry) -> bool {
@@ -229,7 +221,7 @@ pub(crate) async fn write_record_batch_to_iceberg(
     let remote_filepath = location_generator.generate_location(&filename);
 
     // Import local parquet file to remote.
-    copy_from_local_to_remote(&local_filepath, &remote_filepath).await?;
+    copy_from_local_to_remote(local_filepath, &remote_filepath).await?;
 
     // Get data file from local parquet file.
     let data_file = parquet_utils::get_data_file_from_local_parquet_file(
