@@ -383,6 +383,13 @@ async fn test_streaming_transaction_periodic_flush_then_abort() {
     env.shutdown().await;
 }
 
+// This test only checks whether drop table event send and receive works through table handler.
+#[tokio::test]
+async fn test_iceberg_drop_table() {
+    let mut env = TestEnvironment::new(MooncakeTableConfig::default()).await;
+    env.drop_iceberg_table().await
+}
+
 #[tokio::test]
 async fn test_iceberg_snapshot_creation() {
     // Set mooncake and iceberg flush and snapshot threshold to huge value, to verify force flush and force snapshot works as expected.

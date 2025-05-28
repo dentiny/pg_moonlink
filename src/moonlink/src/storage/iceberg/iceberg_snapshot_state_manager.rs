@@ -1,7 +1,6 @@
 /// This module interacts with iceberg snapshot status.
 use tokio::sync::mpsc;
 
-use crate::Result;
 use crate::TableEvent;
 
 /// Contains a few receivers, which get notified after certain iceberg events completion.

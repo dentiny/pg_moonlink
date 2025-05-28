@@ -170,6 +170,13 @@ impl TestEnvironment {
             .await
     }
 
+    // --- Util functions for iceberg drop table ---
+
+    /// Request to drop iceberg table and block wait its completion.
+    pub async fn drop_iceberg_table(&mut self) {
+        self.iceberg_snapshot_manager.drop_table().await
+    }
+
     // --- Operation Helpers ---
 
     pub async fn append_row(&self, id: i32, name: &str, age: i32, xact_id: Option<u32>) {
