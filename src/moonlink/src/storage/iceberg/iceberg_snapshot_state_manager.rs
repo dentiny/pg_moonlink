@@ -13,7 +13,7 @@ pub struct IcebergEventSyncReceiver {
 }
 
 /// At most one outstanding snapshot request is allowed.
-pub struct IcebergSnapshotStateManager {
+pub struct IcebergTableEventManager {
     /// Used to initiate a mooncake and iceberg snapshot operation.
     table_event_tx: mpsc::Sender<TableEvent>,
     /// Used to synchronize on the completion of an iceberg snapshot.
@@ -22,7 +22,7 @@ pub struct IcebergSnapshotStateManager {
     drop_table_completion_rx: mpsc::Receiver<()>,
 }
 
-impl IcebergSnapshotStateManager {
+impl IcebergTableEventManager {
     pub fn new(
         table_event_tx: mpsc::Sender<TableEvent>,
         iceberg_event_sync_rx: IcebergEventSyncReceiver,

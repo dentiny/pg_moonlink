@@ -8,7 +8,7 @@ use crate::storage::{verify_files_and_deletions, MooncakeTable};
 use crate::table_handler::{IcebergEventSyncSender, TableEvent, TableHandler}; // Ensure this path is correct
 use crate::union_read::{decode_read_state_for_testing, ReadStateManager};
 use crate::{
-    IcebergEventSyncReceiver, IcebergSnapshotStateManager, IcebergTableManager,
+    IcebergEventSyncReceiver, IcebergTableEventManager, IcebergTableManager,
     TableConfig as MooncakeTableConfig,
 };
 
@@ -65,7 +65,7 @@ pub struct TestEnvironment {
     event_sender: mpsc::Sender<TableEvent>,
     read_state_manager: Arc<ReadStateManager>,
     replication_tx: watch::Sender<u64>,
-    iceberg_snapshot_manager: IcebergSnapshotStateManager,
+    iceberg_snapshot_manager: IcebergTableEventManager,
     pub(crate) temp_dir: TempDir,
 }
 
@@ -112,10 +112,8 @@ impl TestEnvironment {
             iceberg_snapshot_completion_rx,
         };
         let handler = TableHandler::new(mooncake_table, iceberg_event_sync_sender);
-        let iceberg_snapshot_manager = IcebergSnapshotStateManager::new(
-            handler.get_event_sender(),
-            iceberg_event_sync_receiver,
-        );
+        let iceberg_snapshot_manager =
+            IcebergTableEventManager::new(handler.get_event_sender(), iceberg_event_sync_receiver);
         let event_sender = handler.get_event_sender();
 
         Self {

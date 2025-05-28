@@ -1,7 +1,7 @@
 use crate::pg_replicate::table::TableId;
 use crate::Result;
 use crate::{PostgresSourceError, ReplicationConnection};
-use moonlink::{IcebergSnapshotStateManager, ReadStateManager};
+use moonlink::{IcebergTableEventManager, ReadStateManager};
 use std::collections::HashMap;
 use std::hash::Hash;
 
@@ -69,10 +69,7 @@ impl<T: Eq + Hash> ReplicationManager<T> {
         connection.get_table_reader(*table_id)
     }
 
-    pub fn get_iceberg_snapshot_manager(
-        &mut self,
-        table_id: &T,
-    ) -> &mut IcebergSnapshotStateManager {
+    pub fn get_iceberg_snapshot_manager(&mut self, table_id: &T) -> &mut IcebergTableEventManager {
         let (uri, table_id) = self.table_info.get(table_id).expect("table not found");
         let connection = self.connections.get_mut(uri).expect("connection not found");
         connection.get_iceberg_snapshot_manager(*table_id)

@@ -4,7 +4,7 @@ pub(crate) mod mooncake_table;
 pub(crate) mod storage_utils;
 
 pub use iceberg::iceberg_snapshot_state_manager::{
-    IcebergEventSyncReceiver, IcebergSnapshotStateManager,
+    IcebergEventSyncReceiver, IcebergTableEventManager,
 };
 pub use iceberg::iceberg_table_manager::{IcebergTableConfig, IcebergTableManager, TableManager};
 pub use mooncake_table::{MooncakeTable, TableConfig};

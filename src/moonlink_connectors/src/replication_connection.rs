@@ -4,7 +4,7 @@ use crate::pg_replicate::postgres_source::CdcStream;
 use crate::pg_replicate::postgres_source::{CdcStreamError, PostgresSource, TableNamesFrom};
 use crate::pg_replicate::table_init::build_table_components;
 use crate::Result;
-use moonlink::{IcebergSnapshotStateManager, ReadStateManager};
+use moonlink::{IcebergTableEventManager, ReadStateManager};
 use std::sync::{Arc, RwLock};
 use tokio::pin;
 
@@ -24,7 +24,7 @@ pub struct ReplicationConnection {
     postgres_client: Client,
     handle: Option<JoinHandle<Result<()>>>,
     table_readers: HashMap<TableId, ReadStateManager>,
-    iceberg_snapshot_managers: HashMap<TableId, IcebergSnapshotStateManager>,
+    iceberg_snapshot_managers: HashMap<TableId, IcebergTableEventManager>,
     event_senders: Arc<RwLock<HashMap<TableId, Sender<TableEvent>>>>,
     replication_state: Arc<ReplicationState>,
     source: PostgresSource,
@@ -102,7 +102,7 @@ impl ReplicationConnection {
     pub fn get_iceberg_snapshot_manager(
         &mut self,
         table_id: TableId,
-    ) -> &mut IcebergSnapshotStateManager {
+    ) -> &mut IcebergTableEventManager {
         self.iceberg_snapshot_managers.get_mut(&table_id).unwrap()
     }
 
