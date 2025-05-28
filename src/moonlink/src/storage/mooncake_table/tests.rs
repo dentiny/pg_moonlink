@@ -3,10 +3,8 @@ use super::*;
 use crate::storage::iceberg::iceberg_table_manager::MockTableManager;
 use crate::storage::mooncake_table::snapshot::ReadOutput;
 use crate::storage::mooncake_table::Snapshot as MooncakeSnapshot;
-use crate::storage::mooncake_table::SnapshotTask;
 use crate::storage::mooncake_table::TableConfig as MooncakeTableConfig;
 use iceberg::{Error as IcebergError, ErrorKind};
-use rand::rngs::mock;
 use rstest::*;
 use rstest_reuse::{self, *};
 

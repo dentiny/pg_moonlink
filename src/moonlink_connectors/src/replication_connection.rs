@@ -1,11 +1,9 @@
 use crate::pg_replicate::conversions::cdc_event::{CdcEvent, CdcEventConversionError};
 use crate::pg_replicate::moonlink_sink::Sink;
 use crate::pg_replicate::postgres_source::CdcStream;
-use crate::pg_replicate::postgres_source::{
-    CdcStreamError, PostgresSource, PostgresSourceError, TableNamesFrom,
-};
+use crate::pg_replicate::postgres_source::{CdcStreamError, PostgresSource, TableNamesFrom};
 use crate::pg_replicate::table_init::build_table_components;
-use crate::{Error, Result};
+use crate::Result;
 use moonlink::{IcebergSnapshotStateManager, ReadStateManager};
 use std::sync::{Arc, RwLock};
 use tokio::pin;
