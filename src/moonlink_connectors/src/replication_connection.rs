@@ -106,16 +106,6 @@ impl ReplicationConnection {
             ))
             .await
             .unwrap();
-
-        // Optionally reset REPLICA IDENTITY to default
-        self.postgres_client
-            .simple_query(&format!(
-                "ALTER TABLE {} REPLICA IDENTITY DEFAULT;",
-                table_name
-            ))
-            .await
-            .unwrap();
-
         Ok(())
     }
 
