@@ -5,10 +5,9 @@ RUN apt update && \
     pip3 install pre-commit --break-system-packages && \
     rm -rf /var/lib/apt/lists/*
 
-# Now switch to vscode user for cargo installations, otherwise later cargo commands required root permission.
+# Switch to vscode user for cargo installations, otherwise later cargo commands required root permission.
 USER vscode
 
-RUN cargo install cargo-sort && \
-    rustup component add clippy
+RUN cargo install cargo-sort
 
 WORKDIR /workspaces/moonlink
