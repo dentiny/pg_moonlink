@@ -98,6 +98,27 @@ impl ReplicationConnection {
         Ok(())
     }
 
+    async fn remove_table_from_publication(&self, table_name: &str) -> Result<()> {
+        self.postgres_client
+            .simple_query(&format!(
+                "ALTER PUBLICATION moonlink_pub DROP TABLE {};",
+                table_name
+            ))
+            .await
+            .unwrap();
+    
+        // Optionally reset REPLICA IDENTITY to default
+        self.postgres_client
+            .simple_query(&format!(
+                "ALTER TABLE {} REPLICA IDENTITY DEFAULT;",
+                table_name
+            ))
+            .await
+            .unwrap();
+    
+        Ok(())
+    }
+
     pub fn get_table_reader(&self, table_id: TableId) -> &ReadStateManager {
         self.table_readers.get(&table_id).unwrap()
     }
@@ -153,6 +174,13 @@ impl ReplicationConnection {
         Ok(())
     }
 
+    fn remove_table_from_replication(&mut self, table_id: u32) {
+        self.table_readers.remove_entry(&table_id).unwrap();
+        self.iceberg_snapshot_managers.remove_entry(&table_id).unwrap();
+        self.event_senders.write().unwrap().remove_entry(&table_id).unwrap();
+        self.commit_lsn_txs.write().unwrap().remove_entry(&table_id).unwrap();
+    }
+
     pub async fn start_replication(&mut self) -> Result<()> {
         let table_schemas = self.source.get_table_schemas().await;
         for schema in table_schemas.values() {
@@ -179,6 +207,15 @@ impl ReplicationConnection {
         self.add_table_to_publication(table_name).await?;
 
         Ok(table_schema.table_id)
+    }
+
+    /// Remove the given table from connection.
+    pub async fn drop_table(&mut self, table_id: u32) -> Result<()> {
+        // TODO(hjiang): Alter table replica identity.
+        let table_name = self.source.remove_table_schema(table_id);
+        self.remove_table_from_publication(&table_name).await?;
+        self.remove_table_from_replication(table_id);
+        Ok(())
     }
 
     pub fn check_table_belongs_to_source(&self, uri: &str) -> bool {
