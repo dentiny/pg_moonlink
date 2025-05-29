@@ -106,7 +106,7 @@ impl ReplicationConnection {
             ))
             .await
             .unwrap();
-    
+
         // Optionally reset REPLICA IDENTITY to default
         self.postgres_client
             .simple_query(&format!(
@@ -115,7 +115,7 @@ impl ReplicationConnection {
             ))
             .await
             .unwrap();
-    
+
         Ok(())
     }
 
@@ -176,9 +176,19 @@ impl ReplicationConnection {
 
     fn remove_table_from_replication(&mut self, table_id: u32) {
         self.table_readers.remove_entry(&table_id).unwrap();
-        self.iceberg_snapshot_managers.remove_entry(&table_id).unwrap();
-        self.event_senders.write().unwrap().remove_entry(&table_id).unwrap();
-        self.commit_lsn_txs.write().unwrap().remove_entry(&table_id).unwrap();
+        self.iceberg_snapshot_managers
+            .remove_entry(&table_id)
+            .unwrap();
+        self.event_senders
+            .write()
+            .unwrap()
+            .remove_entry(&table_id)
+            .unwrap();
+        self.commit_lsn_txs
+            .write()
+            .unwrap()
+            .remove_entry(&table_id)
+            .unwrap();
     }
 
     pub async fn start_replication(&mut self) -> Result<()> {
@@ -211,7 +221,6 @@ impl ReplicationConnection {
 
     /// Remove the given table from connection.
     pub async fn drop_table(&mut self, table_id: u32) -> Result<()> {
-        // TODO(hjiang): Alter table replica identity.
         let table_name = self.source.remove_table_schema(table_id);
         self.remove_table_from_publication(&table_name).await?;
         self.remove_table_from_replication(table_id);

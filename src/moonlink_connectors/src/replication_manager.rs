@@ -64,10 +64,10 @@ impl<T: Eq + Hash> ReplicationManager<T> {
     }
 
     /// Drop table specified by the given table id.
-    pub async fn drop_table(&mut self, external_table_id: T, table_name: &str) -> Result<()> {
+    pub async fn drop_table(&mut self, external_table_id: T) -> Result<()> {
         let (uri, table_id) = self.table_info.remove(&external_table_id).unwrap();
-        let mut repl_conn = self.connections.get_mut(&uri).unwrap();
-        repl_conn.drop_table(table_id).await?;    
+        let repl_conn = self.connections.get_mut(&uri).unwrap();
+        repl_conn.drop_table(table_id).await?;
         Ok(())
     }
 

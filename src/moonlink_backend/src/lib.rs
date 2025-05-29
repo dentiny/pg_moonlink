@@ -35,8 +35,10 @@ impl<T: Eq + Hash + Clone> MoonlinkBackend<T> {
         Ok(())
     }
 
-    pub async fn drop_table(&self, _table_id: T) -> Result<()> {
-        todo!()
+    pub async fn drop_table(&self, external_table_id: T) -> Result<()> {
+        let mut manager = self.replication_manager.write().await;
+        manager.drop_table(external_table_id).await?;
+        Ok(())
     }
 
     pub async fn scan_table(&self, table_id: &T, lsn: Option<u64>) -> Result<Arc<ReadState>> {
@@ -62,22 +64,14 @@ impl<T: Eq + Hash + Clone> MoonlinkBackend<T> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-    use tokio_postgres::{connect, NoTls};
+    use tokio_postgres::{connect, Client, NoTls};
 
-    #[tokio::test]
-    async fn test_moonlink_service() {
-        let temp_dir = TempDir::new().expect("tempdir failed");
-        let uri = "postgresql://postgres:postgres@postgres:5432/postgres";
-        let service =
-            MoonlinkBackend::<&'static str>::new(temp_dir.path().to_str().unwrap().to_string());
-        // connect to postgres and create a table
-        let (client, connection) = connect(uri, NoTls).await.unwrap();
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
-            }
-        });
-
+    /// Test util function to create a table and attempt basic sql statements to verify creation success.
+    async fn test_table_creation(
+        service: &MoonlinkBackend<&'static str>,
+        client: &Client,
+        uri: &str,
+    ) {
         client.simple_query("DROP TABLE IF EXISTS test; CREATE TABLE test (id bigint PRIMARY KEY, name VARCHAR(255));").await.unwrap();
         service
             .create_table("test", "public.test", uri)
@@ -96,5 +90,25 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         let new = service.scan_table(&"test", None).await.unwrap();
         assert_ne!(old.data, new.data);
+    }
+
+    // Test table creation and drop.
+    #[tokio::test]
+    async fn test_moonlink_service() {
+        let temp_dir = TempDir::new().expect("tempdir failed");
+        let uri = "postgresql://postgres:postgres@postgres:5432/postgres";
+        let service =
+            MoonlinkBackend::<&'static str>::new(temp_dir.path().to_str().unwrap().to_string());
+        // connect to postgres and create a table
+        let (client, connection) = connect(uri, NoTls).await.unwrap();
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("connection error: {}", e);
+            }
+        });
+
+        test_table_creation(&service, &client, uri).await;
+        service.drop_table("test").await.unwrap();
+        test_table_creation(&service, &client, uri).await;
     }
 }

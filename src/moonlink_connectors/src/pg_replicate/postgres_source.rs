@@ -138,8 +138,13 @@ impl PostgresSource {
 
     /// Remove table schema from source, and return table name.
     pub fn remove_table_schema(&mut self, table_id: u32) -> String {
-        let table_schema = self.table_schemas.write().unwrap().remove(&table_id).unwrap();
-        table_schema.table_name.as_quoted_identifier()
+        let table_schema = self
+            .table_schemas
+            .write()
+            .unwrap()
+            .remove(&table_id)
+            .unwrap();
+        table_schema.table_name.get_schema_name()
     }
 
     pub async fn get_table_copy_stream(
