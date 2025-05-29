@@ -85,7 +85,7 @@ fn create_test_table_metadata(local_table_directory: String) -> Arc<MooncakeTabl
         name: "test_table".to_string(),
         id: 0,
         schema: create_test_arrow_schema(),
-        config: MooncakeTableConfig::new(),
+        config: MooncakeTableConfig::default(),
         path: PathBuf::from(local_table_directory),
         identity: RowIdentity::FullRow,
     })
@@ -667,7 +667,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
     };
     let schema = create_test_arrow_schema();
     // Create iceberg snapshot whenever `create_snapshot` is called.
-    let mut mooncake_table_config = MooncakeTableConfig::new();
+    let mut mooncake_table_config = MooncakeTableConfig::default();
     mooncake_table_config.iceberg_snapshot_new_data_file_count = 0;
     let mut table = MooncakeTable::new(
         schema.as_ref().clone(),
@@ -1067,7 +1067,7 @@ async fn test_drop_table_at_creation() -> IcebergResult<()> {
     };
 
     // Create iceberg snapshot whenever `create_snapshot` is called.
-    let mut mooncake_table_config = MooncakeTableConfig::new();
+    let mut mooncake_table_config = MooncakeTableConfig::default();
     mooncake_table_config.iceberg_snapshot_new_data_file_count = 0;
     let mut table = MooncakeTable::new(
         create_test_arrow_schema().as_ref().clone(),
@@ -1145,7 +1145,7 @@ async fn create_table_and_iceberg_manager(
     let schema = create_test_arrow_schema();
 
     // Create iceberg snapshot whenever `create_snapshot` is called.
-    let mut mooncake_table_config = MooncakeTableConfig::new();
+    let mut mooncake_table_config = MooncakeTableConfig::default();
     mooncake_table_config.iceberg_snapshot_new_data_file_count = 0;
     let table = MooncakeTable::new(
         schema.as_ref().clone(),

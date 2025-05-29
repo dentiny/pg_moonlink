@@ -5,11 +5,30 @@ pub use error::Error;
 use error::Result;
 use moonlink_connectors::ReplicationManager;
 use std::hash::Hash;
+use std::io::ErrorKind;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 // Default local filesystem directory where all tables data will be stored under.
 const DEFAULT_MOONLINK_TABLE_BASE_PATH: &str = "./mooncake/";
+// Default local filesystem directory where all temporary files (used for union read) will be stored under.
+// The whole directory is wipped out at moonlink backend start, to prevent file leak.
+const DEFAULT_MOONLINK_TEMP_FILE_PATH: &str = "/tmp/moonlink_temp_file";
+
+/// Util function to delete and re-create the given directory.
+fn recreate_directory(dir: &str) -> Result<()> {
+    // Clean up directory to place moonlink temporary files.
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => {}
+        Err(e) => {
+            if e.kind() != ErrorKind::NotFound {
+                return Err(error::Error::Io(e));
+            }
+        }
+    }
+    std::fs::create_dir_all(dir)?;
+    Ok(())
+}
 
 pub struct MoonlinkBackend<T: Eq + Hash> {
     // Could be either relative or absolute path.
@@ -24,8 +43,12 @@ impl<T: Eq + Hash + Clone> Default for MoonlinkBackend<T> {
 
 impl<T: Eq + Hash + Clone> MoonlinkBackend<T> {
     pub fn new(base_path: String) -> Self {
+        recreate_directory(DEFAULT_MOONLINK_TEMP_FILE_PATH).unwrap();
         Self {
-            replication_manager: RwLock::new(ReplicationManager::new(base_path.clone())),
+            replication_manager: RwLock::new(ReplicationManager::new(
+                base_path.clone(),
+                DEFAULT_MOONLINK_TEMP_FILE_PATH.to_string(),
+            )),
         }
     }
 
@@ -63,6 +86,25 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
     use tokio_postgres::{connect, NoTls};
+
+    #[test]
+    fn test_recreate_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("temp_file.txt");
+        let file = std::fs::File::create(&file_path).unwrap();
+        drop(file);
+        assert!(std::fs::exists(&file_path).unwrap());
+
+        // Re-create an exising directory.
+        recreate_directory(temp_dir.path().to_str().unwrap()).unwrap();
+        assert!(!std::fs::exists(&file_path).unwrap());
+
+        // Re-create a non-existent directory.
+        let internal_dir = temp_dir.path().join("internal_dir");
+        assert!(!std::fs::exists(&internal_dir).unwrap());
+        recreate_directory(internal_dir.to_str().unwrap()).unwrap();
+        assert!(std::fs::exists(&internal_dir).unwrap());
+    }
 
     #[tokio::test]
     async fn test_moonlink_service() {

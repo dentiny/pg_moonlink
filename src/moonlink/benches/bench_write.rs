@@ -1,5 +1,6 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use iceberg::table;
 use moonlink::row::{IdentityProp, MoonlinkRow, RowValue};
 use moonlink::{IcebergTableConfig, MooncakeTable, TableConfig};
 use std::collections::HashMap;
@@ -52,6 +53,7 @@ fn bench_write(c: &mut Criterion) {
                 let iceberg_table_config = IcebergTableConfig::builder()
                     .warehouse_uri(temp_warehouse_uri)
                     .build();
+                let table_config = TableConfig::new(temp_dir.path().to_str().unwrap().to_string());
                 let mut table = MooncakeTable::new(
                     schema.clone(),
                     "test_table".to_string(),
@@ -59,7 +61,7 @@ fn bench_write(c: &mut Criterion) {
                     temp_dir.path().to_path_buf(),
                     IdentityProp::SinglePrimitiveKey(0),
                     iceberg_table_config,
-                    TableConfig::new(),
+                    table_config,
                 )
                 .await
                 .unwrap();
@@ -83,6 +85,7 @@ fn bench_write(c: &mut Criterion) {
                 let iceberg_table_config = IcebergTableConfig::builder()
                     .warehouse_uri(temp_warehouse_uri)
                     .build();
+                let table_config = TableConfig::new(temp_dir.path().to_str().unwrap().to_string());
                 let mut table = MooncakeTable::new(
                     schema.clone(),
                     "test_table".to_string(),
@@ -90,7 +93,7 @@ fn bench_write(c: &mut Criterion) {
                     temp_dir.path().to_path_buf(),
                     IdentityProp::SinglePrimitiveKey(0),
                     iceberg_table_config,
-                    TableConfig::new(),
+                    table_config,
                 )
                 .await
                 .unwrap();
@@ -117,6 +120,7 @@ fn bench_write(c: &mut Criterion) {
                 let iceberg_table_config = IcebergTableConfig::builder()
                     .warehouse_uri(temp_warehouse_uri)
                     .build();
+                let table_config = TableConfig::new(temp_dir.path().to_str().unwrap().to_string());
                 let mut table = rt
                     .block_on(MooncakeTable::new(
                         schema.clone(),
@@ -125,7 +129,7 @@ fn bench_write(c: &mut Criterion) {
                         temp_dir.path().to_path_buf(),
                         IdentityProp::SinglePrimitiveKey(0),
                         iceberg_table_config,
-                        TableConfig::new(),
+                        table_config,
                     ))
                     .unwrap();
                 rt.block_on(async {

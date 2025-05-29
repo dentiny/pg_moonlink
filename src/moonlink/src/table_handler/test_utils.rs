@@ -74,7 +74,10 @@ pub struct TestEnvironment {
 impl TestEnvironment {
     /// Creates a default test environment with default settings.
     pub async fn default() -> Self {
-        Self::new(MooncakeTableConfig::default()).await
+        let temp_dir = tempdir().unwrap();
+        let mooncake_table_config =
+            MooncakeTableConfig::new(temp_dir.path().to_str().unwrap().to_string());
+        Self::new(temp_dir, mooncake_table_config).await
     }
 
     /// Create a new test environment with the given mooncake table.
@@ -117,8 +120,7 @@ impl TestEnvironment {
     }
 
     /// Creates a new test environment with default settings.
-    pub async fn new(mooncake_table_config: MooncakeTableConfig) -> Self {
-        let temp_dir = tempdir().unwrap();
+    pub async fn new(temp_dir: TempDir, mooncake_table_config: MooncakeTableConfig) -> Self {
         let path = temp_dir.path().to_path_buf();
         let table_name = "table_name";
         let iceberg_table_config =

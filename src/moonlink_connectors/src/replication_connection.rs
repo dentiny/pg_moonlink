@@ -22,6 +22,7 @@ use tokio_postgres::{connect, Client, NoTls};
 pub struct ReplicationConnection {
     uri: String,
     table_base_path: String,
+    table_temp_files_directory: String,
     postgres_client: Client,
     handle: Option<JoinHandle<Result<()>>>,
     table_readers: HashMap<TableId, ReadStateManager>,
@@ -33,7 +34,11 @@ pub struct ReplicationConnection {
 }
 
 impl ReplicationConnection {
-    pub async fn new(uri: String, table_base_path: String) -> Result<Self> {
+    pub async fn new(
+        uri: String,
+        table_base_path: String,
+        table_temp_files_directory: String,
+    ) -> Result<Self> {
         let (postgres_client, connection) = connect(&uri, NoTls).await.unwrap();
         tokio::spawn(async move {
             if let Err(e) = connection.await {
@@ -58,6 +63,7 @@ impl ReplicationConnection {
         Ok(Self {
             uri,
             table_base_path,
+            table_temp_files_directory,
             postgres_client,
             handle: None,
             table_readers: HashMap::new(),
@@ -133,6 +139,7 @@ impl ReplicationConnection {
         let resources = build_table_components(
             schema,
             Path::new(&self.table_base_path),
+            self.table_temp_files_directory.clone(),
             &self.replication_state,
         )
         .await?;
