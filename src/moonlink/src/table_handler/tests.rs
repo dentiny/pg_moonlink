@@ -392,7 +392,7 @@ async fn test_streaming_transaction_periodic_flush_then_abort() {
 #[tokio::test]
 async fn test_iceberg_drop_table() {
     let temp_dir = tempdir().unwrap();
-    let mut env = TestEnvironment::new(temp_dir, MooncakeTableConfig::default()).await;
+    let mut env = TestEnvironment::new(temp_dir, MooncakeTableConfig::default()).await; // No temp files created.
     env.drop_iceberg_table().await.unwrap()
 }
 
@@ -582,7 +582,7 @@ async fn test_iceberg_snapshot_creation() {
 #[tokio::test]
 async fn test_iceberg_snapshot_failure_mock_test() {
     let temp_dir = tempdir().unwrap();
-    let mooncake_table_config = TableConfig::default();
+    let mooncake_table_config = TableConfig::new(temp_dir.path().to_str().unwrap().to_string());
     let mooncake_table_metadata = Arc::new(MooncakeTableMetadata {
         name: "table_name".to_string(),
         id: 0,
@@ -638,7 +638,7 @@ async fn test_iceberg_snapshot_failure_mock_test() {
 #[tokio::test]
 async fn test_iceberg_drop_table_failure_mock_test() {
     let temp_dir = tempdir().unwrap();
-    let mooncake_table_config = TableConfig::default();
+    let mooncake_table_config = TableConfig::new(temp_dir.path().to_str().unwrap().to_string());
     let mooncake_table_metadata = Arc::new(MooncakeTableMetadata {
         name: "table_name".to_string(),
         id: 0,

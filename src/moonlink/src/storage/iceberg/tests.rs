@@ -85,7 +85,7 @@ fn create_test_table_metadata(local_table_directory: String) -> Arc<MooncakeTabl
         name: "test_table".to_string(),
         id: 0,
         schema: create_test_arrow_schema(),
-        config: MooncakeTableConfig::default(),
+        config: MooncakeTableConfig::new(local_table_directory.clone()),
         path: PathBuf::from(local_table_directory),
         identity: RowIdentity::FullRow,
     })
