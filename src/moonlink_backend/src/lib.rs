@@ -53,7 +53,7 @@ impl<T: Eq + Hash + Clone> MoonlinkBackend<T> {
 
         let writer = manager.get_iceberg_snapshot_manager(table_id);
         writer.initiate_snapshot(lsn).await;
-        writer.sync_snapshot_completion().await;
+        writer.sync_snapshot_completion().await?;
         Ok(())
     }
 }

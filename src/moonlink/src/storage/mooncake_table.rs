@@ -524,29 +524,26 @@ impl MooncakeTable {
     }
 
     /// Persist an iceberg snapshot.
-    ///
-    /// TODO(hjiang): Better error handling at TableHandler eventloop.
     async fn persist_iceberg_snapshot_impl(
         mut iceberg_table_manager: Box<dyn TableManager>,
         snapshot_payload: IcebergSnapshotPayload,
-    ) -> IcebergSnapshotResult {
+    ) -> Result<IcebergSnapshotResult> {
         let flush_lsn = snapshot_payload.flush_lsn;
         let new_data_files = snapshot_payload.data_files.clone();
         let puffin_blob_ref = iceberg_table_manager
             .sync_snapshot(snapshot_payload)
-            .await
-            .unwrap();
-        IcebergSnapshotResult {
+            .await?;
+        Ok(IcebergSnapshotResult {
             table_manager: iceberg_table_manager,
             flush_lsn,
             new_data_files,
             puffin_blob_ref,
-        }
+        })
     }
     pub(crate) fn persist_iceberg_snapshot(
         &mut self,
         snapshot_payload: IcebergSnapshotPayload,
-    ) -> JoinHandle<IcebergSnapshotResult> {
+    ) -> JoinHandle<Result<IcebergSnapshotResult>> {
         let iceberg_table_manager = self.iceberg_table_manager.take().unwrap();
         tokio::task::spawn(Self::persist_iceberg_snapshot_impl(
             iceberg_table_manager,
@@ -583,7 +580,7 @@ impl MooncakeTable {
     //
     // Test util function, which updates mooncake table snapshot and create iceberg snapshot in a serial fashion.
     #[cfg(test)]
-    pub(crate) async fn create_mooncake_and_iceberg_snapshot_for_test(&mut self) {
+    pub(crate) async fn create_mooncake_and_iceberg_snapshot_for_test(&mut self) -> Result<()> {
         if let Some(mooncake_join_handle) = self.create_snapshot() {
             // Wait for the snapshot async task to complete.
             match mooncake_join_handle.await {
@@ -596,7 +593,7 @@ impl MooncakeTable {
                         let iceberg_join_handle = self.persist_iceberg_snapshot(payload);
                         match iceberg_join_handle.await {
                             Ok(iceberg_snapshot_res) => {
-                                self.set_iceberg_snapshot_res(iceberg_snapshot_res);
+                                self.set_iceberg_snapshot_res(iceberg_snapshot_res?);
                             }
                             Err(e) => {
                                 panic!("Iceberg snapshot task gets cancelled: {:?}", e);
@@ -609,6 +606,7 @@ impl MooncakeTable {
                 }
             }
         }
+        Ok(())
     }
 }
 

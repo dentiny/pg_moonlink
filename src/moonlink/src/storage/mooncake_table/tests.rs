@@ -159,7 +159,9 @@ async fn test_update_rows(#[case] identity: IdentityProp) -> Result<()> {
     table.append(row3.clone())?;
     table.commit(/*lsn=*/ 100);
     table.flush(/*lsn=*/ 100).await?;
-    table.create_mooncake_and_iceberg_snapshot_for_test().await;
+    table
+        .create_mooncake_and_iceberg_snapshot_for_test()
+        .await?;
     {
         let table_snapshot = table.snapshot.read().await;
         let ReadOutput {
@@ -187,7 +189,9 @@ async fn test_update_rows(#[case] identity: IdentityProp) -> Result<()> {
     table.flush(/*lsn=*/ 300).await?;
 
     // Check update result.
-    table.create_mooncake_and_iceberg_snapshot_for_test().await;
+    table
+        .create_mooncake_and_iceberg_snapshot_for_test()
+        .await?;
     {
         let table_snapshot = table.snapshot.read().await;
         let ReadOutput {
@@ -353,7 +357,9 @@ async fn test_duplicate_deletion() -> Result<()> {
     table.append(old_row.clone()).unwrap();
     table.commit(/*lsn=*/ 100);
     table.flush(/*lsn=*/ 100).await.unwrap();
-    table.create_mooncake_and_iceberg_snapshot_for_test().await;
+    table
+        .create_mooncake_and_iceberg_snapshot_for_test()
+        .await?;
 
     // Update operation.
     let new_row = old_row.clone();
@@ -361,7 +367,9 @@ async fn test_duplicate_deletion() -> Result<()> {
     table.append(new_row.clone()).unwrap();
     table.commit(/*lsn=*/ 200);
     table.flush(/*lsn=*/ 200).await.unwrap();
-    table.create_mooncake_and_iceberg_snapshot_for_test().await;
+    table
+        .create_mooncake_and_iceberg_snapshot_for_test()
+        .await?;
 
     {
         let table_snapshot = table.snapshot.read().await;
@@ -460,5 +468,5 @@ async fn test_snapshot_store_failure() {
     let mooncake_snapshot_handle = table.create_snapshot().unwrap();
     let (_, iceberg_snapshot_payload) = mooncake_snapshot_handle.await.unwrap();
     let iceberg_snapshot_handle = table.persist_iceberg_snapshot(iceberg_snapshot_payload.unwrap());
-    assert!(iceberg_snapshot_handle.await.is_err());
+    assert!(iceberg_snapshot_handle.await.unwrap().is_err());
 }

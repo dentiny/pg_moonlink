@@ -7,6 +7,7 @@ use crate::storage::{load_blob_from_puffin_file, DeletionVector};
 use crate::storage::{verify_files_and_deletions, MooncakeTable};
 use crate::table_handler::{IcebergEventSyncSender, TableEvent, TableHandler}; // Ensure this path is correct
 use crate::union_read::{decode_read_state_for_testing, ReadStateManager};
+use crate::Result;
 use crate::{
     IcebergEventSyncReceiver, IcebergTableEventManager, IcebergTableManager,
     TableConfig as MooncakeTableConfig,
@@ -168,7 +169,7 @@ impl TestEnvironment {
     }
 
     /// Wait iceberg snapshot creation completion.
-    pub async fn sync_snapshot_completion(&mut self) {
+    pub async fn sync_snapshot_completion(&mut self) -> Result<()> {
         self.iceberg_snapshot_manager
             .sync_snapshot_completion()
             .await

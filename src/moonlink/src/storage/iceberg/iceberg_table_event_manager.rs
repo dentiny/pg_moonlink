@@ -1,12 +1,13 @@
 /// This module interacts with iceberg snapshot status.
 use tokio::sync::mpsc;
 
+use crate::Result;
 use crate::TableEvent;
 
 /// Contains a few receivers, which get notified after certain iceberg events completion.
 pub struct IcebergEventSyncReceiver {
     /// Gets notified when iceberg snapshot completes.
-    pub iceberg_snapshot_completion_rx: mpsc::Receiver<()>,
+    pub iceberg_snapshot_completion_rx: mpsc::Receiver<Result<()>>,
 
     /// Get notified when iceberg drop table completes.
     pub iceberg_drop_table_completion_rx: mpsc::Receiver<()>,
@@ -17,7 +18,7 @@ pub struct IcebergTableEventManager {
     /// Used to initiate a mooncake and iceberg snapshot operation.
     table_event_tx: mpsc::Sender<TableEvent>,
     /// Used to synchronize on the completion of an iceberg snapshot.
-    snapshot_completion_rx: mpsc::Receiver<()>,
+    snapshot_completion_rx: mpsc::Receiver<Result<()>>,
     /// Used to synchronize on the completion of an iceberg drop table.
     drop_table_completion_rx: mpsc::Receiver<()>,
 }
@@ -35,7 +36,7 @@ impl IcebergTableEventManager {
     }
 
     /// Synchronize on iceberg snapshot completion.
-    pub async fn sync_snapshot_completion(&mut self) {
+    pub async fn sync_snapshot_completion(&mut self) -> Result<()> {
         self.snapshot_completion_rx.recv().await.unwrap()
     }
 

@@ -2,6 +2,7 @@ use crate::row::MoonlinkRow;
 use crate::storage::mooncake_table::IcebergSnapshotPayload;
 use crate::storage::mooncake_table::IcebergSnapshotResult;
 use crate::storage::MooncakeTable;
+use crate::Result;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
@@ -50,7 +51,7 @@ pub struct TableHandler {
 /// Contains a few senders, which notifies after certain iceberg events completion.
 pub struct IcebergEventSyncSender {
     /// Notifies when iceberg snapshot completes.
-    pub iceberg_snapshot_completion_tx: mpsc::Sender<()>,
+    pub iceberg_snapshot_completion_tx: mpsc::Sender<Result<()>>,
 
     /// Notifies when iceberg drop table completes.
     pub iceberg_drop_table_completion_tx: mpsc::Sender<()>,
@@ -93,7 +94,7 @@ impl TableHandler {
         > = None;
 
         // Join handle for iceberg snapshot.
-        let mut iceberg_snapshot_handle: Option<JoinHandle<IcebergSnapshotResult>> = None;
+        let mut iceberg_snapshot_handle: Option<JoinHandle<Result<IcebergSnapshotResult>>> = None;
 
         // Requested minimum LSN for a force snapshot request.
         let mut force_snapshot_lsn: Option<u64> = None;
@@ -186,7 +187,7 @@ impl TableHandler {
                             // Fast-path: if iceberg snapshot requirement is already satisfied, notify directly.
                             let last_iceberg_snapshot_lsn = table.get_iceberg_snapshot_lsn();
                             if last_iceberg_snapshot_lsn.is_some() && lsn <= last_iceberg_snapshot_lsn.unwrap() {
-                                iceberg_event_sync_sender.iceberg_snapshot_completion_tx.send(()).await.unwrap();
+                                iceberg_event_sync_sender.iceberg_snapshot_completion_tx.send(Ok(())).await.unwrap();
                             }
                             // Iceberg snapshot LSN requirement is not met, record the required LSN, so later commit will pick up.
                             else {
@@ -250,13 +251,21 @@ impl TableHandler {
                         futures::future::pending::<Option<_>>().await
                     }
                 } => {
-                    let iceberg_flush_lsn = iceberg_snapshot_res.flush_lsn;
-                    table.set_iceberg_snapshot_res(iceberg_snapshot_res);
-                    if force_snapshot_lsn.is_some() && force_snapshot_lsn.unwrap() <= iceberg_flush_lsn {
-                        iceberg_event_sync_sender.iceberg_snapshot_completion_tx.send(()).await.unwrap();
-                        force_snapshot_lsn = None;
-                    }
                     iceberg_snapshot_handle = None;
+
+                    match iceberg_snapshot_res {
+                        Ok(snapshot_res) => {
+                            let iceberg_flush_lsn = snapshot_res.flush_lsn;
+                            table.set_iceberg_snapshot_res(snapshot_res);
+                            if force_snapshot_lsn.is_some() && force_snapshot_lsn.unwrap() <= iceberg_flush_lsn {
+                                iceberg_event_sync_sender.iceberg_snapshot_completion_tx.send(Ok(())).await.unwrap();
+                                force_snapshot_lsn = None;
+                            }
+                        }
+                        Err(e) => {
+                            iceberg_event_sync_sender.iceberg_snapshot_completion_tx.send(Err(e)).await.unwrap();
+                        }
+                    }
                 }
                 // Periodic snapshot based on time
                 _ = periodic_snapshot_interval.tick() => {

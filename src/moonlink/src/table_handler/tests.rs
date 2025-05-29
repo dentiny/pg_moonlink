@@ -432,7 +432,7 @@ async fn test_iceberg_snapshot_creation() {
 
     // Attempt an iceberg snapshot, with requested LSN already committed.
     env.initiate_snapshot(/*lsn=*/ 1).await;
-    env.sync_snapshot_completion().await;
+    env.sync_snapshot_completion().await.unwrap();
 
     // Load from iceberg table manager to check snapshot status.
     let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
@@ -472,7 +472,7 @@ async fn test_iceberg_snapshot_creation() {
     env.commit(/*lsn=*/ 5).await;
 
     // Block wait until iceberg snapshot created.
-    env.sync_snapshot_completion().await;
+    env.sync_snapshot_completion().await.unwrap();
 
     // Load from iceberg table manager to check snapshot status.
     let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
@@ -524,7 +524,7 @@ async fn test_iceberg_snapshot_creation() {
     env.commit(/*lsn=*/ 7).await;
 
     // Block wait until iceberg snapshot created.
-    env.sync_snapshot_completion().await;
+    env.sync_snapshot_completion().await.unwrap();
 
     // Load from iceberg table manager to check snapshot status.
     let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
@@ -567,5 +567,5 @@ async fn test_iceberg_snapshot_creation() {
 
     // Requested LSN is no later than current iceberg snapshot LSN.
     env.initiate_snapshot(/*lsn=*/ 1).await;
-    env.sync_snapshot_completion().await;
+    env.sync_snapshot_completion().await.unwrap();
 }
