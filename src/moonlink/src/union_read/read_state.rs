@@ -21,7 +21,7 @@ impl Drop for ReadState {
         let associated_files = std::mem::take(&mut self.associated_files);
         println!("Dropping files: {:?}", associated_files);
         // Perform best-effort deletion by spawning detached task.
-        let _ = tokio::runtime::Handle::current().spawn(async move {
+        tokio::spawn(async move {
             for file in associated_files.into_iter() {
                 if let Err(e) = tokio::fs::remove_file(&file).await {
                     println!("Failed to delete file {} because {:?}", file, e);
