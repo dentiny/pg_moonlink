@@ -408,6 +408,26 @@ mod tests {
             expected_record_batch
         );
 
+        // Get filtered record batch.
+        let filtered_batch = first_batch
+            .batch
+            .get_filtered_batch_with_limit(/*row_limit=*/ 1)
+            .unwrap()
+            .unwrap();
+        let expected_record_batch = Arc::new(
+            RecordBatch::try_new(
+                Arc::new(schema.clone()),
+                vec![
+                    Arc::new(Int32Array::from(vec![1])),
+                    Arc::new(StringArray::from(vec!["John".to_string()])),
+                    Arc::new(Int32Array::from(vec![30])),
+                    Arc::new(TimestampMicrosecondArray::from(vec![1618876800000000])),
+                ],
+            )
+            .unwrap(),
+        );
+        assert_eq!(Arc::new(filtered_batch), expected_record_batch);
+
         // Check batch entry 2.
         let second_batch = &batches[1];
         assert_eq!(second_batch.id, 1);
