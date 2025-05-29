@@ -165,7 +165,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_fast_delete_single_primitive_key() {
+    fn test_fast_delete_with_single_primitive_key() {
         let mut mem_index = MemIndex::new(IdentityProp::SinglePrimitiveKey(0));
         mem_index.insert(
             /*key=*/ 10,
@@ -201,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fast_delete_keys() {
+    fn test_fast_delete_with_keys() {
         let existent_row = MoonlinkRow::new(vec![
             RowValue::Int32(1),
             RowValue::Float32(2.0),
@@ -257,7 +257,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_find_record_single_primitive_key() {
+    async fn test_find_record_with_single_primitive_key() {
         let mut mem_index = MemIndex::new(IdentityProp::SinglePrimitiveKey(0));
         mem_index.insert(
             /*key=*/ 10,
@@ -289,7 +289,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_find_record_keys() {
+    async fn test_find_record_with_keys() {
         let existent_row = MoonlinkRow::new(vec![
             RowValue::Int32(1),
             RowValue::Float32(2.0),
@@ -323,6 +323,49 @@ mod tests {
         let record_loc = mem_index
             .find_record(&RawDeletionRecord {
                 lookup_key: 10,
+                row_identity: Some(non_existent_row.clone()),
+                pos: None,
+                lsn: 0,
+            })
+            .await;
+        assert!(record_loc.is_empty());
+
+        // Search for an existent entry.
+        let deletion_record = RawDeletionRecord {
+            lookup_key: 10,
+            row_identity: Some(existent_row.clone()),
+            pos: None,
+            lsn: 0,
+        };
+        let record_loc = mem_index.find_record(&deletion_record).await;
+        assert_eq!(record_loc.len(), 1);
+        assert!(matches!(record_loc[0], RecordLocation::MemoryBatch(_, _)));
+    }
+
+    #[tokio::test]
+    async fn test_find_record_with_full_rows() {
+        let existent_row = MoonlinkRow::new(vec![
+            RowValue::Int32(1),
+            RowValue::Float32(2.0),
+            RowValue::ByteArray(b"abc".to_vec()),
+        ]);
+
+        let mut mem_index = MemIndex::new(IdentityProp::FullRow);
+        mem_index.insert(
+            /*key=*/ 10,
+            /*identity_for_key=*/ None,
+            RecordLocation::MemoryBatch(0, 0),
+        );
+
+        // Search for a non-existent entry, with different lookup key.
+        let non_existent_row = MoonlinkRow::new(vec![
+            RowValue::Int32(2),
+            RowValue::Float32(3.0),
+            RowValue::ByteArray(b"bcd".to_vec()),
+        ]);
+        let record_loc = mem_index
+            .find_record(&RawDeletionRecord {
+                lookup_key: 0,
                 row_identity: Some(non_existent_row.clone()),
                 pos: None,
                 lsn: 0,
