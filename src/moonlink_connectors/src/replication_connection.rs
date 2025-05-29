@@ -5,7 +5,7 @@ use crate::pg_replicate::postgres_source::{CdcStreamError, PostgresSource, Table
 use crate::pg_replicate::table_init::build_table_components;
 use crate::Result;
 use moonlink::{IcebergTableEventManager, ReadStateManager};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tokio::pin;
 
 use crate::pg_replicate::replication_state::ReplicationState;
@@ -14,10 +14,18 @@ use futures::StreamExt;
 use moonlink::TableEvent;
 use std::collections::HashMap;
 use std::path::Path;
-use tokio::sync::mpsc::Sender;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_postgres::{connect, Client, NoTls};
+
+pub enum Command {
+    AddTable {
+        table_id: TableId,
+        schema: TableSchema,
+        event_sender: mpsc::Sender<TableEvent>,
+        commit_lsn_tx: watch::Sender<u64>,
+    },
+}
 
 pub struct ReplicationConnection {
     uri: String,
@@ -26,8 +34,8 @@ pub struct ReplicationConnection {
     handle: Option<JoinHandle<Result<()>>>,
     table_readers: HashMap<TableId, ReadStateManager>,
     iceberg_snapshot_managers: HashMap<TableId, IcebergTableEventManager>,
-    event_senders: Arc<RwLock<HashMap<TableId, Sender<TableEvent>>>>,
-    commit_lsn_txs: Arc<RwLock<HashMap<TableId, watch::Sender<u64>>>>,
+    cmd_tx: mpsc::Sender<Command>,
+    cmd_rx: Option<mpsc::Receiver<Command>>,
     replication_state: Arc<ReplicationState>,
     source: PostgresSource,
 }
@@ -55,6 +63,8 @@ impl ReplicationConnection {
         .await
         .unwrap();
 
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
         Ok(Self {
             uri,
             table_base_path,
@@ -62,8 +72,8 @@ impl ReplicationConnection {
             handle: None,
             table_readers: HashMap::new(),
             iceberg_snapshot_managers: HashMap::new(),
-            event_senders: Arc::new(RwLock::new(HashMap::new())),
-            commit_lsn_txs: Arc::new(RwLock::new(HashMap::new())),
+            cmd_tx,
+            cmd_rx: Some(cmd_rx),
             replication_state: ReplicationState::new(),
             source: postgres_source,
         })
@@ -120,7 +130,11 @@ impl ReplicationConnection {
         self.iceberg_snapshot_managers.get_mut(&table_id).unwrap()
     }
 
-    async fn spawn_replication_task(&mut self, sink: Sink) -> JoinHandle<Result<()>> {
+    async fn spawn_replication_task(
+        &mut self,
+        sink: Sink,
+        cmd_rx: mpsc::Receiver<Command>,
+    ) -> JoinHandle<Result<()>> {
         self.source
             .commit_transaction()
             .await
@@ -136,7 +150,7 @@ impl ReplicationConnection {
             .await
             .expect("failed to get cdc stream");
 
-        tokio::spawn(async move { run_event_loop(stream, sink).await })
+        tokio::spawn(async move { run_event_loop(stream, sink, cmd_rx).await })
     }
 
     async fn add_table_to_replication(&mut self, schema: &TableSchema) -> Result<()> {
@@ -152,14 +166,15 @@ impl ReplicationConnection {
             .insert(table_id, resources.read_state_manager);
         self.iceberg_snapshot_managers
             .insert(table_id, resources.iceberg_snapshot_manager);
-        self.event_senders
-            .write()
-            .unwrap()
-            .insert(table_id, resources.event_sender);
-        self.commit_lsn_txs
-            .write()
-            .unwrap()
-            .insert(table_id, resources.commit_lsn_tx);
+        self.cmd_tx
+            .send(Command::AddTable {
+                table_id,
+                schema: schema.clone(),
+                event_sender: resources.event_sender,
+                commit_lsn_tx: resources.commit_lsn_tx,
+            })
+            .await
+            .unwrap();
 
         Ok(())
     }
@@ -194,16 +209,18 @@ impl ReplicationConnection {
 
     pub async fn start_replication(&mut self) -> Result<()> {
         let table_schemas = self.source.get_table_schemas().await;
+
+        let (tx, rx) = mpsc::channel(8);
+        self.cmd_tx = tx;
+        self.cmd_rx = Some(rx);
+
+        let sink = Sink::new(self.replication_state.clone());
+        let receiver = self.cmd_rx.take().unwrap();
+        self.handle = Some(self.spawn_replication_task(sink, receiver).await);
+
         for schema in table_schemas.values() {
             self.add_table_to_replication(schema).await?;
         }
-
-        let sink = Sink::new(
-            self.replication_state.clone(),
-            self.event_senders.clone(),
-            self.commit_lsn_txs.clone(),
-        );
-        self.handle = Some(self.spawn_replication_task(sink).await);
 
         Ok(())
     }
@@ -235,26 +252,36 @@ impl ReplicationConnection {
     }
 }
 
-async fn run_event_loop(stream: CdcStream, mut sink: Sink) -> Result<()> {
-    //TODO: add separate stream for initial table copy.
-    // This assumes the table is empty and we can naively begin copying rows immediatley. If a table already contains data, this is not the case. We will need to use the get_table_copy_stream method to get the initial rows and write them into a new table. In parallel, we will need to buffer the cdc events for this table until the initial rows are written. For simplicity, we will assume that the table is empty at this point, and add a new stream for initial table copy later.
-
+async fn run_event_loop(
+    stream: CdcStream,
+    mut sink: Sink,
+    mut cmd_rx: mpsc::Receiver<Command>,
+) -> Result<()> {
     pin!(stream);
 
-    while let Some(event) = stream.next().await {
-        let mut send_status_update = false;
-        if let Err(CdcStreamError::CdcEventConversion(CdcEventConversionError::MissingSchema(_))) =
-            &event
-        {
-            continue;
-        }
-        if let Ok(CdcEvent::PrimaryKeepAlive(body)) = &event {
-            send_status_update = body.reply() == 1;
-        }
-        let event = event?;
-        let last_lsn = sink.process_cdc_event(event).await.unwrap();
-        if send_status_update {
-            let _ = stream.as_mut().send_status_update(last_lsn).await;
+    loop {
+        tokio::select! {
+            Some(cmd) = cmd_rx.recv() => match cmd {
+                Command::AddTable { table_id, schema, event_sender, commit_lsn_tx } => {
+                    sink.add_table(table_id, event_sender, commit_lsn_tx);
+                    stream.as_mut().add_table_schema(schema);
+                }
+            },
+            event = StreamExt::next(&mut stream) => {
+                let Some(event) = event else { break; };
+                let mut send_status_update = false;
+                if let Err(CdcStreamError::CdcEventConversion(CdcEventConversionError::MissingSchema(_))) = &event {
+                    continue;
+                }
+                if let Ok(CdcEvent::PrimaryKeepAlive(body)) = &event {
+                    send_status_update = body.reply() == 1;
+                }
+                let event = event?;
+                let last_lsn = sink.process_cdc_event(event).await.unwrap();
+                if send_status_update {
+                    let _ = stream.as_mut().send_status_update(last_lsn).await;
+                }
+            }
         }
     }
 

@@ -4,16 +4,13 @@ use crate::pg_replicate::{
     replication_state::ReplicationState,
     table::TableId,
 };
-use moonlink::{TableEvent, TableHandler};
+use moonlink::TableEvent;
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::sync::RwLock;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::watch;
 use tokio_postgres::types::PgLsn;
-
-use super::table_init::TableComponents;
 
 #[derive(Default)]
 struct TransactionState {
@@ -22,24 +19,18 @@ struct TransactionState {
 }
 
 pub struct Sink {
-    table_handlers: HashMap<TableId, TableHandler>,
-    event_senders: Arc<RwLock<HashMap<TableId, Sender<TableEvent>>>>,
-    commit_lsn_txs: Arc<RwLock<HashMap<TableId, watch::Sender<u64>>>>,
+    event_senders: HashMap<TableId, Sender<TableEvent>>,
+    commit_lsn_txs: HashMap<TableId, watch::Sender<u64>>,
     streaming_transactions_state: HashMap<u32, TransactionState>,
     transaction_state: TransactionState,
     replication_state: Arc<ReplicationState>,
 }
 
 impl Sink {
-    pub fn new(
-        replication_state: Arc<ReplicationState>,
-        event_senders: Arc<RwLock<HashMap<TableId, Sender<TableEvent>>>>,
-        commit_lsn_txs: Arc<RwLock<HashMap<TableId, watch::Sender<u64>>>>,
-    ) -> Self {
+    pub fn new(replication_state: Arc<ReplicationState>) -> Self {
         Self {
-            table_handlers: HashMap::new(),
-            event_senders,
-            commit_lsn_txs,
+            event_senders: HashMap::new(),
+            commit_lsn_txs: HashMap::new(),
             streaming_transactions_state: HashMap::new(),
             transaction_state: TransactionState {
                 final_lsn: 0,
@@ -51,6 +42,16 @@ impl Sink {
 }
 
 impl Sink {
+    pub fn add_table(
+        &mut self,
+        table_id: TableId,
+        event_sender: Sender<TableEvent>,
+        commit_lsn_tx: watch::Sender<u64>,
+    ) {
+        self.event_senders.insert(table_id, event_sender);
+        self.commit_lsn_txs.insert(table_id, commit_lsn_tx);
+    }
+
     pub async fn process_cdc_event(&mut self, event: CdcEvent) -> Result<PgLsn, Infallible> {
         match event {
             CdcEvent::Begin(begin_body) => {
@@ -59,14 +60,8 @@ impl Sink {
             CdcEvent::StreamStart(_stream_start_body) => {}
             CdcEvent::Commit(commit_body) => {
                 for table_id in &self.transaction_state.touched_tables {
-                    let event_sender = {
-                        let event_senders_guard = self.event_senders.read().unwrap();
-                        event_senders_guard.get(table_id).cloned()
-                    };
-                    if let Some(commit_lsn_tx) = {
-                        let map = self.commit_lsn_txs.read().unwrap();
-                        map.get(table_id).cloned()
-                    } {
+                    let event_sender = self.event_senders.get(table_id).cloned();
+                    if let Some(commit_lsn_tx) = self.commit_lsn_txs.get(table_id).cloned() {
                         let _ = commit_lsn_tx.send(commit_body.end_lsn());
                     }
                     if let Some(event_sender) = event_sender {
@@ -84,14 +79,8 @@ impl Sink {
                 let xact_id = stream_commit_body.xid();
                 if let Some(tables_in_txn) = self.streaming_transactions_state.get(&xact_id) {
                     for table_id in &tables_in_txn.touched_tables {
-                        let event_sender = {
-                            let event_senders_guard = self.event_senders.read().unwrap();
-                            event_senders_guard.get(table_id).cloned()
-                        };
-                        if let Some(commit_lsn_tx) = {
-                            let map = self.commit_lsn_txs.read().unwrap();
-                            map.get(table_id).cloned()
-                        } {
+                        let event_sender = self.event_senders.get(table_id).cloned();
+                        if let Some(commit_lsn_tx) = self.commit_lsn_txs.get(table_id).cloned() {
                             let _ = commit_lsn_tx.send(stream_commit_body.end_lsn());
                         }
                         if let Some(event_sender) = event_sender {
@@ -108,10 +97,7 @@ impl Sink {
                 }
             }
             CdcEvent::Insert((table_id, table_row, xact_id)) => {
-                let event_sender = {
-                    let event_senders_guard = self.event_senders.read().unwrap();
-                    event_senders_guard.get(&table_id).cloned()
-                };
+                let event_sender = self.event_senders.get(&table_id).cloned();
                 if let Some(event_sender) = event_sender {
                     event_sender
                         .send(TableEvent::Append {
@@ -147,10 +133,7 @@ impl Sink {
                     self.transaction_state.final_lsn
                 };
 
-                let event_sender = {
-                    let event_senders_guard = self.event_senders.read().unwrap();
-                    event_senders_guard.get(&table_id).cloned()
-                };
+                let event_sender = self.event_senders.get(&table_id).cloned();
                 if let Some(event_sender) = event_sender {
                     event_sender
                         .send(TableEvent::Delete {
@@ -185,10 +168,7 @@ impl Sink {
                     self.transaction_state.final_lsn
                 };
 
-                let event_sender = {
-                    let event_senders_guard = self.event_senders.read().unwrap();
-                    event_senders_guard.get(&table_id).cloned()
-                };
+                let event_sender = self.event_senders.get(&table_id).cloned();
                 if let Some(event_sender) = event_sender {
                     event_sender
                         .send(TableEvent::Delete {
@@ -211,10 +191,7 @@ impl Sink {
                 let xact_id = stream_abort_body.xid();
                 if let Some(tables_in_txn) = self.streaming_transactions_state.get(&xact_id) {
                     for table_id in &tables_in_txn.touched_tables {
-                        let event_sender = {
-                            let event_senders_guard = self.event_senders.read().unwrap();
-                            event_senders_guard.get(table_id).cloned()
-                        };
+                        let event_sender = self.event_senders.get(table_id).cloned();
                         if let Some(event_sender) = event_sender {
                             event_sender
                                 .send(TableEvent::StreamAbort { xact_id })
