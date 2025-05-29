@@ -360,6 +360,30 @@ async fn test_drop_table() {
     assert!(!directory_exists);
 }
 
+/// Testing scenario: attempt an iceberg snapshot load with no preceding store.
+#[tokio::test]
+async fn test_empty_snapshot_load() -> IcebergResult<()> {
+    let tmp_dir = tempdir()?;
+    let mooncake_table_metadata =
+        create_test_table_metadata(tmp_dir.path().to_str().unwrap().to_string());
+    let config = IcebergTableConfig {
+        warehouse_uri: tmp_dir.path().to_str().unwrap().to_string(),
+        namespace: vec!["namespace".to_string()],
+        table_name: "test_table".to_string(),
+        drop_table_if_exists: false,
+    };
+
+    // Recover from iceberg snapshot, and check mooncake table snapshot version.
+    let mut iceberg_table_manager =
+        IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone())?;
+    let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
+    assert!(snapshot.disk_files.is_empty());
+    assert!(snapshot.indices.in_memory_index.is_empty());
+    assert!(snapshot.indices.file_indices.is_empty());
+    assert!(snapshot.data_file_flush_lsn.is_none());
+    Ok(())
+}
+
 /// Testing scenario: attempt an iceberg snapshot when no data file, deletion vector or index files generated.
 #[tokio::test]
 async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {

@@ -647,6 +647,9 @@ mod tests {
             .set_directory(tempfile::tempdir().unwrap().keep());
         let index = builder.build_from_flush(hash_entries.clone()).await;
 
+        // Search for a non-existent key doesn't panic.
+        assert!(index.search(/*hash=*/ &0).await.is_empty());
+
         let data_file_ids = [data_file.file_id()];
         for (hash, seg_idx, row_idx) in hash_entries.iter() {
             let expected_record_loc = RecordLocation::DiskFile(data_file_ids[*seg_idx], *row_idx);
