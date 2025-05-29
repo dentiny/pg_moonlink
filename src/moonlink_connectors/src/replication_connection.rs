@@ -222,8 +222,10 @@ impl ReplicationConnection {
 
     /// Remove the given table from connection.
     pub async fn drop_table(&mut self, table_id: u32) -> Result<()> {
-        let table_name = self.source.remove_table_schema(table_id);
+        let table_name = self.source.get_table_name_from_id(table_id);
+        // Remove table from publication as the first step, to prevent further events.
         self.remove_table_from_publication(&table_name).await?;
+        self.source.remove_table_schema(table_id);
         self.remove_table_from_replication(table_id).await?;
         Ok(())
     }
