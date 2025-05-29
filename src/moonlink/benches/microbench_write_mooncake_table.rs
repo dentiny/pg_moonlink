@@ -1,6 +1,5 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use criterion::{criterion_group, criterion_main, Criterion};
-use iceberg::table;
 use moonlink::row::{IdentityProp, MoonlinkRow, RowValue};
 use moonlink::IcebergTableConfig;
 use moonlink::{MooncakeTable, TableConfig};

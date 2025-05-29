@@ -668,6 +668,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
     let schema = create_test_arrow_schema();
     // Create iceberg snapshot whenever `create_snapshot` is called.
     let mut mooncake_table_config = MooncakeTableConfig::default();
+    #[allow(clippy::field_reassign_with_default)]
     mooncake_table_config.iceberg_snapshot_new_data_file_count = 0;
     let mut table = MooncakeTable::new(
         schema.as_ref().clone(),
@@ -1068,6 +1069,7 @@ async fn test_drop_table_at_creation() -> IcebergResult<()> {
 
     // Create iceberg snapshot whenever `create_snapshot` is called.
     let mut mooncake_table_config = MooncakeTableConfig::default();
+    #[allow(clippy::field_reassign_with_default)]
     mooncake_table_config.iceberg_snapshot_new_data_file_count = 0;
     let mut table = MooncakeTable::new(
         create_test_arrow_schema().as_ref().clone(),
@@ -1146,6 +1148,7 @@ async fn create_table_and_iceberg_manager(
 
     // Create iceberg snapshot whenever `create_snapshot` is called.
     let mut mooncake_table_config = MooncakeTableConfig::default();
+    #[allow(clippy::field_reassign_with_default)]
     mooncake_table_config.iceberg_snapshot_new_data_file_count = 0;
     let table = MooncakeTable::new(
         schema.as_ref().clone(),

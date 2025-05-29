@@ -346,8 +346,6 @@ impl MooncakeTable {
         })
     }
 
-    /// Make sure temporary file directory is empty.
-
     /// Set iceberg snapshot flush LSN, called after a snapshot operation.
     pub(crate) fn set_iceberg_snapshot_res(&mut self, iceberg_snapshot_res: IcebergSnapshotResult) {
         // ---- Update mooncake table fields ----
