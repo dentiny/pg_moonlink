@@ -648,7 +648,7 @@ mod tests {
         let index = builder.build_from_flush(hash_entries.clone()).await;
 
         // Search for a non-existent key doesn't panic.
-        assert!(index.search(/*hash=*/0).await.is_empty());
+        assert!(index.search(/*hash=*/ &0).await.is_empty());
 
         let data_file_ids = [data_file.file_id()];
         for (hash, seg_idx, row_idx) in hash_entries.iter() {
