@@ -141,6 +141,75 @@ async fn test_deletion_after_flush(#[case] identity: IdentityProp) -> Result<()>
     Ok(())
 }
 
+#[apply(shared_cases)]
+#[tokio::test]
+async fn test_update_rows(#[case] identity: IdentityProp) -> Result<()> {
+    let row1 = test_row(1, "Row 1", 31);
+    let row2 = test_row(2, "Row 2", 32);
+    let row3 = test_row(3, "Row 3", 33);
+    let row4 = test_row(4, "Row 4", 44);
+    let updated_row2 = test_row(2, "New row 2", 30);
+
+    let context = TestContext::new("update_rows");
+    let mut table = test_table(&context, "update_table", identity).await;
+
+    // Perform and check initial append operation.
+    table.append(row1.clone())?;
+    table.append(row2.clone())?;
+    table.append(row3.clone())?;
+    table.commit(/*lsn=*/ 100);
+    table.flush(/*lsn=*/ 100).await?;
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
+    {
+        let table_snapshot = table.snapshot.read().await;
+        let ReadOutput {
+            data_file_paths,
+            puffin_file_paths,
+            position_deletes,
+            deletion_vectors,
+            ..
+        } = table_snapshot.request_read().await?;
+        verify_files_and_deletions(
+            &data_file_paths,
+            &puffin_file_paths,
+            position_deletes,
+            deletion_vectors,
+            /*expected_ids=*/ &[1, 2, 3],
+        )
+        .await;
+    }
+
+    // Perform an update operation.
+    table.delete(row2.clone(), /*lsn=*/ 200).await;
+    table.append(updated_row2.clone())?;
+    table.append(row4.clone())?;
+    table.commit(/*lsn=*/ 300);
+    table.flush(/*lsn=*/ 300).await?;
+
+    // Check update result.
+    table.create_mooncake_and_iceberg_snapshot_for_test().await;
+    {
+        let table_snapshot = table.snapshot.read().await;
+        let ReadOutput {
+            data_file_paths,
+            puffin_file_paths,
+            position_deletes,
+            deletion_vectors,
+            ..
+        } = table_snapshot.request_read().await?;
+        verify_files_and_deletions(
+            &data_file_paths,
+            &puffin_file_paths,
+            position_deletes,
+            deletion_vectors,
+            /*expected_ids=*/ &[1, 2, 3, 4],
+        )
+        .await;
+    }
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_snapshot_initialization() -> Result<()> {
     let schema = test_schema();
