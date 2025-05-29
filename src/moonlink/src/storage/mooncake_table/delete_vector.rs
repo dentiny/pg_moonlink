@@ -90,6 +90,7 @@ impl BatchDeletionVector {
             .collect()
     }
 
+    /// Return deleted row index in ascending order.
     pub(crate) fn collect_deleted_rows(&self) -> Vec<u64> {
         let Some(bitmap) = &self.deletion_vector else {
             return Vec::new();
