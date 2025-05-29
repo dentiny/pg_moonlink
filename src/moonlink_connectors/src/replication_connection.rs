@@ -174,7 +174,9 @@ impl ReplicationConnection {
         Ok(())
     }
 
-    fn remove_table_from_replication(&mut self, table_id: u32) {
+    async fn remove_table_from_replication(&mut self, table_id: u32) -> Result<()> {
+        self.drop_iceberg_table(table_id).await?;
+
         self.table_readers.remove_entry(&table_id).unwrap();
         self.iceberg_snapshot_managers
             .remove_entry(&table_id)
@@ -189,6 +191,15 @@ impl ReplicationConnection {
             .unwrap()
             .remove_entry(&table_id)
             .unwrap();
+
+        Ok(())
+    }
+
+    /// Clean up iceberg table in a blocking manner.
+    async fn drop_iceberg_table(&mut self, table_id: u32) -> Result<()> {
+        let iceberg_state_manager = self.iceberg_snapshot_managers.get_mut(&table_id).unwrap();
+        iceberg_state_manager.drop_table().await?;
+        Ok(())
     }
 
     pub async fn start_replication(&mut self) -> Result<()> {
@@ -223,7 +234,7 @@ impl ReplicationConnection {
     pub async fn drop_table(&mut self, table_id: u32) -> Result<()> {
         let table_name = self.source.remove_table_schema(table_id);
         self.remove_table_from_publication(&table_name).await?;
-        self.remove_table_from_replication(table_id);
+        self.remove_table_from_replication(table_id).await?;
         Ok(())
     }
 
