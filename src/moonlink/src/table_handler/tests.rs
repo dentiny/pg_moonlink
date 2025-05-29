@@ -1,12 +1,10 @@
 use arrow_array::{Int32Array, RecordBatch, StringArray};
 use iceberg::{Error as IcebergError, ErrorKind};
-use tempfile::{tempdir, TempDir};
+use tempfile::tempdir;
 
 use super::test_utils::*;
 use crate::storage::mooncake_table::TableConfig as MooncakeTableConfig;
-use crate::storage::mooncake_table::{
-    DiskFileDeletionVector, TableMetadata as MooncakeTableMetadata,
-};
+use crate::storage::mooncake_table::TableMetadata as MooncakeTableMetadata;
 use crate::storage::MockTableManager;
 use crate::storage::MooncakeTable;
 use crate::storage::TableManager;
