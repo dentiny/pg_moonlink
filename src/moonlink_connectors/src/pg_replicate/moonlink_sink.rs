@@ -51,34 +51,7 @@ impl Sink {
 }
 
 impl Sink {
-    // TODO: Use this when copying the intial table with data. Currently we assume the table to be empty and start streaming cdc events immediately for simplicity.
-    #[allow(dead_code)]
-    async fn write_table_row(
-        &mut self,
-        row: TableRow,
-        table_id: TableId,
-    ) -> Result<(), Infallible> {
-        let event_sender = {
-            let event_senders_guard = self.event_senders.read().unwrap();
-            event_senders_guard.get(&table_id).cloned()
-        };
-        if let Some(event_sender) = event_sender {
-            event_sender
-                .send(TableEvent::Append {
-                    row: PostgresTableRow(row).into(),
-                    xact_id: None,
-                })
-                .await
-                .unwrap();
-            event_sender
-                .send(TableEvent::Commit { lsn: 0 })
-                .await
-                .unwrap();
-        }
-        Ok(())
-    }
-
-    pub async fn write_cdc_event(&mut self, event: CdcEvent) -> Result<PgLsn, Infallible> {
+    pub async fn process_cdc_event(&mut self, event: CdcEvent) -> Result<PgLsn, Infallible> {
         match event {
             CdcEvent::Begin(begin_body) => {
                 self.transaction_state.final_lsn = begin_body.final_lsn();
@@ -254,12 +227,5 @@ impl Sink {
             }
         }
         Ok(PgLsn::from(0))
-    }
-
-    // TODO: Use this when we add back table copy.
-    #[allow(dead_code)]
-    async fn table_copied(&mut self, table_id: TableId) -> Result<(), Infallible> {
-        println!("table {table_id} copied");
-        Ok(())
     }
 }

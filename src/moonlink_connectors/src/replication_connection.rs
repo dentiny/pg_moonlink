@@ -252,7 +252,7 @@ async fn run_event_loop(stream: CdcStream, mut sink: Sink) -> Result<()> {
             send_status_update = body.reply() == 1;
         }
         let event = event?;
-        let last_lsn = sink.write_cdc_event(event).await.unwrap();
+        let last_lsn = sink.process_cdc_event(event).await.unwrap();
         if send_status_update {
             let _ = stream.as_mut().send_status_update(last_lsn).await;
         }
