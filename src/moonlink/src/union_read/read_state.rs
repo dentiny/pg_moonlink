@@ -18,10 +18,16 @@ pub struct ReadState {
 
 impl Drop for ReadState {
     fn drop(&mut self) {
-        println!("Dropping files: {:?}", self.associated_files);
-        for file in self.associated_files.iter() {
-            std::fs::remove_file(file).unwrap();
-        }
+        let associated_files = std::mem::take(&mut self.associated_files);
+        println!("Dropping files: {:?}", associated_files);
+        // Perform best-effort deletion by spawning detached task.
+        let _ = tokio::runtime::Handle::current().spawn(async move {
+            for file in associated_files.into_iter() {
+                if let Err(e) = tokio::fs::remove_file(&file).await {
+                    println!("Failed to delete file {} because {:?}", file, e);
+                }
+            }
+        });
     }
 }
 
