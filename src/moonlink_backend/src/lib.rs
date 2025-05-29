@@ -138,5 +138,8 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         let new = service.scan_table(&"test", None).await.unwrap();
         assert_ne!(old.data, new.data);
+
+        // Clean up temporary files directory after test.
+        recreate_directory(DEFAULT_MOONLINK_TEMP_FILE_PATH).unwrap();
     }
 }
