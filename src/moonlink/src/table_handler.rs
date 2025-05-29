@@ -54,7 +54,7 @@ pub struct IcebergEventSyncSender {
     pub iceberg_snapshot_completion_tx: mpsc::Sender<Result<()>>,
 
     /// Notifies when iceberg drop table completes.
-    pub iceberg_drop_table_completion_tx: mpsc::Sender<()>,
+    pub iceberg_drop_table_completion_tx: mpsc::Sender<Result<()>>,
 }
 
 impl TableHandler {
@@ -197,10 +197,8 @@ impl TableHandler {
                         // Branch to drop the iceberg table, only used when the whole table requested to drop.
                         // So we block wait for asynchronous request completion.
                         TableEvent::DropIcebergTable => {
-                            if let Err(e) = table.drop_iceberg_table().await {
-                                println!("Drop iceberg table failed: {}", e);
-                            }
-                            iceberg_event_sync_sender.iceberg_drop_table_completion_tx.send(()).await.unwrap();
+                            let res = table.drop_iceberg_table().await;
+                            iceberg_event_sync_sender.iceberg_drop_table_completion_tx.send(res).await.unwrap();
                         }
                     }
                 }

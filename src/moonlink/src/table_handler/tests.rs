@@ -387,7 +387,7 @@ async fn test_streaming_transaction_periodic_flush_then_abort() {
 #[tokio::test]
 async fn test_iceberg_drop_table() {
     let mut env = TestEnvironment::new(MooncakeTableConfig::default()).await;
-    env.drop_iceberg_table().await
+    env.drop_iceberg_table().await.unwrap()
 }
 
 #[tokio::test]

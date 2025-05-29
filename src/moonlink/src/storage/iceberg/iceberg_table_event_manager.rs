@@ -10,7 +10,7 @@ pub struct IcebergEventSyncReceiver {
     pub iceberg_snapshot_completion_rx: mpsc::Receiver<Result<()>>,
 
     /// Get notified when iceberg drop table completes.
-    pub iceberg_drop_table_completion_rx: mpsc::Receiver<()>,
+    pub iceberg_drop_table_completion_rx: mpsc::Receiver<Result<()>>,
 }
 
 /// At most one outstanding snapshot request is allowed.
@@ -20,7 +20,7 @@ pub struct IcebergTableEventManager {
     /// Used to synchronize on the completion of an iceberg snapshot.
     snapshot_completion_rx: mpsc::Receiver<Result<()>>,
     /// Used to synchronize on the completion of an iceberg drop table.
-    drop_table_completion_rx: mpsc::Receiver<()>,
+    drop_table_completion_rx: mpsc::Receiver<Result<()>>,
 }
 
 impl IcebergTableEventManager {
@@ -50,11 +50,11 @@ impl IcebergTableEventManager {
     }
 
     /// Drop an iceberg table.
-    pub async fn drop_table(&mut self) {
+    pub async fn drop_table(&mut self) -> Result<()> {
         self.table_event_tx
             .send(TableEvent::DropIcebergTable)
             .await
             .unwrap();
-        self.drop_table_completion_rx.recv().await.unwrap();
+        self.drop_table_completion_rx.recv().await.unwrap()
     }
 }
