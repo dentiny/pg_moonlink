@@ -43,12 +43,14 @@ pub struct TableConfig {
     pub snapshot_deletion_record_count: usize,
     /// Max number of rows in MemSlice.
     pub batch_size: usize,
+    /// Filesystem directory to store temporary files, used for union read.
+    pub temp_files_directory: String,
+    /// Disk slice parquet file flush threshold.
+    pub disk_slice_parquet_file_size: usize,
     /// Number of new data files to trigger an iceberg snapshot.
     pub iceberg_snapshot_new_data_file_count: usize,
     /// Number of unpersisted committed delete logs to trigger an iceberg snapshot.
     pub iceberg_snapshot_new_committed_deletion_log: usize,
-    /// Filesystem directory to store temporary files, used for union read.
-    pub temp_files_directory: String,
 }
 
 impl Default for TableConfig {
@@ -68,6 +70,8 @@ impl TableConfig {
     pub(crate) const DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT: usize = 1;
     #[cfg(debug_assertions)]
     pub(crate) const DEFAULT_ICEBERG_SNAPSHOT_NEW_COMMITTED_DELETION_LOG: usize = 1000;
+    #[cfg(debug_assertions)]
+    pub(crate) const DEFAULT_DISK_SLICE_PARQUET_FILE_SIZE: usize = 1024 * 1024 * 2; // 2MiB
 
     #[cfg(not(debug_assertions))]
     pub(crate) const DEFAULT_MEM_SLICE_SIZE: usize = TableConfig::DEFAULT_BATCH_SIZE * 32;
@@ -79,6 +83,8 @@ impl TableConfig {
     pub(crate) const DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT: usize = 1;
     #[cfg(not(debug_assertions))]
     pub(crate) const DEFAULT_ICEBERG_SNAPSHOT_NEW_COMMITTED_DELETION_LOG: usize = 1000;
+    #[cfg(not(debug_assertions))]
+    pub(crate) const DEFAULT_DISK_SLICE_PARQUET_FILE_SIZE: usize = 1024 * 1024 * 128; // 128MiB
 
     /// Default local directory to hold temporary files for union read.
     pub(crate) const DEFAULT_TEMP_FILE_DIRECTORY: &str = "/tmp/moonlink_temp_file";
@@ -88,10 +94,11 @@ impl TableConfig {
             mem_slice_size: Self::DEFAULT_MEM_SLICE_SIZE,
             snapshot_deletion_record_count: Self::DEFAULT_SNAPSHOT_DELETION_RECORD_COUNT,
             batch_size: Self::DEFAULT_BATCH_SIZE,
+            disk_slice_parquet_file_size: Self::DEFAULT_DISK_SLICE_PARQUET_FILE_SIZE,
+            temp_files_directory,
             iceberg_snapshot_new_data_file_count: Self::DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT,
             iceberg_snapshot_new_committed_deletion_log:
                 Self::DEFAULT_ICEBERG_SNAPSHOT_NEW_COMMITTED_DELETION_LOG,
-            temp_files_directory,
         }
     }
     pub fn batch_size(&self) -> usize {
@@ -460,16 +467,17 @@ impl MooncakeTable {
             task.new_mem_indices.push(index.clone());
         }
 
-        let metadata_clone = metadata.clone();
-        let path_clone = metadata.path.clone();
+        let path = metadata.path.clone();
+        let parquet_flush_threshold_size = metadata.config.disk_slice_parquet_file_size;
 
         let mut disk_slice = DiskSliceWriter::new(
-            metadata_clone.schema.clone(),
-            path_clone,
+            metadata.schema.clone(),
+            path,
             batches,
             lsn,
             next_file_id,
             index,
+            parquet_flush_threshold_size,
         );
 
         disk_slice.write().await?;

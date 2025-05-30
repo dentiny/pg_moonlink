@@ -70,6 +70,15 @@ impl<T: Eq + Hash> ReplicationManager<T> {
         Ok(())
     }
 
+    /// Drop table specified by the given table id.
+    /// Precondition: the table has been registered, otherwise panics.
+    pub async fn drop_table(&mut self, external_table_id: T) -> Result<()> {
+        let (table_uri, table_id) = &self.table_info.get(&external_table_id).unwrap();
+        let repl_conn = self.connections.get_mut(table_uri).unwrap();
+        repl_conn.drop_table(*table_id).await?;
+        Ok(())
+    }
+
     pub fn get_table_reader(&self, table_id: &T) -> &ReadStateManager {
         let (uri, table_id) = self.table_info.get(table_id).expect("table not found");
         let connection = self.connections.get(uri).expect("connection not found");

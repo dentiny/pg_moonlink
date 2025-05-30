@@ -25,6 +25,9 @@ pub enum Command {
         event_sender: mpsc::Sender<TableEvent>,
         commit_lsn_tx: watch::Sender<u64>,
     },
+    DropTable {
+        table_id: TableId,
+    },
 }
 
 pub struct ReplicationConnection {
@@ -114,6 +117,17 @@ impl ReplicationConnection {
         Ok(())
     }
 
+    async fn remove_table_from_publication(&self, table_name: &str) -> Result<()> {
+        self.postgres_client
+            .simple_query(&format!(
+                "ALTER PUBLICATION moonlink_pub DROP TABLE {};",
+                table_name
+            ))
+            .await
+            .unwrap();
+        Ok(())
+    }
+
     pub fn get_table_reader(&self, table_id: TableId) -> &ReadStateManager {
         self.table_readers.get(&table_id).unwrap()
     }
@@ -175,6 +189,28 @@ impl ReplicationConnection {
         Ok(())
     }
 
+    async fn remove_table_from_replication(&mut self, table_id: u32) -> Result<()> {
+        self.drop_iceberg_table(table_id).await?;
+
+        self.table_readers.remove_entry(&table_id).unwrap();
+        self.iceberg_snapshot_managers
+            .remove_entry(&table_id)
+            .unwrap();
+        self.cmd_tx
+            .send(Command::DropTable { table_id })
+            .await
+            .unwrap();
+
+        Ok(())
+    }
+
+    /// Clean up iceberg table in a blocking manner.
+    async fn drop_iceberg_table(&mut self, table_id: u32) -> Result<()> {
+        let iceberg_state_manager = self.iceberg_snapshot_managers.get_mut(&table_id).unwrap();
+        iceberg_state_manager.drop_table().await?;
+        Ok(())
+    }
+
     pub async fn start_replication(&mut self) -> Result<()> {
         let table_schemas = self.source.get_table_schemas().await;
 
@@ -205,6 +241,16 @@ impl ReplicationConnection {
         Ok(table_schema.table_id)
     }
 
+    /// Remove the given table from connection.
+    pub async fn drop_table(&mut self, table_id: u32) -> Result<()> {
+        let table_name = self.source.get_table_name_from_id(table_id);
+        // Remove table from publication as the first step, to prevent further events.
+        self.remove_table_from_publication(&table_name).await?;
+        self.source.remove_table_schema(table_id);
+        self.remove_table_from_replication(table_id).await?;
+        Ok(())
+    }
+
     pub fn check_table_belongs_to_source(&self, uri: &str) -> bool {
         self.uri == uri
     }
@@ -223,6 +269,9 @@ async fn run_event_loop(
                 Command::AddTable { table_id, schema, event_sender, commit_lsn_tx } => {
                     sink.add_table(table_id, event_sender, commit_lsn_tx);
                     stream.as_mut().add_table_schema(schema);
+                }
+                Command::DropTable { table_id } => {
+                    sink.drop_table(table_id);
                 }
             },
             event = StreamExt::next(&mut stream) => {

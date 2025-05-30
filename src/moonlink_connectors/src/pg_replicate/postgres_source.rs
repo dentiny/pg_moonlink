@@ -132,6 +132,23 @@ impl PostgresSource {
         Ok(table_schema)
     }
 
+    /// Get table name from table id.
+    /// Precondition: table already exists in pg source, otherwise it panics.
+    pub fn get_table_name_from_id(&self, table_id: u32) -> String {
+        self.table_schemas
+            .get(&table_id)
+            .unwrap()
+            .table_name
+            .get_schema_name()
+    }
+
+    /// Remove table schema from source, and return table name.
+    /// Precondition: table already exists in pg source, otherwise it panics.
+    pub fn remove_table_schema(&mut self, table_id: u32) -> String {
+        let table_schema = self.table_schemas.remove(&table_id).unwrap();
+        table_schema.table_name.get_schema_name()
+    }
+
     pub async fn get_table_copy_stream(
         &self,
         table_name: &TableName,
