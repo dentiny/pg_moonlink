@@ -102,6 +102,9 @@ impl TableHandler {
         // Record LSN if the last handled table event is committed, which indicates mooncake table stays at a consistent view, so table could be flushed safely.
         let mut table_consistent_view_lsn: Option<u64> = None;
 
+        // Whether current table receives any update events.
+        let mut table_updated = false;
+
         // Process events until the receiver is closed or a Shutdown event is received
         loop {
             tokio::select! {
@@ -113,6 +116,10 @@ impl TableHandler {
                         // `ForceSnapshot` event doesn't affect whether mooncake is at a committed state.
                         TableEvent::ForceSnapshot { .. } => table_consistent_view_lsn,
                         _ => None,
+                    };
+                    table_updated = match event {
+                        TableEvent::ForceSnapshot { .. } => table_updated,
+                        _ => true,
                     };
 
                     match event {
@@ -192,6 +199,12 @@ impl TableHandler {
                         TableEvent::ForceSnapshot { lsn } => {
                             // TODO(hjiang): Currently we only support one ongoing force snapshot operation.
                             assert!(force_snapshot_lsn.is_none());
+
+                            // A workaround to avoid create snapshot call gets stuck, when there's no write operations to the table.
+                            if !table_updated {
+                                iceberg_event_sync_sender.iceberg_snapshot_completion_tx.send(Ok(())).await.unwrap();
+                                continue;
+                            }
 
                             // Fast-path: if iceberg snapshot requirement is already satisfied, notify directly.
                             let last_iceberg_snapshot_lsn = table.get_iceberg_snapshot_lsn();
