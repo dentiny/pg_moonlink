@@ -653,71 +653,6 @@ async fn test_iceberg_snapshot_creation_for_streaming_write() {
         /*id=*/ 2,
         /*name=*/ "Bob",
         /*age=*/ 20,
-        /*xact_id=*/ Some(1),
-    )
-    .await;
-    env.stream_commit(/*lsn=*/ 3, /*xact_id=*/ 1).await;
-    env.delete_row(
-        /*id=*/ 1,
-        /*name=*/ "John",
-        /*age=*/ 30,
-        /*lsn=*/ 4,
-        /*xact_id=*/ Some(2),
-    )
-    .await;
-    env.stream_commit(/*lsn=*/ 5, /*xact_id=*/ 2).await;
-
-    // Block wait until iceberg snapshot created.
-    env.sync_snapshot_completion().await.unwrap();
-
-    // Load from iceberg table manager to check snapshot status.
-    let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
-    let snapshot = iceberg_table_manager
-        .load_snapshot_from_table()
-        .await
-        .unwrap();
-    assert_eq!(snapshot.disk_files.len(), 2);
-    for (cur_data_file, cur_deletion_vector) in snapshot.disk_files.into_iter() {
-        // Check the first data file.
-        if cur_data_file.file_path() == old_data_file.file_path() {
-            let actual_arrow_batch = load_arrow_batch(cur_data_file.file_path()).await;
-            let expected_arrow_batch = arrow_batch_1.clone();
-            assert_eq!(actual_arrow_batch, expected_arrow_batch);
-            // Check the first deletion vector.
-            assert_eq!(
-                cur_deletion_vector
-                    .batch_deletion_vector
-                    .collect_deleted_rows(),
-                vec![0]
-            );
-            check_deletion_vector_consistency(&cur_deletion_vector).await;
-            continue;
-        }
-
-        // Check the second data file.
-        let actual_arrow_batch = load_arrow_batch(cur_data_file.file_path()).await;
-        let expected_arrow_batch = arrow_batch_2.clone();
-        assert_eq!(actual_arrow_batch, expected_arrow_batch);
-        // Check the second deletion vector.
-        let deleted_rows = cur_deletion_vector
-            .batch_deletion_vector
-            .collect_deleted_rows();
-        assert!(
-            deleted_rows.is_empty(),
-            "Deletion vector for the second data file is {:?}",
-            deleted_rows
-        );
-        check_deletion_vector_consistency(&cur_deletion_vector).await;
-    }
-
-    // ---- Create snapshot after new records appended and old records deleted ----
-    //
-    // Attempt an iceberg snapshot, which is a future flush LSN, and contains both new records and deletion records.
-    env.initiate_snapshot(/*lsn=*/ 5).await;
-    env.append_row(
-        /*id=*/ 2,
-        /*name=*/ "Bob",
-        /*age=*/ 20,
         /*xact_id=*/ Some(3),
     )
     .await;
@@ -771,6 +706,60 @@ async fn test_iceberg_snapshot_creation_for_streaming_write() {
             deleted_rows.is_empty(),
             "Deletion vector for the second data file is {:?}",
             deleted_rows
+        );
+        check_deletion_vector_consistency(&cur_deletion_vector).await;
+    }
+
+    // ---- Create snapshot only with old records deleted ----
+    env.initiate_snapshot(/*lsn=*/ 7).await;
+    env.delete_row(
+        /*id=*/ 2,
+        /*name=*/ "Bob",
+        /*age=*/ 20,
+        /*lsn=*/ 6,
+        /*xact_id=*/ Some(5),
+    )
+    .await;
+    env.stream_commit(/*lsn=*/ 7, /*xact_id*/ 5).await;
+
+    // Block wait until iceberg snapshot created.
+    env.sync_snapshot_completion().await.unwrap();
+
+    // Load from iceberg table manager to check snapshot status.
+    let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
+    let snapshot = iceberg_table_manager
+        .load_snapshot_from_table()
+        .await
+        .unwrap();
+    assert_eq!(snapshot.disk_files.len(), 2);
+    for (cur_data_file, cur_deletion_vector) in snapshot.disk_files.into_iter() {
+        // Check the first data file.
+        if cur_data_file.file_path() == old_data_file.file_path() {
+            let actual_arrow_batch = load_arrow_batch(cur_data_file.file_path()).await;
+            let expected_arrow_batch = arrow_batch_1.clone();
+            assert_eq!(actual_arrow_batch, expected_arrow_batch);
+            // Check the first deletion vector.
+            assert_eq!(
+                cur_deletion_vector
+                    .batch_deletion_vector
+                    .collect_deleted_rows(),
+                vec![0]
+            );
+            check_deletion_vector_consistency(&cur_deletion_vector).await;
+            continue;
+        }
+
+        // Check the second data file.
+        let actual_arrow_batch = load_arrow_batch(cur_data_file.file_path()).await;
+        let expected_arrow_batch = arrow_batch_2.clone();
+        assert_eq!(actual_arrow_batch, expected_arrow_batch);
+        // Check the second deletion vector.
+        // Check the first deletion vector.
+        assert_eq!(
+            cur_deletion_vector
+                .batch_deletion_vector
+                .collect_deleted_rows(),
+            vec![0]
         );
         check_deletion_vector_consistency(&cur_deletion_vector).await;
     }

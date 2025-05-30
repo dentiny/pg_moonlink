@@ -106,7 +106,6 @@ impl MooncakeTable {
             pos: None,
             row_identity: self.metadata.identity.extract_identity_columns(row),
         };
-
         let stream_state = Self::get_or_create_stream_state(
             &mut self.transaction_stream_states,
             &self.metadata,
@@ -153,6 +152,7 @@ impl MooncakeTable {
                 }
             }
         }
+
         // Delete from main table
         record.pos = self
             .mem_slice
