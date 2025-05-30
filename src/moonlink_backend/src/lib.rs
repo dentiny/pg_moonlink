@@ -87,7 +87,7 @@ impl<T: Eq + Hash + Clone> MoonlinkBackend<T> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-    use tokio_postgres::{connect, NoTls, Client};
+    use tokio_postgres::{connect, Client, NoTls};
 
     #[test]
     fn test_recreate_directory() {
