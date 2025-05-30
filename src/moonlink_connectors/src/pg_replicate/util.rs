@@ -685,7 +685,7 @@ mod tests {
 
     #[test]
     fn test_postgres_table_row_to_moonlink_row() {
-        let postgres_table_row = PostgresTableRow(TableRow {
+        let postgres_table_row: PostgresTableRow = PostgresTableRow(TableRow {
             values: vec![
                 Cell::I32(1),
                 Cell::I64(2),
@@ -752,10 +752,14 @@ mod tests {
         );
         assert_eq!(moonlink_row.values[10], RowValue::Null);
         println!("{:?}", moonlink_row.values[11]);
-        let RowValue::FixedLenByteArray(bytes) = moonlink_row.values[11] else {
+        if let RowValue::FixedLenByteArray(bytes) = moonlink_row.values[11] {
+            assert_eq!(
+                uuid::Uuid::from_bytes(bytes).to_string(),
+                "123e4567-e89b-12d3-a456-426614174000"
+            );
+        } else {
             panic!("Expected fixed length byte array");
         };
-        println!("{:?}", uuid::Uuid::from_bytes(bytes));
     }
 
     #[test]
