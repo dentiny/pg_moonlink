@@ -751,7 +751,6 @@ mod tests {
             )
         );
         assert_eq!(moonlink_row.values[10], RowValue::Null);
-        println!("{:?}", moonlink_row.values[11]);
         if let RowValue::FixedLenByteArray(bytes) = moonlink_row.values[11] {
             assert_eq!(
                 uuid::Uuid::from_bytes(bytes).to_string(),
