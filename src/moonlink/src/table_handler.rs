@@ -35,6 +35,8 @@ pub enum TableEvent {
     _Shutdown,
     /// Force a mooncake and iceberg snapshot.
     ForceSnapshot { lsn: u64 },
+    /// Start LSN.
+    Begin { lsn: u64 },
     /// Drop table.
     DropIcebergTable,
 }
@@ -108,6 +110,7 @@ impl TableHandler {
                 // Process events from the queue
                 Some(event) = event_receiver.recv() => {
                     table_consistent_view_lsn = match event {
+                        TableEvent::Begin { lsn } => Some(lsn),
                         TableEvent::Commit { lsn } => Some(lsn),
                         TableEvent::StreamCommit { lsn, .. } => Some(lsn),
                         // `ForceSnapshot` event doesn't affect whether mooncake is at a committed state.
@@ -116,6 +119,7 @@ impl TableHandler {
                     };
 
                     match event {
+                        TableEvent::Begin { .. } => {}
                         TableEvent::Append { row, xact_id } => {
                             let result = match xact_id {
                                 Some(xact_id) => {
@@ -190,6 +194,9 @@ impl TableHandler {
                             break;
                         }
                         TableEvent::ForceSnapshot { lsn } => {
+
+                            println!("when requested to force snapshot, consistent view snapshot lsn = {:?}", table_consistent_view_lsn);
+
                             // TODO(hjiang): Currently we only support one ongoing force snapshot operation.
                             assert!(force_snapshot_lsn.is_none());
 

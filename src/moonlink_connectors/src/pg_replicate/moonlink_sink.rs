@@ -60,6 +60,10 @@ impl Sink {
         match event {
             CdcEvent::Begin(begin_body) => {
                 self.transaction_state.final_lsn = begin_body.final_lsn();
+                let event_sender = self.event_senders.get(table_id).cloned();
+                if let Some(event_sender) = event_sender {
+                    event_sender.send(TableEvent::Begin { lsn: begin_body.final_lsn() }).await.unwrap();
+                }
             }
             CdcEvent::StreamStart(_stream_start_body) => {}
             CdcEvent::Commit(commit_body) => {
