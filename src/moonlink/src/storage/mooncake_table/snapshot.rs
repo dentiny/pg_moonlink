@@ -1,19 +1,23 @@
 use super::data_batches::{create_batch_from_rows, InMemoryBatch};
 use super::delete_vector::BatchDeletionVector;
-use super::{Snapshot, SnapshotTask, TableConfig, TableMetadata};
-use crate::error::Result;
-use crate::storage::iceberg::iceberg_table_manager::{
-    IcebergOperation, IcebergTableConfig, IcebergTableManager,
+use super::{
+    DiskFileDeletionVector, IcebergSnapshotPayload, Snapshot, SnapshotTask, TableConfig,
+    TableMetadata,
 };
+use crate::error::Result;
+use crate::storage::iceberg::iceberg_table_manager::TableManager;
+use crate::storage::iceberg::puffin_utils::PuffinBlobRef;
 use crate::storage::index::Index;
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 use crate::storage::mooncake_table::MoonlinkRow;
-use crate::storage::storage_utils::RawDeletionRecord;
-use crate::storage::storage_utils::{ProcessedDeletionRecord, RecordLocation};
-use parquet::arrow::ArrowWriter;
+use crate::storage::storage_utils::FileId;
+use crate::storage::storage_utils::{
+    MooncakeDataFile, MooncakeDataFileRef, ProcessedDeletionRecord, RawDeletionRecord,
+    RecordLocation,
+};
+use parquet::arrow::AsyncArrowWriter;
 use std::collections::{BTreeMap, HashMap};
 use std::mem::take;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 pub(crate) struct SnapshotTableState {
@@ -21,9 +25,9 @@ pub(crate) struct SnapshotTableState {
     mooncake_table_config: TableConfig,
 
     /// Current snapshot
-    current_snapshot: Snapshot,
+    pub(super) current_snapshot: Snapshot,
 
-    /// In memory RecordBatches, maps from batch to in-memory batch.
+    /// In memory RecordBatches, maps from batch id to in-memory batch.
     batches: BTreeMap<u64, InMemoryBatch>,
 
     /// Latest rows
@@ -32,42 +36,68 @@ pub(crate) struct SnapshotTableState {
     // UNDONE(BATCH_INSERT):
     // Track uncommitted disk files/ batches from big batch insert
 
-    // Track a log of position deletions on disk_files,
-    // since last iceberg snapshot
-    committed_deletion_log: Vec<ProcessedDeletionRecord>,
-    uncommitted_deletion_log: Vec<Option<ProcessedDeletionRecord>>,
+    // There're three types of deletion records:
+    // 1. Uncommitted deletion logs
+    // 2. Committed and persisted deletion logs, which are reflected at `snapshot::disk_files` along with the corresponding data files
+    // 3. Committed but not yet persisted deletion logs
+    //
+    // Type-3, committed but not yet persisted deletion logs.
+    pub(super) committed_deletion_log: Vec<ProcessedDeletionRecord>,
+    // Type-1: uncommitted deletion logs.
+    pub(super) uncommitted_deletion_log: Vec<Option<ProcessedDeletionRecord>>,
 
     /// Last commit point
     last_commit: RecordLocation,
 
-    /// Iceberg table manager, used to sync snapshot to the corresponding iceberg table.
+    /// ---- Items not persisted to iceberg snapshot ----
     ///
-    /// TODO(hjiang): Figure out a way to store dynamic trait for mock-based unit test.
-    iceberg_table_manager: IcebergTableManager,
+    /// Iceberg snapshot is created in an async style, which means it doesn't correspond 1-1 to mooncake snapshot, so we need to ensure idempotency for iceberg snapshot payload.
+    /// The following fields record unpersisted content, which will be placed in iceberg payload everytime.
+    unpersisted_iceberg_records: UnpersistedIcebergSnapshotRecords,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PuffinDeletionBlobAtRead {
+    /// Index of local data files.
+    pub data_file_index: u32,
+    /// Index of puffin filepaths.
+    pub puffin_file_index: u32,
+    pub start_offset: u32,
+    pub blob_size: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UnpersistedIcebergSnapshotRecords {
+    /// Unpersisted data files, new data files are appended to the end.
+    unpersisted_data_files: Vec<MooncakeDataFileRef>,
 }
 
 pub struct ReadOutput {
-    pub file_paths: Vec<String>,
-    pub deletions: Vec<(u32, u32)>,
+    /// Contains two parts:
+    /// 1. Committed and persisted data files.
+    /// 2. Associated files, which include committed but un-persisted records.
+    pub data_file_paths: Vec<String>,
+    /// Puffin file paths.
+    pub puffin_file_paths: Vec<String>,
+    /// Deletion vectors persisted in puffin files.
+    pub deletion_vectors: Vec<PuffinDeletionBlobAtRead>,
+    /// Committed but un-persisted positional deletion records.
+    pub position_deletes: Vec<(u32 /*file_index*/, u32 /*row_index*/)>,
+    /// Contains committed but non-persisted record batches, which are persisted as temporary data files on local filesystem.
     pub associated_files: Vec<String>,
 }
 
 impl SnapshotTableState {
     pub(super) async fn new(
         metadata: Arc<TableMetadata>,
-        iceberg_table_config: IcebergTableConfig,
-    ) -> Self {
+        iceberg_table_manager: &mut dyn TableManager,
+    ) -> Result<Self> {
         let mut batches = BTreeMap::new();
         batches.insert(0, InMemoryBatch::new(metadata.config.batch_size));
 
-        let mut iceberg_table_manager =
-            IcebergTableManager::new(metadata.clone(), iceberg_table_config);
-        let snapshot = iceberg_table_manager
-            .load_snapshot_from_table()
-            .await
-            .unwrap();
+        let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
 
-        Self {
+        Ok(Self {
             mooncake_table_config: metadata.config.clone(),
             current_snapshot: snapshot,
             batches,
@@ -75,23 +105,64 @@ impl SnapshotTableState {
             last_commit: RecordLocation::MemoryBatch(0, 0),
             committed_deletion_log: Vec::new(),
             uncommitted_deletion_log: Vec::new(),
-            iceberg_table_manager,
-        }
+            unpersisted_iceberg_records: UnpersistedIcebergSnapshotRecords {
+                unpersisted_data_files: Vec::new(),
+            },
+        })
     }
 
-    /// Update data file flush LSN.
-    pub(crate) fn update_flush_lsn(&mut self, lsn: u64) {
-        self.current_snapshot.data_file_flush_lsn = Some(lsn)
+    /// Aggregate committed deletion logs, which could be persisted into iceberg snapshot.
+    /// Return a mapping from local data filepath to its batch deletion vector.
+    fn aggregate_committed_deletion_logs(
+        &self,
+        flush_lsn: u64,
+    ) -> Vec<(MooncakeDataFileRef, BatchDeletionVector)> {
+        let mut aggregated_deletion_logs = HashMap::new();
+        for cur_deletion_log in self.committed_deletion_log.iter() {
+            assert!(
+                cur_deletion_log.lsn <= self.current_snapshot.snapshot_version,
+                "Committed deletion log {:?} is later than current snapshot LSN {}",
+                cur_deletion_log,
+                self.current_snapshot.snapshot_version
+            );
+            if cur_deletion_log.lsn > flush_lsn {
+                continue;
+            }
+            if let RecordLocation::DiskFile(file_id, row_idx) = &cur_deletion_log.pos {
+                let deletion_vector =
+                    aggregated_deletion_logs.entry(*file_id).or_insert_with(|| {
+                        BatchDeletionVector::new(self.mooncake_table_config.batch_size())
+                    });
+                assert!(deletion_vector.delete_row(*row_idx));
+            }
+        }
+        let mut ret = Vec::with_capacity(aggregated_deletion_logs.len());
+        for (file_id, deletion_vector) in aggregated_deletion_logs.into_iter() {
+            ret.push((
+                self.current_snapshot
+                    .disk_files
+                    .get_key_value(&file_id)
+                    .unwrap()
+                    .0
+                    .clone(),
+                deletion_vector,
+            ));
+        }
+        ret
     }
 
-    /// Aggregate committed deletion logs to flush point.
-    fn aggregate_ondisk_committed_deletion_logs(&self) -> HashMap<PathBuf, BatchDeletionVector> {
-        let mut aggregated_deletion_logs = std::collections::HashMap::new();
-        if self.current_snapshot.data_file_flush_lsn.is_none() {
-            return aggregated_deletion_logs;
+    /// Prune committed deletion logs for the given persisted records.
+    fn prune_committed_deletion_logs(&mut self, task: &SnapshotTask) {
+        // No iceberg snapshot persisted between two mooncake snapshot.
+        if task.iceberg_flush_lsn.is_none() {
+            return;
         }
 
-        let flush_point_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
+        // Keep two types of committed logs: (1) in-memory committed deletion logs; (2) commit point after flush LSN.
+        // All on-disk committed deletion logs, which are <= iceberg snapshot flush LSN could be pruned.
+        let mut new_committed_deletion_log = vec![];
+        let flush_point_lsn = task.iceberg_flush_lsn.unwrap();
+        // TODO(hjiang): deletion record is not cheap to copy, we should be able to consume the ownership for `committed_deletion_log`.
         for cur_deletion_log in self.committed_deletion_log.iter() {
             assert!(
                 cur_deletion_log.lsn <= self.current_snapshot.snapshot_version,
@@ -100,23 +171,87 @@ impl SnapshotTableState {
                 self.current_snapshot.snapshot_version
             );
             if cur_deletion_log.lsn > flush_point_lsn {
+                new_committed_deletion_log.push(cur_deletion_log.clone());
                 continue;
             }
-            if let RecordLocation::DiskFile(file_id, row_idx) = &cur_deletion_log.pos {
-                let filepath = (*file_id.0).clone();
-                let deletion_vector = aggregated_deletion_logs
-                    .entry(filepath)
-                    .or_insert_with(|| BatchDeletionVector::new(1000));
-                assert!(deletion_vector.delete_row(*row_idx));
+            if let RecordLocation::MemoryBatch(_, _) = &cur_deletion_log.pos {
+                new_committed_deletion_log.push(cur_deletion_log.clone());
             }
         }
-        aggregated_deletion_logs
+
+        self.committed_deletion_log = new_committed_deletion_log;
     }
 
-    pub(super) async fn update_snapshot(&mut self, mut task: SnapshotTask) -> u64 {
+    /// Update current mooncake snapshot with persisted deletion vector.
+    fn update_current_snapshot_with_iceberg_snapshot(
+        &mut self,
+        puffin_blob_ref: HashMap<MooncakeDataFileRef, PuffinBlobRef>,
+    ) {
+        for (local_disk_file, puffin_blob_ref) in puffin_blob_ref.into_iter() {
+            let entry = self
+                .current_snapshot
+                .disk_files
+                .get_mut(&local_disk_file)
+                .unwrap();
+            entry.puffin_deletion_blob = Some(puffin_blob_ref);
+        }
+    }
+
+    /// Update unpersisted data files from successful iceberg snapshot operation.
+    fn prune_persisted_data_files(&mut self, persisted_new_data_files: Vec<MooncakeDataFileRef>) {
+        assert!(self.unpersisted_iceberg_records.unpersisted_data_files.len() >= persisted_new_data_files.len(),
+            "There're in total {} unpersisted data files, but successful iceberg snapshot shows {} data file persisted.",
+            self.unpersisted_iceberg_records.unpersisted_data_files.len(),
+            persisted_new_data_files.len());
+
+        self.unpersisted_iceberg_records
+            .unpersisted_data_files
+            .drain(0..persisted_new_data_files.len());
+    }
+
+    /// Util function to decide whether to create iceberg snapshot by new data files.
+    fn create_iceberg_snapshot_by_data_files(
+        &self,
+        new_data_files: &[Arc<MooncakeDataFile>],
+        force_create: bool,
+    ) -> bool {
+        let data_file_snapshot_threshold = if !force_create {
+            self.mooncake_table_config
+                .iceberg_snapshot_new_data_file_count()
+        } else {
+            1
+        };
+        new_data_files.len() >= data_file_snapshot_threshold
+    }
+    /// Util function to decide whether to create iceberg snapshot by deletion vectors.
+    fn create_iceberg_snapshot_by_committed_logs(&self, force_create: bool) -> bool {
+        let deletion_record_snapshot_threshold = if !force_create {
+            self.mooncake_table_config
+                .iceberg_snapshot_new_committed_deletion_log()
+        } else {
+            1
+        };
+        self.committed_deletion_log.len() >= deletion_record_snapshot_threshold
+    }
+
+    pub(super) async fn update_snapshot(
+        &mut self,
+        mut task: SnapshotTask,
+        force_create: bool,
+    ) -> (u64, Option<IcebergSnapshotPayload>) {
+        // Reflect iceberg snapshot to mooncake snapshot.
+        self.prune_committed_deletion_logs(&task);
+        self.prune_persisted_data_files(std::mem::take(&mut task.iceberg_persisted_data_files));
+        self.update_current_snapshot_with_iceberg_snapshot(std::mem::take(
+            &mut task.iceberg_persisted_puffin_blob,
+        ));
+
+        // Sync buffer snapshot states into current mooncake snapshot.
+        //
         // To reduce iceberg write frequency, only create new iceberg snapshot when there're new data files.
         let new_data_files = task.get_new_data_files();
 
+        self.apply_transaction_stream(&mut task);
         self.merge_mem_indices(&mut task);
         self.finalize_batches(&mut task);
         self.integrate_disk_slices(&mut task);
@@ -124,43 +259,56 @@ impl SnapshotTableState {
         self.rows = take(&mut task.new_rows);
         self.process_deletion_log(&mut task).await;
 
-        if task.new_lsn != 0 {
-            self.current_snapshot.snapshot_version = task.new_lsn;
+        if let Some(flush_lsn) = task.new_flush_lsn {
+            self.current_snapshot.data_file_flush_lsn = Some(flush_lsn);
+        }
+        if task.new_commit_lsn != 0 {
+            self.current_snapshot.snapshot_version = task.new_commit_lsn;
         }
         if let Some(cp) = task.new_commit_point {
             self.last_commit = cp;
         }
 
-        // Sync the latest change to iceberg, only triggered when there're new data files generated.
+        // Batch new data files, whether we decide to create an iceberg snapshot.
+        self.unpersisted_iceberg_records
+            .unpersisted_data_files
+            .extend(new_data_files.clone());
+
+        // Till this point, committed changes have been reflected to current snapshot; sync the latest change to iceberg.
         // To reduce iceberg persistence overhead, we only snapshot when (1) there're persisted data files, or (2) accumulated unflushed deletion vector exceeds threshold.
-        // To achieve consistency between data files and deletion vectors, we only consider those with persisted data files.
         //
         // TODO(hjiang): Error handling for snapshot sync-up.
-        // TODO(hjiang): Need to prune committed deletion logs, will finish in the next PR.
-        // TODO(hjiang): Should also trigger when there're large number of new deletions.
-        //
-        // TODO(hjiang): Add unit test where there're no new disk files.
+        let mut iceberg_snapshot_payload: Option<IcebergSnapshotPayload> = None;
+        let flush_by_data_files = self.create_iceberg_snapshot_by_data_files(
+            self.unpersisted_iceberg_records
+                .unpersisted_data_files
+                .as_slice(),
+            force_create,
+        );
+        let flush_by_deletion_logs = self.create_iceberg_snapshot_by_committed_logs(force_create);
+
         if self.current_snapshot.data_file_flush_lsn.is_some()
-            && new_data_files.len()
-                >= self
-                    .mooncake_table_config
-                    .iceberg_snapshot_new_data_file_count()
+            && (flush_by_data_files || flush_by_deletion_logs)
         {
             let flush_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
             let aggregated_committed_deletion_logs =
-                self.aggregate_ondisk_committed_deletion_logs();
-            self.iceberg_table_manager
-                .sync_snapshot(
-                    flush_lsn,
-                    new_data_files,
-                    aggregated_committed_deletion_logs,
-                    self.current_snapshot.get_file_indices(),
-                )
-                .await
-                .unwrap();
+                self.aggregate_committed_deletion_logs(flush_lsn);
+
+            iceberg_snapshot_payload = Some(IcebergSnapshotPayload {
+                flush_lsn,
+                data_files: self
+                    .unpersisted_iceberg_records
+                    .unpersisted_data_files
+                    .to_vec(),
+                new_deletion_vector: aggregated_committed_deletion_logs,
+                file_indices: self.current_snapshot.indices.file_indices.clone(),
+            });
         }
 
-        self.current_snapshot.snapshot_version
+        (
+            self.current_snapshot.snapshot_version,
+            iceberg_snapshot_payload,
+        )
     }
 
     fn merge_mem_indices(&mut self, task: &mut SnapshotTask) {
@@ -200,15 +348,23 @@ impl SnapshotTableState {
     fn integrate_disk_slices(&mut self, task: &mut SnapshotTask) {
         for mut slice in take(&mut task.new_disk_slices) {
             // register new files
-            self.current_snapshot.disk_files.extend(
-                slice
-                    .output_files()
-                    .iter()
-                    .map(|(f, rows)| (f.clone(), BatchDeletionVector::new(*rows))),
-            );
-
-            // remap deletions written *after* this slice’s LSN
+            self.current_snapshot
+                .disk_files
+                .extend(slice.output_files().iter().map(|(f, rows)| {
+                    (
+                        f.clone(),
+                        DiskFileDeletionVector {
+                            batch_deletion_vector: BatchDeletionVector::new(*rows),
+                            puffin_deletion_blob: None,
+                        },
+                    )
+                }));
             let write_lsn = slice.lsn();
+            let lsn = write_lsn.expect("commited datafile should have a valid LSN");
+            for (f, _) in slice.output_files().iter() {
+                task.disk_file_lsn_map.insert(f.file_id(), lsn);
+            }
+            // remap deletions written *after* this slice’s LSN
             let cut = self.committed_deletion_log.partition_point(|d| {
                 d.lsn
                     <= write_lsn.expect(
@@ -244,6 +400,7 @@ impl SnapshotTableState {
     async fn process_delete_record(
         &mut self,
         deletion: RawDeletionRecord,
+        file_id_to_lsn: &HashMap<FileId, u64>,
     ) -> ProcessedDeletionRecord {
         // Fast-path: The row we are deleting was in the mem slice so we already have the position
         if let Some(pos) = deletion.pos {
@@ -255,12 +412,15 @@ impl SnapshotTableState {
             .current_snapshot
             .indices
             .find_record(&deletion)
+            .await
             .into_iter()
-            .filter(|loc| !self.is_deleted(loc))
+            .filter(|loc| {
+                !self.is_deleted(loc) && self.is_visible(loc, file_id_to_lsn, deletion.lsn)
+            })
             .collect();
 
         match candidates.len() {
-            0 => panic!("can't find deletion record"),
+            0 => panic!("can't find deletion record {:?}", deletion),
             1 => Self::build_processed_deletion(deletion, candidates.pop().unwrap()),
             _ => {
                 // Multiple candidates → disambiguate via full row identity comparison.
@@ -288,7 +448,6 @@ impl SnapshotTableState {
         pos: RecordLocation,
     ) -> ProcessedDeletionRecord {
         ProcessedDeletionRecord {
-            _lookup_key: deletion.lookup_key,
             pos,
             lsn: deletion.lsn,
         }
@@ -304,12 +463,27 @@ impl SnapshotTableState {
                 .deletions
                 .is_deleted(*row_id),
 
-            RecordLocation::DiskFile(file_name, row_id) => self
+            RecordLocation::DiskFile(file_id, row_id) => self
                 .current_snapshot
                 .disk_files
-                .get_mut(file_name.0.as_ref())
+                .get_mut(file_id)
                 .expect("missing disk file")
+                .batch_deletion_vector
                 .is_deleted(*row_id),
+        }
+    }
+
+    fn is_visible(
+        &self,
+        loc: &RecordLocation,
+        file_id_to_lsn: &HashMap<FileId, u64>,
+        lsn: u64,
+    ) -> bool {
+        match loc {
+            RecordLocation::MemoryBatch(_, _) => true,
+            RecordLocation::DiskFile(file_id, _) => {
+                file_id_to_lsn.get(file_id).is_none() || file_id_to_lsn.get(file_id).unwrap() < &lsn
+            }
         }
     }
 
@@ -324,11 +498,15 @@ impl SnapshotTableState {
                     &self.current_snapshot.metadata.identity,
                 )
             }
-            RecordLocation::DiskFile(file_name, row_id) => {
-                let name = file_name.0.to_string_lossy();
+            RecordLocation::DiskFile(file_id, row_id) => {
+                let (file, _) = self
+                    .current_snapshot
+                    .disk_files
+                    .get_key_value(file_id)
+                    .expect("missing disk file");
                 identity
                     .equals_parquet_at_offset(
-                        &name,
+                        file.file_path(),
                         *row_id,
                         &self.current_snapshot.metadata.identity,
                     )
@@ -356,8 +534,9 @@ impl SnapshotTableState {
                 let res = self
                     .current_snapshot
                     .disk_files
-                    .get_mut(file_name.0.as_ref())
+                    .get_mut(file_name)
                     .unwrap()
+                    .batch_deletion_vector
                     .delete_row(*row_id);
                 assert!(res);
             }
@@ -376,8 +555,7 @@ impl SnapshotTableState {
 
         for mut entry in take(&mut self.uncommitted_deletion_log) {
             let deletion = entry.take().unwrap();
-
-            if deletion.lsn <= task.new_lsn {
+            if deletion.lsn <= task.new_commit_lsn {
                 self.commit_deletion(deletion);
             } else {
                 still_uncommitted.push(Some(deletion));
@@ -391,9 +569,11 @@ impl SnapshotTableState {
     /// them or defer until their LSN becomes visible.
     async fn apply_new_deletions(&mut self, task: &mut SnapshotTask) {
         for raw in take(&mut task.new_deletions) {
-            let processed = self.process_delete_record(raw).await;
-            if processed.lsn <= task.new_lsn {
-                Self::commit_deletion(self, processed);
+            let processed = self
+                .process_delete_record(raw, &task.disk_file_lsn_map)
+                .await;
+            if processed.lsn <= task.new_commit_lsn {
+                self.commit_deletion(processed);
             } else {
                 self.uncommitted_deletion_log.push(Some(processed));
             }
@@ -403,44 +583,75 @@ impl SnapshotTableState {
     /// Get committed deletion record for current snapshot.
     fn get_deletion_records(
         &self,
-    ) -> Vec<(
-        u32, /*index of disk file in snapshot*/
-        u32, /*row id*/
-    )> {
+    ) -> (
+        Vec<String>,                   /*puffin filepaths*/
+        Vec<PuffinDeletionBlobAtRead>, /*deletion vector puffin*/
+        Vec<(
+            u32, /*index of disk file in snapshot*/
+            u32, /*row id*/
+        )>,
+    ) {
+        // Get puffin blobs for deletion vector.
+        let mut puffin_filepaths = vec![];
+        let mut deletion_vector_blob_at_read = vec![];
+        for (idx, (_, disk_deletion_vector)) in self.current_snapshot.disk_files.iter().enumerate()
+        {
+            if disk_deletion_vector.puffin_deletion_blob.is_none() {
+                continue;
+            }
+            let puffin_deletion_blob = disk_deletion_vector.puffin_deletion_blob.as_ref().unwrap();
+            puffin_filepaths.push(puffin_deletion_blob.puffin_filepath.clone());
+            let puffin_file_index = puffin_filepaths.len() - 1;
+            deletion_vector_blob_at_read.push(PuffinDeletionBlobAtRead {
+                data_file_index: idx as u32,
+                puffin_file_index: puffin_file_index as u32,
+                start_offset: puffin_deletion_blob.start_offset,
+                blob_size: puffin_deletion_blob.blob_size,
+            });
+        }
+
+        // Get committed but un-persisted deletion vector.
         let mut ret = Vec::new();
         for deletion in self.committed_deletion_log.iter() {
-            if let RecordLocation::DiskFile(file_name, row_id) = &deletion.pos {
+            if let RecordLocation::DiskFile(file_id, row_id) = &deletion.pos {
                 for (id, (file, _)) in self.current_snapshot.disk_files.iter().enumerate() {
-                    if *file == *file_name.0 {
+                    if file.file_id() == *file_id {
                         ret.push((id as u32, *row_id as u32));
                         break;
                     }
                 }
             }
         }
-        ret
+        (puffin_filepaths, deletion_vector_blob_at_read, ret)
     }
 
-    pub(crate) fn request_read(&self) -> Result<ReadOutput> {
-        let mut file_paths: Vec<String> = Vec::new();
+    pub(crate) async fn request_read(&self) -> Result<ReadOutput> {
+        let mut data_file_paths = Vec::with_capacity(self.current_snapshot.disk_files.len());
         let mut associated_files = Vec::new();
-        let deletions = self.get_deletion_records();
-        file_paths.extend(
+        let (puffin_file_paths, deletion_vectors_at_read, position_deletes) =
+            self.get_deletion_records();
+        data_file_paths.extend(
             self.current_snapshot
                 .disk_files
                 .keys()
-                .map(|path| path.to_string_lossy().to_string()),
+                .map(|path| path.file_path().clone()),
         );
+
+        // For committed but not persisted records, we create a temporary file for them, which gets deleted after query completion.
         let file_path = self.current_snapshot.get_name_for_inmemory_file();
-        if file_path.exists() {
-            file_paths.push(file_path.to_string_lossy().to_string());
+        let filepath_exists = tokio::fs::try_exists(&file_path).await?;
+        if filepath_exists {
+            data_file_paths.push(file_path.to_string_lossy().to_string());
             associated_files.push(file_path.to_string_lossy().to_string());
             return Ok(ReadOutput {
-                file_paths,
-                deletions,
+                data_file_paths,
+                puffin_file_paths,
+                deletion_vectors: deletion_vectors_at_read,
+                position_deletes,
                 associated_files,
             });
         }
+
         assert!(matches!(
             self.last_commit,
             RecordLocation::MemoryBatch(_, _)
@@ -476,20 +687,22 @@ impl SnapshotTableState {
 
             if !filtered_batches.is_empty() {
                 // Build a parquet file from current record batches
-                //
+                let temp_file = tokio::fs::File::create(&file_path).await?;
                 let mut parquet_writer =
-                    ArrowWriter::try_new(std::fs::File::create(&file_path).unwrap(), schema, None)?;
+                    AsyncArrowWriter::try_new(temp_file, schema, /*props=*/ None)?;
                 for batch in filtered_batches.iter() {
-                    parquet_writer.write(batch)?;
+                    parquet_writer.write(batch).await?;
                 }
-                parquet_writer.close()?;
-                file_paths.push(file_path.to_string_lossy().to_string());
+                parquet_writer.close().await?;
+                data_file_paths.push(file_path.to_string_lossy().to_string());
                 associated_files.push(file_path.to_string_lossy().to_string());
             }
         }
         Ok(ReadOutput {
-            file_paths,
-            deletions,
+            data_file_paths,
+            puffin_file_paths,
+            deletion_vectors: deletion_vectors_at_read,
+            position_deletes,
             associated_files,
         })
     }

@@ -44,7 +44,7 @@ impl MemSlice {
     }
 
     /// Delete the given record from mem slice, and return its location if exists.
-    pub(super) fn delete(
+    pub(super) async fn delete(
         &mut self,
         record: &RawDeletionRecord,
         identity: &IdentityProp,
@@ -58,7 +58,7 @@ impl MemSlice {
                 None
             }
         } else {
-            let locations = self.mem_index.find_record(record);
+            let locations = self.mem_index.find_record(record).await;
             for location in locations {
                 let ret = self
                     .column_store
@@ -72,12 +72,12 @@ impl MemSlice {
     }
 
     /// Find the first non-deleted position for a given lookup key
-    pub fn find_non_deleted_position(
+    pub async fn find_non_deleted_position(
         &self,
         record: &RawDeletionRecord,
         identity: &IdentityProp,
     ) -> Option<(u64, usize)> {
-        let locations = self.mem_index.find_record(record);
+        let locations = self.mem_index.find_record(record).await;
 
         for location in locations {
             let ret = self
@@ -90,6 +90,12 @@ impl MemSlice {
         None
     }
 
+    pub fn try_delete_at_pos(&mut self, pos: (u64, usize)) -> bool {
+        self.column_store.try_delete_at_pos(pos)
+    }
+
+    /// Append the given row into column store buffer and mem index.
+    /// Return the finalized record batch if the current one's full.
     pub(super) fn append(
         &mut self,
         lookup_key: u64,
@@ -135,8 +141,8 @@ mod tests {
     use arrow_schema::Schema;
     use std::collections::HashMap;
 
-    #[test]
-    fn test_mem_slice() {
+    #[tokio::test]
+    async fn test_mem_slice() {
         let identity = IdentityProp::SinglePrimitiveKey(0);
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
@@ -191,39 +197,45 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            mem_table.delete(
-                &RawDeletionRecord {
-                    lookup_key: 2,
-                    lsn: 0,
-                    pos: None,
-                    row_identity: None,
-                },
-                &IdentityProp::SinglePrimitiveKey(0)
-            ),
+            mem_table
+                .delete(
+                    &RawDeletionRecord {
+                        lookup_key: 2,
+                        lsn: 0,
+                        pos: None,
+                        row_identity: None,
+                    },
+                    &IdentityProp::SinglePrimitiveKey(0)
+                )
+                .await,
             Some((0, 1))
         );
         assert_eq!(
-            mem_table.delete(
-                &RawDeletionRecord {
-                    lookup_key: 3,
-                    lsn: 0,
-                    pos: None,
-                    row_identity: None,
-                },
-                &IdentityProp::SinglePrimitiveKey(0)
-            ),
+            mem_table
+                .delete(
+                    &RawDeletionRecord {
+                        lookup_key: 3,
+                        lsn: 0,
+                        pos: None,
+                        row_identity: None,
+                    },
+                    &IdentityProp::SinglePrimitiveKey(0)
+                )
+                .await,
             Some((0, 2))
         );
         assert_eq!(
-            mem_table.delete(
-                &RawDeletionRecord {
-                    lookup_key: 1,
-                    lsn: 0,
-                    pos: None,
-                    row_identity: None,
-                },
-                &IdentityProp::SinglePrimitiveKey(0)
-            ),
+            mem_table
+                .delete(
+                    &RawDeletionRecord {
+                        lookup_key: 1,
+                        lsn: 0,
+                        pos: None,
+                        row_identity: None,
+                    },
+                    &IdentityProp::SinglePrimitiveKey(0)
+                )
+                .await,
             Some((0, 0))
         );
     }

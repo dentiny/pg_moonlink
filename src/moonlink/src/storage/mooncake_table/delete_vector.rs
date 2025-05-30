@@ -5,7 +5,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct BatchDeletionVector {
+pub struct BatchDeletionVector {
     /// Boolean array tracking deletions (false = deleted, true = active)
     deletion_vector: Option<Vec<u8>>,
 
@@ -22,20 +22,43 @@ impl BatchDeletionVector {
         }
     }
 
+    /// Initialize deletion vector.
+    fn initialize_vector_for_once(&mut self) {
+        if self.deletion_vector.is_some() {
+            return;
+        }
+        self.deletion_vector = Some(vec![0xFF; self.max_rows / 8 + 1]);
+        for i in self.max_rows..(self.max_rows / 8 + 1) * 8 {
+            bit_util::unset_bit(self.deletion_vector.as_mut().unwrap(), i);
+        }
+    }
+
     /// Mark a row as deleted
     pub(crate) fn delete_row(&mut self, row_idx: usize) -> bool {
         // Set the bit at row_idx to 1 (deleted)
-        if self.deletion_vector.is_none() {
-            self.deletion_vector = Some(vec![0xFF; self.max_rows / 8 + 1]);
-            for i in self.max_rows..(self.max_rows / 8 + 1) * 8 {
-                bit_util::unset_bit(self.deletion_vector.as_mut().unwrap(), i);
-            }
-        }
+        self.initialize_vector_for_once();
         let exist = bit_util::get_bit(self.deletion_vector.as_ref().unwrap(), row_idx);
         if exist {
             bit_util::unset_bit(self.deletion_vector.as_mut().unwrap(), row_idx);
         }
         exist
+    }
+
+    /// Merge with another batch deletion vector.
+    pub(crate) fn merge_with(&mut self, rhs: &BatchDeletionVector) {
+        assert_eq!(
+            self.max_rows, rhs.max_rows,
+            "Cannot merge deletion vectors with different max rows"
+        );
+
+        if rhs.deletion_vector.is_none() {
+            return;
+        }
+        self.initialize_vector_for_once();
+        let self_vec = self.deletion_vector.as_mut().unwrap();
+        for (i, val) in self_vec.iter_mut().enumerate() {
+            *val &= rhs.deletion_vector.as_ref().unwrap()[i];
+        }
     }
 
     /// Apply the deletion vector to filter a record batch
@@ -67,6 +90,7 @@ impl BatchDeletionVector {
             .collect()
     }
 
+    /// Return deleted row index in ascending order.
     pub(crate) fn collect_deleted_rows(&self) -> Vec<u64> {
         let Some(bitmap) = &self.deletion_vector else {
             return Vec::new();
@@ -181,5 +205,40 @@ mod tests {
         assert_eq!(active_rows, vec![0, 2, 4, 5, 6, 7, 9]);
         let deleted_rows: Vec<u64> = buffer.collect_deleted_rows();
         assert_eq!(deleted_rows, vec![1, 3, 8]);
+    }
+
+    #[test]
+    fn test_empty_deletion_vector_merge() {
+        // lhs deletion vector is empty.
+        {
+            let mut dv1 = BatchDeletionVector::new(10);
+            let mut dv2 = BatchDeletionVector::new(10);
+            dv2.delete_row(0);
+            dv1.merge_with(&dv2);
+            assert_eq!(dv1.collect_deleted_rows(), vec![0]);
+        }
+
+        // rhs deletion vector is empty.
+        {
+            let mut dv1 = BatchDeletionVector::new(10);
+            dv1.delete_row(0);
+            let dv2 = BatchDeletionVector::new(10);
+            dv1.merge_with(&dv2);
+            assert_eq!(dv1.collect_deleted_rows(), vec![0]);
+        }
+    }
+
+    #[test]
+    fn test_deletion_vector_merge() {
+        let mut dv1 = BatchDeletionVector::new(10);
+        dv1.delete_row(0);
+        dv1.delete_row(2);
+
+        let mut dv2 = BatchDeletionVector::new(10);
+        dv2.delete_row(6);
+        dv2.delete_row(8);
+
+        dv1.merge_with(&dv2);
+        assert_eq!(dv1.collect_deleted_rows(), vec![0, 2, 6, 8]);
     }
 }

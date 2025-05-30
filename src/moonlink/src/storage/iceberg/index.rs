@@ -1,10 +1,11 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::collections::HashMap;
 
 use crate::storage::iceberg::puffin_utils;
 use crate::storage::index::file_index_id::get_next_file_index_id;
 use crate::storage::index::persisted_bucket_hash_map::IndexBlock as MooncakeIndexBlock;
 /// This module defines the file index struct used for iceberg, which corresponds to in-memory mooncake table file index structs, and supports the serde between mooncake table format and iceberg format.
 use crate::storage::index::FileIndex as MooncakeFileIndex;
+use crate::storage::storage_utils::{create_data_file, MooncakeDataFileRef};
 
 use iceberg::io::FileIO;
 use iceberg::puffin::Blob;
@@ -49,15 +50,17 @@ impl FileIndex {
     /// # Arguments
     ///
     /// * local_index_file_to_remote: hash map from local index filepath to remote filepath, which is to be managed by iceberg.
+    /// * local_data_file_to_remote: hash map from local data filepath to remote filepath, which is to be managed by iceberg.
     pub(crate) fn new(
         mooncake_index: &MooncakeFileIndex,
         local_index_file_to_remote: &mut HashMap<String, String>,
+        local_data_file_to_remote: &mut HashMap<MooncakeDataFileRef, String>,
     ) -> Self {
         Self {
             data_files: mooncake_index
                 .files
                 .iter()
-                .map(|path| path.to_str().unwrap().to_string())
+                .map(|path| local_data_file_to_remote.remove(&path.file_id()).unwrap())
                 .collect(),
             index_block_files: mooncake_index
                 .index_blocks
@@ -83,13 +86,23 @@ impl FileIndex {
 
     /// Transfer the ownership and convert into [storage::index::FileIndex].
     /// The file index id is generated on-the-fly.
-    pub(crate) fn as_mooncake_file_index(&mut self) -> MooncakeFileIndex {
+    pub(crate) async fn as_mooncake_file_index(&mut self) -> MooncakeFileIndex {
+        let index_block_futures = self.index_block_files.iter().map(|cur_index_block| {
+            MooncakeIndexBlock::new(
+                cur_index_block.bucket_start_idx,
+                cur_index_block.bucket_end_idx,
+                cur_index_block.bucket_start_offset,
+                cur_index_block.filepath.clone(),
+            )
+        });
+        let index_blocks = futures::future::join_all(index_block_futures).await;
+
         MooncakeFileIndex {
             global_index_id: get_next_file_index_id(),
             files: self
                 .data_files
                 .iter()
-                .map(|path| Arc::new(PathBuf::from(path)))
+                .map(|path| create_data_file(0, path.to_string()))
                 .collect(),
             num_rows: self.num_rows,
             hash_bits: self.hash_bits,
@@ -98,26 +111,13 @@ impl FileIndex {
             seg_id_bits: self.seg_id_bits,
             row_id_bits: self.row_id_bits,
             bucket_bits: self.bucket_bits,
-            index_blocks: self
-                .index_block_files
-                .iter()
-                .map(|cur_index_block| {
-                    // TODO(hjiang): Need to figure out the remote path download and mmap.
-                    MooncakeIndexBlock::new(
-                        cur_index_block.bucket_start_idx,
-                        cur_index_block.bucket_end_idx,
-                        cur_index_block.bucket_start_offset,
-                        cur_index_block.filepath.clone(),
-                    )
-                })
-                .collect(),
+            index_blocks,
         }
     }
 }
 
 /// In-memory structure for one file index blob in the puffin file, which contains multiple `FileIndex` structs.
 #[derive(Deserialize, Serialize)]
-#[allow(dead_code)]
 pub(crate) struct FileIndexBlob {
     /// A blob contains multiple file indexes.
     pub(crate) file_indices: Vec<FileIndex>,
@@ -126,12 +126,19 @@ pub(crate) struct FileIndexBlob {
 impl FileIndexBlob {
     pub fn new(
         file_indices: Vec<&MooncakeFileIndex>,
-        mut local_index_file_to_remote: HashMap<String, String>,
+        mut local_index_file_to_remote: HashMap<String, String>, // TODO(hjiang): Check whether we could use mooncake file ref.
+        mut local_data_file_to_remote: HashMap<MooncakeDataFileRef, String>,
     ) -> Self {
         Self {
             file_indices: file_indices
                 .into_iter()
-                .map(|file_index| FileIndex::new(file_index, &mut local_index_file_to_remote))
+                .map(|file_index| {
+                    FileIndex::new(
+                        file_index,
+                        &mut local_index_file_to_remote,
+                        &mut local_data_file_to_remote,
+                    )
+                })
                 .collect(),
         }
     }
@@ -174,7 +181,8 @@ impl FileIndexBlob {
         file_io: FileIO,
         puffin_file: &DataFile,
     ) -> IcebergResult<Self> {
-        let blob = puffin_utils::load_blob_from_puffin_file(file_io, puffin_file).await?;
+        let blob =
+            puffin_utils::load_blob_from_puffin_file(file_io, puffin_file.file_path()).await?;
         FileIndexBlob::from_blob(blob)
     }
 
@@ -206,16 +214,21 @@ mod tests {
 
     use crate::storage::index::persisted_bucket_hash_map::IndexBlock as MooncakeIndexBlock;
     use crate::storage::index::FileIndex as MooncakeFileIndex;
+    use crate::storage::storage_utils::create_data_file;
 
-    #[test]
-    fn test_hash_index_v1_serde() {
+    #[tokio::test]
+    async fn test_hash_index_v1_serde() {
         // Fill in meaningless random bytes, mainly to verify the correctness of serde.
-        let temp_data_file = NamedTempFile::new().unwrap();
         let temp_local_index_file = NamedTempFile::new().unwrap();
         let temp_remote_index_file = NamedTempFile::new().unwrap();
 
+        // Notice: use the same filepath for index block and data file only for serde testing, no IO involved.
         let local_index_filepath = temp_local_index_file.path().to_str().unwrap().to_string();
         let remote_index_filepath = temp_remote_index_file.path().to_str().unwrap().to_string();
+
+        let local_data_filepath = local_index_filepath.clone();
+        let remote_data_filepath = remote_index_filepath.clone();
+        let local_data_file = create_data_file(/*file_id=*/ 0, local_data_filepath.clone());
 
         let original_mooncake_file_index = MooncakeFileIndex {
             global_index_id: 0,
@@ -226,13 +239,16 @@ mod tests {
             seg_id_bits: 6,
             row_id_bits: 3,
             bucket_bits: 5,
-            files: vec![Arc::new(PathBuf::from(temp_data_file.path()))],
-            index_blocks: vec![MooncakeIndexBlock::new(
-                /*bucket_start_idx=*/ 0,
-                /*bucket_end_idx=*/ 3,
-                /*bucket_start_offset=*/ 10,
-                /*filepath=*/ local_index_filepath.clone(),
-            )],
+            files: vec![local_data_file.clone()],
+            index_blocks: vec![
+                MooncakeIndexBlock::new(
+                    /*bucket_start_idx=*/ 0,
+                    /*bucket_end_idx=*/ 3,
+                    /*bucket_start_offset=*/ 10,
+                    /*filepath=*/ local_index_filepath.clone(),
+                )
+                .await,
+            ],
         };
 
         // Serialization.
@@ -240,9 +256,14 @@ mod tests {
             local_index_filepath.clone(),
             remote_index_filepath.clone(),
         )]);
+        let local_data_file_to_remote = HashMap::<MooncakeDataFileRef, String>::from([(
+            local_data_file,
+            remote_data_filepath.clone(),
+        )]);
         let file_index_blob = FileIndexBlob::new(
             vec![&original_mooncake_file_index],
             local_index_file_to_remote,
+            local_data_file_to_remote,
         );
         let blob = file_index_blob.as_blob().unwrap();
 
@@ -250,7 +271,7 @@ mod tests {
         let mut deserialized_file_index_blob = FileIndexBlob::from_blob(blob).unwrap();
         assert_eq!(deserialized_file_index_blob.file_indices.len(), 1);
         let mut file_index = std::mem::take(&mut deserialized_file_index_blob.file_indices[0]);
-        let mooncake_file_index = file_index.as_mooncake_file_index();
+        let mooncake_file_index = file_index.as_mooncake_file_index().await;
 
         // Check global index are equal before and after serde.
         assert_eq!(

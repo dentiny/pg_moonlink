@@ -1,33 +1,27 @@
 use crate::storage::iceberg::file_catalog::{CatalogConfig, FileCatalog};
 use crate::storage::iceberg::moonlink_catalog::MoonlinkCatalog;
+use crate::storage::iceberg::parquet_utils;
 #[cfg(feature = "storage-s3")]
 use crate::storage::iceberg::s3_test_utils;
 use crate::storage::iceberg::table_property;
 
-use futures::TryStreamExt;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use url::Url;
-use uuid::Uuid;
 
 use arrow_schema::Schema as ArrowSchema;
 use iceberg::arrow as IcebergArrow;
 use iceberg::io::FileIOBuilder;
 use iceberg::spec::DataFile;
+use iceberg::spec::TableMetadata as IcebergTableMetadata;
 use iceberg::spec::{DataContentType, DataFileFormat, ManifestEntry};
 use iceberg::table::Table as IcebergTable;
-use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
-    DefaultFileNameGenerator, DefaultLocationGenerator, LocationGenerator,
+    DefaultLocationGenerator, LocationGenerator,
 };
-use iceberg::writer::file_writer::ParquetWriterBuilder;
-use iceberg::writer::IcebergWriter;
-use iceberg::writer::IcebergWriterBuilder;
 use iceberg::{
     Error as IcebergError, NamespaceIdent, Result as IcebergResult, TableCreation, TableIdent,
 };
-use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
-use parquet::file::properties::WriterProperties;
 
 /// Return whether the given manifest entry represents data files.
 pub fn is_data_file_entry(entry: &ManifestEntry) -> bool {
@@ -102,7 +96,7 @@ pub fn create_catalog(warehouse_uri: &str) -> IcebergResult<Box<dyn MoonlinkCata
         return Ok(Box::new(FileCatalog::new(
             absolute_path.to_string(),
             CatalogConfig::FileSystem {},
-        )));
+        )?));
     }
 
     // TODO(hjiang): Fallback to object storage for all warehouse uris.
@@ -123,97 +117,120 @@ fn create_iceberg_table_properties() -> HashMap<String, String> {
     props
 }
 
-// Get or create an iceberg table in the given catalog from the given namespace and table name.
-pub(crate) async fn get_or_create_iceberg_table<C: MoonlinkCatalog + ?Sized>(
+/// Create an iceberg table in the given catalog from the given namespace and table name.
+/// Precondition: table doesn't exist in the given catalog.
+async fn create_iceberg_table<C: MoonlinkCatalog + ?Sized>(
+    catalog: &C,
+    warehouse_uri: &str,
+    table_name: &str,
+    namespace_ident: NamespaceIdent,
+    arrow_schema: &ArrowSchema,
+) -> IcebergResult<IcebergTable> {
+    let namespace_already_exists = catalog.namespace_exists(&namespace_ident).await?;
+    if !namespace_already_exists {
+        catalog
+            .create_namespace(&namespace_ident, /*properties=*/ HashMap::new())
+            .await?;
+    }
+
+    let iceberg_schema = IcebergArrow::arrow_schema_to_schema(arrow_schema)?;
+    let tbl_creation = TableCreation::builder()
+        .name(table_name.to_string())
+        .location(format!(
+            "{}/{}/{}",
+            warehouse_uri,
+            namespace_ident.to_url_string(),
+            table_name
+        ))
+        .schema(iceberg_schema)
+        .properties(create_iceberg_table_properties())
+        .build();
+    let table = catalog.create_table(&namespace_ident, tbl_creation).await?;
+    Ok(table)
+}
+
+/// Get or create an iceberg table in the given catalog from the given namespace and table name.
+///
+/// There're several options:
+/// - If the table doesn't exist, create a new one
+/// - If the table already exists, and [drop_if_exists] true (overwrite use case), delete the table and re-create
+/// - If already exists and not requested to drop (recovery use case), do nothing and return the table directly
+pub(crate) async fn get_iceberg_table<C: MoonlinkCatalog + ?Sized>(
     catalog: &C,
     warehouse_uri: &str,
     namespace: &Vec<String>,
     table_name: &str,
     arrow_schema: &ArrowSchema,
+    drop_if_exists: bool,
 ) -> IcebergResult<IcebergTable> {
     let namespace_ident = NamespaceIdent::from_strs(namespace).unwrap();
     let table_ident = TableIdent::new(namespace_ident.clone(), table_name.to_string());
-    match catalog.load_table(&table_ident).await {
-        Ok(table) => Ok(table),
-        // TODO(hjiang): Better error handling.
-        Err(_) => {
-            let namespace_already_exists = catalog.namespace_exists(&namespace_ident).await?;
-            if !namespace_already_exists {
-                catalog
-                    .create_namespace(&namespace_ident, /*properties=*/ HashMap::new())
-                    .await?;
+    let should_create = match catalog.load_table(&table_ident).await {
+        Ok(existing_table) => {
+            if drop_if_exists {
+                catalog.drop_table(&table_ident).await?;
+                true
+            } else {
+                return Ok(existing_table);
             }
-
-            let iceberg_schema = IcebergArrow::arrow_schema_to_schema(arrow_schema)?;
-            let tbl_creation = TableCreation::builder()
-                .name(table_name.to_string())
-                .location(format!(
-                    "{}/{}/{}",
-                    warehouse_uri,
-                    namespace_ident.to_url_string(),
-                    table_name
-                ))
-                .schema(iceberg_schema)
-                .properties(create_iceberg_table_properties())
-                .build();
-            let table = catalog
-                .create_table(&table_ident.namespace, tbl_creation)
-                .await?;
-            Ok(table)
         }
+        Err(_) => true,
+    };
+
+    if should_create {
+        create_iceberg_table(
+            catalog,
+            warehouse_uri,
+            table_name,
+            namespace_ident,
+            arrow_schema,
+        )
+        .await
+    } else {
+        unreachable!()
     }
 }
 
+/// Copy source filepath to destination filepath.
+async fn copy_from_local_to_remote(src: &str, dst: &str) -> IcebergResult<()> {
+    let src = FileIOBuilder::new_fs_io().build()?.new_input(src)?;
+    let dst = FileIOBuilder::new(get_url_scheme(dst))
+        .build()?
+        .new_output(dst)?;
+
+    // TODO(hjiang): Switch to parallel chunk-based reading if source file large.
+    let bytes = src.read().await?;
+    dst.write(bytes).await?;
+
+    Ok(())
+}
+
 /// Write the given record batch in the given local file to the iceberg table (parquet file keeps unchanged).
-//
-// TODO(hjiang):
-// 1. Uploading local file to remote is inefficient, it reads local arrow batches and write them one by one.
-// The reason we keep the dummy style, instead of copying the file directly to target is we need the `DataFile` struct,
-// which is used when upload to iceberg table.
-// One way to resolve is to use DataFileWrite on local write, and remember the `DataFile` returned.
 pub(crate) async fn write_record_batch_to_iceberg(
     table: &IcebergTable,
-    parquet_filepath: &PathBuf,
+    local_filepath: &String,
+    table_metadata: &IcebergTableMetadata,
 ) -> IcebergResult<DataFile> {
+    let filename = Path::new(local_filepath)
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
     let location_generator = DefaultLocationGenerator::new(table.metadata().clone())?;
-    let file_name_generator = DefaultFileNameGenerator::new(
-        // Use UUID as prefix to avoid hotspotting on storage access.
-        /*prefix=*/
-        Uuid::new_v4().to_string(),
-        /*suffix=*/ None,
-        /*format=*/ DataFileFormat::Parquet,
-    );
+    let remote_filepath = location_generator.generate_location(&filename);
 
-    let parquet_writer_builder = ParquetWriterBuilder::new(
-        /*props=*/ WriterProperties::default(),
-        /*schame=*/ table.metadata().current_schema().clone(),
-        /*file_io=*/ table.file_io().clone(),
-        /*location_generator=*/ location_generator,
-        /*file_name_generator=*/ file_name_generator,
-    );
-    let data_file_writer_builder = DataFileWriterBuilder::new(
-        parquet_writer_builder,
-        /*partition_value=*/ None,
-        /*partition_spec_id=*/ 0,
-    );
-    let mut data_file_writer = data_file_writer_builder.build().await?;
+    // Import local parquet file to remote.
+    copy_from_local_to_remote(local_filepath, &remote_filepath).await?;
 
-    let local_file = tokio::fs::File::open(parquet_filepath).await?;
-    let mut read_stream = ParquetRecordBatchStreamBuilder::new(local_file)
-        .await?
-        .build()?;
-    while let Some(record_batch) = read_stream.try_next().await? {
-        data_file_writer.write(record_batch).await?;
-    }
-
-    let data_files = data_file_writer.close().await?;
-    assert_eq!(
-        data_files.len(),
-        1,
-        "Should only have one parquet file written"
-    );
-
-    Ok(data_files[0].clone())
+    // Get data file from local parquet file.
+    let data_file = parquet_utils::get_data_file_from_local_parquet_file(
+        local_filepath,
+        remote_filepath,
+        table_metadata,
+    )
+    .await?;
+    Ok(data_file)
 }
 
 /// Get URL scheme for the given path.
@@ -237,17 +254,7 @@ pub(crate) async fn upload_index_file(
         .to_string();
     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
     let remote_filepath = location_generator.generate_location(&filename);
-    let src = FileIOBuilder::new_fs_io()
-        .build()?
-        .new_input(local_index_filepath)?;
-    let dst = FileIOBuilder::new(get_url_scheme(&remote_filepath))
-        .build()?
-        .new_output(remote_filepath.clone())?;
-
-    // TODO(hjiang): Switch to parallel chunk-based reading.
-    let bytes = src.read().await?;
-    dst.write(bytes).await?;
-
+    copy_from_local_to_remote(local_index_filepath, &remote_filepath).await?;
     Ok(remote_filepath)
 }
 

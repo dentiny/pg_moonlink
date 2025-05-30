@@ -1,15 +1,26 @@
 use crate::row::{IdentityProp, MoonlinkRow, RowValue};
+use crate::storage::mooncake_table::{
+    DiskFileDeletionVector, TableMetadata as MooncakeTableMetadata,
+};
 use crate::storage::IcebergTableConfig;
+use crate::storage::{load_blob_from_puffin_file, DeletionVector};
 use crate::storage::{verify_files_and_deletions, MooncakeTable};
-use crate::table_handler::{TableEvent, TableHandler}; // Ensure this path is correct
+use crate::table_handler::{IcebergEventSyncSender, TableEvent, TableHandler}; // Ensure this path is correct
 use crate::union_read::{decode_read_state_for_testing, ReadStateManager};
-use crate::TableConfig;
+use crate::Result;
+use crate::{
+    IcebergEventSyncReceiver, IcebergTableEventManager, IcebergTableManager,
+    TableConfig as MooncakeTableConfig,
+};
 
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow_array::RecordBatch;
+use iceberg::io::FileIOBuilder;
+use iceberg::io::FileRead;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
-
-use arrow::datatypes::{DataType, Field, Schema};
 use tokio::sync::{mpsc, watch};
 
 /// Creates a default schema for testing.
@@ -39,51 +50,62 @@ pub fn create_row(id: i32, name: &str, age: i32) -> MoonlinkRow {
     ])
 }
 
+/// Get iceberg table manager config.
+pub fn get_iceberg_manager_config(table_name: String, warehouse_uri: String) -> IcebergTableConfig {
+    IcebergTableConfig {
+        warehouse_uri,
+        namespace: vec!["default".to_string()],
+        table_name,
+        drop_table_if_exists: false,
+    }
+}
+
 /// Holds the common environment components for table handler tests.
 pub struct TestEnvironment {
     pub handler: TableHandler,
     event_sender: mpsc::Sender<TableEvent>,
     read_state_manager: Arc<ReadStateManager>,
     replication_tx: watch::Sender<u64>,
-    table_commit_tx: watch::Sender<u64>,
-    _temp_dir: TempDir,
+    last_commit_tx: watch::Sender<u64>,
+    iceberg_snapshot_manager: IcebergTableEventManager,
+    pub(crate) temp_dir: TempDir,
 }
 
 impl TestEnvironment {
-    /// Creates a new test environment with default settings.
-    pub async fn new() -> Self {
-        let schema = default_schema();
+    /// Creates a default test environment with default settings.
+    pub async fn default() -> Self {
         let temp_dir = tempdir().unwrap();
-        let path = temp_dir.path().to_path_buf();
+        let mooncake_table_config =
+            MooncakeTableConfig::new(temp_dir.path().to_str().unwrap().to_string());
+        Self::new(temp_dir, mooncake_table_config).await
+    }
 
-        // TODO(hjiang): Hard-code iceberg table namespace and table name.
-        let table_name = "table_name";
-        let iceberg_table_config = IcebergTableConfig {
-            warehouse_uri: path.to_str().unwrap().to_string(),
-            namespace: vec!["default".to_string()],
-            table_name: table_name.to_string(),
-        };
-        let mooncake_table = MooncakeTable::new(
-            schema,
-            table_name.to_string(),
-            1,
-            path,
-            IdentityProp::Keys(vec![0]),
-            iceberg_table_config,
-            TableConfig::new(),
-        )
-        .await;
-
+    /// Create a new test environment with the given mooncake table.
+    pub(crate) async fn new_with_mooncake_table(
+        temp_dir: TempDir,
+        mooncake_table: MooncakeTable,
+    ) -> Self {
         let (replication_tx, replication_rx) = watch::channel(0u64);
-        let (table_commit_tx, table_commit_rx) = watch::channel(0u64);
-
+        let (last_commit_tx, last_commit_rx) = watch::channel(0u64);
         let read_state_manager = Arc::new(ReadStateManager::new(
             &mooncake_table,
             replication_rx,
-            table_commit_rx,
+            last_commit_rx,
         ));
 
-        let handler = TableHandler::new(mooncake_table);
+        let (iceberg_snapshot_completion_tx, iceberg_snapshot_completion_rx) = mpsc::channel(1);
+        let (iceberg_drop_table_completion_tx, iceberg_drop_table_completion_rx) = mpsc::channel(1);
+        let iceberg_event_sync_sender = IcebergEventSyncSender {
+            iceberg_drop_table_completion_tx,
+            iceberg_snapshot_completion_tx,
+        };
+        let iceberg_event_sync_receiver = IcebergEventSyncReceiver {
+            iceberg_drop_table_completion_rx,
+            iceberg_snapshot_completion_rx,
+        };
+        let handler = TableHandler::new(mooncake_table, iceberg_event_sync_sender);
+        let iceberg_snapshot_manager =
+            IcebergTableEventManager::new(handler.get_event_sender(), iceberg_event_sync_receiver);
         let event_sender = handler.get_event_sender();
 
         Self {
@@ -91,9 +113,52 @@ impl TestEnvironment {
             event_sender,
             read_state_manager,
             replication_tx,
-            table_commit_tx,
-            _temp_dir: temp_dir,
+            last_commit_tx,
+            iceberg_snapshot_manager,
+            temp_dir,
         }
+    }
+
+    /// Creates a new test environment with default settings.
+    pub async fn new(temp_dir: TempDir, mooncake_table_config: MooncakeTableConfig) -> Self {
+        let path = temp_dir.path().to_path_buf();
+        let table_name = "table_name";
+        let iceberg_table_config =
+            get_iceberg_manager_config(table_name.to_string(), path.to_str().unwrap().to_string());
+        let mooncake_table = MooncakeTable::new(
+            default_schema(),
+            table_name.to_string(),
+            1,
+            path,
+            IdentityProp::Keys(vec![0]),
+            iceberg_table_config,
+            mooncake_table_config,
+        )
+        .await
+        .unwrap();
+
+        Self::new_with_mooncake_table(temp_dir, mooncake_table).await
+    }
+
+    /// Create iceberg table manager.
+    pub fn create_iceberg_table_manager(
+        &self,
+        mooncake_table_config: MooncakeTableConfig,
+    ) -> IcebergTableManager {
+        let table_name = "table_name";
+        let mooncake_table_metadata = Arc::new(MooncakeTableMetadata {
+            name: table_name.to_string(),
+            id: 0,
+            schema: Arc::new(default_schema()),
+            config: mooncake_table_config.clone(),
+            path: self.temp_dir.path().to_path_buf(),
+            identity: IdentityProp::Keys(vec![0]),
+        });
+        let iceberg_table_config = get_iceberg_manager_config(
+            table_name.to_string(),
+            self.temp_dir.path().to_str().unwrap().to_string(),
+        );
+        IcebergTableManager::new(mooncake_table_metadata, iceberg_table_config).unwrap()
     }
 
     async fn send_event(&self, event: TableEvent) {
@@ -101,6 +166,27 @@ impl TestEnvironment {
             .send(event)
             .await
             .expect("Failed to send event");
+    }
+
+    // --- Util functions for iceberg snapshot creation ---
+
+    /// Initiate an iceberg snapshot event at best effort.
+    pub async fn initiate_snapshot(&mut self, lsn: u64) {
+        self.iceberg_snapshot_manager.initiate_snapshot(lsn).await
+    }
+
+    /// Wait iceberg snapshot creation completion.
+    pub async fn sync_snapshot_completion(&mut self) -> Result<()> {
+        self.iceberg_snapshot_manager
+            .sync_snapshot_completion()
+            .await
+    }
+
+    // --- Util functions for iceberg drop table ---
+
+    /// Request to drop iceberg table and block wait its completion.
+    pub async fn drop_iceberg_table(&mut self) -> Result<()> {
+        self.iceberg_snapshot_manager.drop_table().await
     }
 
     // --- Operation Helpers ---
@@ -142,9 +228,7 @@ impl TestEnvironment {
     /// Sets both table commit and replication LSN to the same value.
     /// This makes data up to `lsn` potentially readable.
     pub fn set_readable_lsn(&self, lsn: u64) {
-        self.table_commit_tx
-            .send(lsn)
-            .expect("Failed to send table commit LSN");
+        self.set_table_commit_lsn(lsn);
         self.replication_tx
             .send(lsn)
             .expect("Failed to send replication LSN");
@@ -152,9 +236,7 @@ impl TestEnvironment {
 
     /// Sets table commit LSN and a potentially higher replication LSN.
     pub fn set_readable_lsn_with_cap(&self, table_commit_lsn: u64, replication_cap_lsn: u64) {
-        self.table_commit_tx
-            .send(table_commit_lsn)
-            .expect("Failed to send table commit LSN");
+        self.set_table_commit_lsn(table_commit_lsn);
         self.replication_tx
             .send(replication_cap_lsn.max(table_commit_lsn))
             .expect("Failed to send replication LSN");
@@ -162,9 +244,9 @@ impl TestEnvironment {
 
     /// Directly set the table commit LSN watch channel.
     pub fn set_table_commit_lsn(&self, lsn: u64) {
-        self.table_commit_tx
+        self.last_commit_tx
             .send(lsn)
-            .expect("Failed to send table commit LSN");
+            .expect("Failed to send last commit LSN");
     }
 
     /// Directly set the replication LSN watch channel.
@@ -194,13 +276,65 @@ pub async fn check_read_snapshot(
     expected_ids: &[i32],
 ) {
     let read_state = read_manager.try_read(Some(target_lsn)).await.unwrap();
-    let (files, deletions) = decode_read_state_for_testing(&read_state);
+    let (data_files, puffin_files, deletion_vectors, position_deletes) =
+        decode_read_state_for_testing(&read_state);
 
-    if files.is_empty() && !expected_ids.is_empty() {
+    if data_files.is_empty() && !expected_ids.is_empty() {
         unreachable!(
             "No snapshot files returned for LSN {} when rows (IDs: {:?}) were expected. Expected files because expected_ids is not empty.",
             target_lsn, expected_ids
         );
     }
-    verify_files_and_deletions(&files, &deletions, expected_ids);
+    verify_files_and_deletions(
+        &data_files,
+        &puffin_files,
+        position_deletes,
+        deletion_vectors,
+        expected_ids,
+    )
+    .await;
+}
+
+/// Test util function to load all arrow batch from the given local parquet file.
+pub(crate) async fn load_arrow_batch(filepath: &str) -> RecordBatch {
+    let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+    let input_file = file_io.new_input(filepath).unwrap();
+    let input_file_metadata = input_file.metadata().await.unwrap();
+    let reader = input_file.reader().await.unwrap();
+    let bytes = reader.read(0..input_file_metadata.size).await.unwrap();
+    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
+    let mut reader = builder.build().unwrap();
+
+    reader
+        .next()
+        .transpose()
+        .unwrap()
+        .expect("Should have one batch")
+}
+
+/// Test util function to check consistency for snapshot batch deletion vector and deletion puffin blob.
+pub(crate) async fn check_deletion_vector_consistency(disk_dv_entry: &DiskFileDeletionVector) {
+    if disk_dv_entry.puffin_deletion_blob.is_none() {
+        assert!(disk_dv_entry
+            .batch_deletion_vector
+            .collect_deleted_rows()
+            .is_empty());
+        return;
+    }
+
+    let local_fileio = FileIOBuilder::new_fs_io().build().unwrap();
+    let blob = load_blob_from_puffin_file(
+        local_fileio,
+        &disk_dv_entry
+            .puffin_deletion_blob
+            .as_ref()
+            .unwrap()
+            .puffin_filepath,
+    )
+    .await
+    .unwrap();
+    let iceberg_deletion_vector = DeletionVector::deserialize(blob).unwrap();
+    let batch_deletion_vector = iceberg_deletion_vector
+        .take_as_batch_delete_vector(MooncakeTableConfig::default().batch_size());
+    assert_eq!(batch_deletion_vector, disk_dv_entry.batch_deletion_vector);
 }

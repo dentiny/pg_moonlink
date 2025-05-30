@@ -5,11 +5,16 @@ mod table_handler;
 mod union_read;
 
 pub use error::*;
-pub use storage::{IcebergTableConfig, IcebergTableManager};
-pub use storage::{MooncakeTable, TableConfig};
-pub use table_handler::{TableEvent, TableHandler};
+pub use storage::storage_utils::create_data_file;
+pub use storage::{
+    IcebergEventSyncReceiver, IcebergTableConfig, IcebergTableEventManager, IcebergTableManager,
+    MooncakeTable, TableConfig, TableManager,
+};
+pub use table_handler::{IcebergEventSyncSender, TableEvent, TableHandler};
 pub use union_read::{ReadState, ReadStateManager};
 
+#[cfg(test)]
+pub(crate) use storage::mooncake_table::Snapshot as MooncakeSnapshot;
 #[cfg(test)]
 pub use union_read::decode_read_state_for_testing;
 

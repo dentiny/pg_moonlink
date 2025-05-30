@@ -87,10 +87,10 @@ pub enum CatalogConfig {
 }
 
 /// Create `FileIO` object based on the catalog config.
-fn create_file_io(config: &CatalogConfig) -> FileIO {
+fn create_file_io(config: &CatalogConfig) -> IcebergResult<FileIO> {
     match config {
         #[cfg(feature = "storage-fs")]
-        CatalogConfig::FileSystem => FileIOBuilder::new_fs_io().build().unwrap(),
+        CatalogConfig::FileSystem => FileIOBuilder::new_fs_io().build(),
         #[cfg(feature = "storage-s3")]
         CatalogConfig::S3 {
             access_key_id,
@@ -103,8 +103,7 @@ fn create_file_io(config: &CatalogConfig) -> FileIO {
             .with_prop(iceberg::io::S3_ENDPOINT, endpoint)
             .with_prop(iceberg::io::S3_ACCESS_KEY_ID, access_key_id)
             .with_prop(iceberg::io::S3_SECRET_ACCESS_KEY, secret_access_key)
-            .build()
-            .unwrap(),
+            .build(),
     }
 }
 
@@ -124,15 +123,15 @@ pub struct FileCatalog {
 }
 
 impl FileCatalog {
-    pub fn new(warehouse_location: String, config: CatalogConfig) -> Self {
-        let file_io = create_file_io(&config);
-        Self {
+    pub fn new(warehouse_location: String, config: CatalogConfig) -> IcebergResult<Self> {
+        let file_io = create_file_io(&config)?;
+        Ok(Self {
             config,
             file_io,
             operator: OnceCell::new(),
             warehouse_location,
             puffin_blobs: HashMap::new(),
-        }
+        })
     }
 
     /// Get IO operator from the catalog.
@@ -1124,7 +1123,7 @@ mod tests {
     async fn test_catalog_namespace_operations_filesystem() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {});
+        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {})?;
         test_catalog_namespace_operations_impl(catalog).await
     }
     #[tokio::test]
@@ -1139,7 +1138,7 @@ mod tests {
     async fn test_catalog_table_operations_filesystem() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {});
+        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {})?;
         test_catalog_table_operations_impl(catalog).await
     }
     #[tokio::test]
@@ -1154,7 +1153,7 @@ mod tests {
     async fn test_list_operation_filesystem() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {});
+        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {})?;
         test_list_operation_impl(catalog).await
     }
     #[tokio::test]
@@ -1169,7 +1168,7 @@ mod tests {
     async fn test_update_table_filesystem() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {});
+        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {})?;
         test_update_table_impl(catalog).await
     }
     #[tokio::test]

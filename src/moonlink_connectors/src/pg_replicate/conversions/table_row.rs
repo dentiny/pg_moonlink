@@ -5,21 +5,13 @@ use thiserror::Error;
 use tokio_postgres::types::Type;
 use tracing::error;
 
-use crate::pg_replicate::{
-    conversions::text::TextFormatConverter, pipeline::batching::BatchBoundary,
-};
+use crate::pg_replicate::conversions::text::TextFormatConverter;
 
 use super::{text::FromTextError, Cell};
 
 #[derive(Debug)]
 pub struct TableRow {
     pub values: Vec<Cell>,
-}
-
-impl BatchBoundary for TableRow {
-    fn is_last_in_batch(&self) -> bool {
-        true
-    }
 }
 
 #[derive(Debug, Error)]

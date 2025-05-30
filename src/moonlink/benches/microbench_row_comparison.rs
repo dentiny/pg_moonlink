@@ -3,9 +3,8 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use moonlink::row::{IdentityProp, MoonlinkRow, RowValue};
-use parquet::arrow::ArrowWriter;
+use parquet::arrow::AsyncArrowWriter;
 use std::collections::HashMap;
-use std::fs::File;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -108,18 +107,18 @@ fn bench_equals_record_batch(c: &mut Criterion) {
 fn bench_equals_parquet(c: &mut Criterion) {
     let temp_dir = tempfile::tempdir().unwrap();
     let parquet_path = temp_dir.path().join("test.parquet");
+    let rt = Runtime::new().unwrap();
 
     // Create and write Parquet file
     let batch = create_test_batch();
-    let file = File::create(&parquet_path).unwrap();
-    let mut writer = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
-    writer.write(&batch).unwrap();
-    writer.close().unwrap();
+    let file = rt.block_on(tokio::fs::File::create(&parquet_path)).unwrap();
+    let mut writer = AsyncArrowWriter::try_new(file, batch.schema(), None).unwrap();
+    rt.block_on(writer.write(&batch)).unwrap();
+    rt.block_on(writer.close()).unwrap();
 
     let row = create_test_row();
     let identity = IdentityProp::FullRow;
 
-    let rt = Runtime::new().unwrap();
     c.bench_function("equals_parquet", |b| {
         b.iter(|| {
             black_box(rt.block_on(row.equals_parquet_at_offset(

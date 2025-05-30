@@ -13,23 +13,29 @@ pub struct ReadStateManager {
     table_snapshot: Arc<RwLock<SnapshotTableState>>,
     table_snapshot_watch_receiver: watch::Receiver<u64>,
     replication_lsn_rx: watch::Receiver<u64>,
-    table_commit_lsn_rx: watch::Receiver<u64>,
+    last_commit_lsn_rx: watch::Receiver<u64>,
 }
 
 impl ReadStateManager {
     pub fn new(
         table: &MooncakeTable,
         replication_lsn_rx: watch::Receiver<u64>,
-        table_commit_lsn_rx: watch::Receiver<u64>,
+        last_commit_lsn_rx: watch::Receiver<u64>,
     ) -> Self {
         let (table_snapshot, table_snapshot_watch_receiver) = table.get_state_for_reader();
         ReadStateManager {
             last_read_lsn: AtomicU64::new(0),
-            last_read_state: RwLock::new(Arc::new(ReadState::new((vec![], vec![]), vec![]))),
+            last_read_state: RwLock::new(Arc::new(ReadState::new(
+                /*data_files=*/ vec![],
+                /*puffin_files=*/ vec![],
+                /*deletion_vectors_at_read=*/ vec![],
+                /*position_deletes=*/ vec![],
+                /*associated_files=*/ vec![],
+            ))),
             table_snapshot,
             table_snapshot_watch_receiver,
             replication_lsn_rx,
-            table_commit_lsn_rx,
+            last_commit_lsn_rx,
         }
     }
 
@@ -47,24 +53,24 @@ impl ReadStateManager {
 
         let mut table_snapshot_rx = self.table_snapshot_watch_receiver.clone();
         let mut replication_lsn_rx = self.replication_lsn_rx.clone();
-        let table_commit_lsn_rx = self.table_commit_lsn_rx.clone();
+        let last_commit_lsn = self.last_commit_lsn_rx.clone();
 
         loop {
             let current_snapshot_lsn = *table_snapshot_rx.borrow();
             let current_replication_lsn = *replication_lsn_rx.borrow();
-            let current_commit_lsn = *table_commit_lsn_rx.borrow();
 
+            let last_commit_lsn_val = *last_commit_lsn.borrow();
             if self.can_satisfy_read_from_snapshot(
                 requested_lsn,
                 current_snapshot_lsn,
                 current_replication_lsn,
-                current_commit_lsn,
+                last_commit_lsn_val,
             ) {
                 return self
                     .read_from_snapshot_and_update_cache(
                         current_snapshot_lsn,
                         current_replication_lsn,
-                        current_commit_lsn,
+                        last_commit_lsn_val,
                     )
                     .await;
             }
@@ -86,6 +92,7 @@ impl ReadStateManager {
         replication_lsn: u64,
         commit_lsn: u64,
     ) -> bool {
+        let is_snapshot_clean = snapshot_lsn == commit_lsn;
         match requested_lsn {
             // If no specific LSN is requested, we can always try to read the latest.
             None => true,
@@ -93,10 +100,8 @@ impl ReadStateManager {
                 // Request can be satisfied if:
                 // 1. The requested LSN is already covered by the table snapshot.
                 // OR
-                // 2. The requested LSN is covered by replication, AND the snapshot
-                //    reflects all committed changes up to the snapshot LSN.
-                req_lsn_val <= snapshot_lsn
-                    || (req_lsn_val <= replication_lsn && snapshot_lsn == commit_lsn)
+                // 2. The requested LSN is covered by replication, AND the snapshot is clean
+                req_lsn_val <= snapshot_lsn || (req_lsn_val <= replication_lsn && is_snapshot_clean)
             }
         }
     }
@@ -109,23 +114,26 @@ impl ReadStateManager {
     ) -> Result<Arc<ReadState>> {
         let table_state_snapshot = self.table_snapshot.read().await;
         let mut last_read_state_guard = self.last_read_state.write().await;
+        let is_snapshot_clean = current_snapshot_lsn == current_commit_lsn;
 
         if self.last_read_lsn.load(Ordering::Acquire) < current_snapshot_lsn {
             // If the snapshot is fully committed and replication has progressed further,
             // we can consider the state valid up to the replication LSN.
-            let effective_lsn = if current_snapshot_lsn == current_commit_lsn
-                && current_snapshot_lsn < current_replication_lsn
-            {
-                current_replication_lsn
-            } else {
-                current_snapshot_lsn
-            };
+            let effective_lsn =
+                if is_snapshot_clean && current_snapshot_lsn < current_replication_lsn {
+                    current_replication_lsn
+                } else {
+                    current_snapshot_lsn
+                };
 
-            let read_output = table_state_snapshot.request_read()?;
+            let read_output = table_state_snapshot.request_read().await?;
 
             self.last_read_lsn.store(effective_lsn, Ordering::Release);
             *last_read_state_guard = Arc::new(ReadState::new(
-                (read_output.file_paths, read_output.deletions),
+                read_output.data_file_paths,
+                read_output.puffin_file_paths,
+                read_output.deletion_vectors,
+                read_output.position_deletes,
                 read_output.associated_files,
             ));
         }

@@ -33,8 +33,11 @@ impl DeletionVector {
     }
 
     /// Marks a row as deleted.
+    /// Pre-requisite: row indices must be in ascending order.
     pub fn mark_rows_deleted(&mut self, rows: Vec<u64>) {
-        self.bitmap.extend(rows);
+        let row_count = rows.len();
+        let appended_num = self.bitmap.append(rows).unwrap();
+        assert_eq!(appended_num as usize, row_count);
     }
 
     /// Deserializes a byte vector into a DeletionVector.
@@ -208,7 +211,8 @@ impl DeletionVector {
     ///
     /// TODO(hjiang): Add unit test for load blob from local filesystem.
     pub async fn load_from_dv_blob(file_io: FileIO, puffin_file: &DataFile) -> IcebergResult<Self> {
-        let blob = puffin_utils::load_blob_from_puffin_file(file_io, puffin_file).await?;
+        let blob =
+            puffin_utils::load_blob_from_puffin_file(file_io, puffin_file.file_path()).await?;
         DeletionVector::deserialize(blob)
     }
 

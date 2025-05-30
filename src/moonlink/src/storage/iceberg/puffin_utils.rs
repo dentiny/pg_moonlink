@@ -4,8 +4,18 @@ use std::collections::HashMap;
 use iceberg::io::FileIO;
 use iceberg::puffin::PuffinWriter;
 use iceberg::puffin::{Blob, PuffinReader};
-use iceberg::spec::DataFile;
 use iceberg::{Error as IcebergError, Result as IcebergResult};
+
+/// Reference to puffin blob.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PuffinBlobRef {
+    /// Path for the puffin file.
+    pub(crate) puffin_filepath: String,
+    /// Start offset for the blob.
+    pub(crate) start_offset: u32,
+    /// Blob size.
+    pub(crate) blob_size: u32,
+}
 
 /// Get puffin writer with the given file io.
 pub(crate) async fn create_puffin_writer(
@@ -22,13 +32,13 @@ pub(crate) async fn create_puffin_writer(
     Ok(puffin_writer)
 }
 
-/// Load blob from the given puffin file path.
+/// Load blob from the given puffin filepath.
 /// Note: this function assumes there's only one blob in the puffin file.
 pub(crate) async fn load_blob_from_puffin_file(
     file_io: FileIO,
-    data_file: &DataFile,
+    file_path: &str,
 ) -> IcebergResult<Blob> {
-    let input_file = file_io.new_input(data_file.file_path())?;
+    let input_file = file_io.new_input(file_path)?;
     let puffin_reader = PuffinReader::new(input_file);
     let puffin_file_metadata = puffin_reader.file_metadata().await?;
 

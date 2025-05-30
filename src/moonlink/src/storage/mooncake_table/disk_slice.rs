@@ -2,14 +2,16 @@ use super::data_batches::BatchEntry;
 use crate::error::{Error, Result};
 use crate::storage::index::persisted_bucket_hash_map::GlobalIndexBuilder;
 use crate::storage::index::{FileIndex, MemIndex};
-use crate::storage::storage_utils::{FileId, ProcessedDeletionRecord, RecordLocation};
+use crate::storage::storage_utils::{
+    create_data_file, get_random_file_name_in_dir, get_unique_file_id_for_flush,
+    MooncakeDataFileRef, ProcessedDeletionRecord, RecordLocation,
+};
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
 use parquet::arrow::AsyncArrowWriter;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use uuid::Uuid;
 
 pub(crate) struct DiskSliceWriter {
     /// The schema of the DiskSlice.
@@ -25,6 +27,8 @@ pub(crate) struct DiskSliceWriter {
 
     old_index: Arc<MemIndex>,
 
+    table_auto_incr_id: u32,
+
     // a mapping of old record locations to new record locations
     // this is used to remap deletions on the disk slice
     batch_id_to_idx: HashMap<u64, usize>,
@@ -33,7 +37,7 @@ pub(crate) struct DiskSliceWriter {
     new_index: Option<FileIndex>,
 
     /// Records already flushed data files.
-    files: Vec<(PathBuf /* file path */, usize /* row count */)>,
+    files: Vec<(MooncakeDataFileRef, usize /* row count */)>,
 }
 
 impl DiskSliceWriter {
@@ -48,6 +52,7 @@ impl DiskSliceWriter {
         dir_path: PathBuf,
         batches: Vec<BatchEntry>,
         writer_lsn: Option<u64>,
+        table_auto_incr_id: u32,
         old_index: Arc<MemIndex>,
     ) -> Self {
         Self {
@@ -57,6 +62,7 @@ impl DiskSliceWriter {
             files: vec![],
             batch_id_to_idx: HashMap::new(),
             writer_lsn,
+            table_auto_incr_id,
             row_offset_mapping: vec![],
             old_index,
             new_index: None,
@@ -92,15 +98,11 @@ impl DiskSliceWriter {
         self.writer_lsn
     }
 
-    pub(super) fn set_lsn(&mut self, lsn: Option<u64>) {
-        self.writer_lsn = lsn;
-    }
-
     pub(super) fn input_batches(&self) -> &Vec<BatchEntry> {
         &self.batches
     }
     /// Get the list of files in the DiskSlice
-    pub(super) fn output_files(&self) -> &[(PathBuf, usize)] {
+    pub(super) fn output_files(&self) -> &[(MooncakeDataFileRef, usize)] {
         self.files.as_slice()
     }
 
@@ -119,17 +121,22 @@ impl DiskSliceWriter {
         let mut out_file_idx = 0;
         let mut out_row_idx = 0;
         let dir_path = &self.dir_path;
-        let mut file_path = None;
+        let mut data_file = None;
         for (batch_id, batch, row_indices) in record_batches {
             if writer.is_none() {
                 // Generate a unique file name
                 // Create the file
-                let file_name = format!("{}.parquet", Uuid::new_v4());
-                file_path = Some(dir_path.join(file_name));
-                let file = tokio::fs::File::create(file_path.as_ref().unwrap())
-                    .await
-                    .map_err(Error::Io)?;
                 out_file_idx = files.len();
+                let file_id = get_unique_file_id_for_flush(
+                    self.table_auto_incr_id as u64,
+                    out_file_idx as u64,
+                );
+                let file_path = get_random_file_name_in_dir(dir_path);
+                data_file = Some(create_data_file(file_id, file_path));
+                let file =
+                    tokio::fs::File::create(dir_path.join(data_file.as_ref().unwrap().file_path()))
+                        .await
+                        .map_err(Error::Io)?;
                 writer = Some(AsyncArrowWriter::try_new(file, self.schema.clone(), None)?);
                 out_row_idx = 0;
             }
@@ -143,13 +150,13 @@ impl DiskSliceWriter {
                 // Finalize the writer
                 writer.unwrap().close().await?;
                 writer = None;
-                files.push((file_path.unwrap(), out_row_idx));
-                file_path = None;
+                files.push((data_file.unwrap(), out_row_idx));
+                data_file = None;
             }
         }
         if let Some(writer) = writer {
             writer.close().await?;
-            files.push((file_path.unwrap(), out_row_idx));
+            files.push((data_file.unwrap(), out_row_idx));
         }
         self.files = files;
         Ok(())
@@ -164,12 +171,7 @@ impl DiskSliceWriter {
             .remap_into_vec(&self.batch_id_to_idx, &self.row_offset_mapping);
 
         let mut index_builder = GlobalIndexBuilder::new();
-        index_builder.set_files(
-            self.files
-                .iter()
-                .map(|(path, _)| Arc::new(path.clone()))
-                .collect(),
-        );
+        index_builder.set_files(self.files.iter().map(|(file, _)| file.clone()).collect());
         index_builder.set_directory(self.dir_path.clone());
         self.new_index = Some(index_builder.build_from_flush(list).await);
         Ok(())
@@ -187,7 +189,7 @@ impl DiskSliceWriter {
                 let new_location = self.row_offset_mapping[old_location.0][old_location.1];
                 if let Some(new_location) = new_location {
                     deletion.pos = RecordLocation::DiskFile(
-                        FileId(Arc::new(self.files[new_location.0].0.clone())),
+                        self.files[new_location.0].0.file_id(),
                         new_location.1,
                     );
                 }
@@ -205,7 +207,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
     use arrow_array::{Int32Array, StringArray};
     use arrow_schema::Schema;
-    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
     use tempfile::tempdir;
 
     /// Util function to create test schema.
@@ -252,6 +254,7 @@ mod tests {
             temp_dir.path().to_path_buf(),
             entries,
             Some(1),
+            /*table_auto_incr_id=*/ 0,
             Arc::new(old_index),
         );
         disk_slice.write().await?;
@@ -261,13 +264,15 @@ mod tests {
 
         // Read the files and verify the data
         for (file, _rows) in disk_slice.output_files() {
-            let file = std::fs::File::open(file).map_err(Error::Io)?;
-            let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+            let file_path = temp_dir.path().join(file.file_path());
+            let file = tokio::fs::File::open(file_path).await?;
+            let builder = ParquetRecordBatchStreamBuilder::new(file).await?;
             let actual_schema = builder.schema();
             assert_eq!(*actual_schema, schema);
 
             let mut reader = builder.build().unwrap();
-            let record_batch = reader.next().unwrap().unwrap();
+            let mut record_batch_reader = reader.next_row_group().await.unwrap().unwrap();
+            let record_batch = record_batch_reader.next().unwrap().unwrap();
             let expected_record_batch = RecordBatch::try_new(
                 schema.clone(),
                 vec![
@@ -331,24 +336,28 @@ mod tests {
         }
 
         // Delete a couple of rows to test that only active rows are mapped
-        mem_slice.delete(
-            &RawDeletionRecord {
-                lookup_key: 2,
-                row_identity: None,
-                pos: Some((0, 1)),
-                lsn: 1,
-            },
-            &IdentityProp::SinglePrimitiveKey(0),
-        ); // Delete Bob (ID 2)
-        mem_slice.delete(
-            &RawDeletionRecord {
-                lookup_key: 4,
-                row_identity: None,
-                pos: Some((0, 3)),
-                lsn: 1,
-            },
-            &IdentityProp::SinglePrimitiveKey(0),
-        ); // Delete David (ID 4)
+        mem_slice
+            .delete(
+                &RawDeletionRecord {
+                    lookup_key: 2,
+                    row_identity: None,
+                    pos: Some((0, 1)),
+                    lsn: 1,
+                },
+                &IdentityProp::SinglePrimitiveKey(0),
+            )
+            .await; // Delete Bob (ID 2)
+        mem_slice
+            .delete(
+                &RawDeletionRecord {
+                    lookup_key: 4,
+                    row_identity: None,
+                    pos: Some((0, 3)),
+                    lsn: 1,
+                },
+                &IdentityProp::SinglePrimitiveKey(0),
+            )
+            .await; // Delete David (ID 4)
 
         let (_new_batch, entries, index) = mem_slice.drain().unwrap();
 
@@ -357,6 +366,7 @@ mod tests {
             temp_dir.path().to_path_buf(),
             entries,
             Some(1),
+            0,
             Arc::new(index),
         );
 
@@ -372,7 +382,7 @@ mod tests {
         // Verify each key has been remapped to a disk location
         for key in [1, 3, 5] {
             // These should exist (undeleted rows)
-            let locations = new_index.search(&key);
+            let locations = new_index.search(&key).await;
             assert!(
                 !locations.is_empty(),
                 "Key {key} should exist in the remapped index"
@@ -382,12 +392,11 @@ mod tests {
                 match location {
                     RecordLocation::DiskFile(file_id, _) => {
                         // Verify the file exists in our output files
-                        let file_path = &file_id.0;
                         assert!(
                             disk_slice
                                 .output_files()
                                 .iter()
-                                .any(|(path, _)| path == file_path.as_ref()),
+                                .any(|(file, _)| file.file_id() == file_id),
                             "Referenced file path should exist in output files"
                         );
                     }
@@ -399,7 +408,7 @@ mod tests {
         // Check that deleted rows are not in the index
         for key in [2, 4] {
             // These should not exist (deleted rows)
-            let locations = new_index.search(&key);
+            let locations = new_index.search(&key).await;
             assert!(
                 locations.is_empty(),
                 "Deleted key {key} should not exist in the remapped index"

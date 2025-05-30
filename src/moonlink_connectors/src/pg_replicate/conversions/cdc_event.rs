@@ -8,10 +8,7 @@ use postgres_replication::protocol::{
 };
 use thiserror::Error;
 
-use crate::pg_replicate::{
-    pipeline::batching::BatchBoundary,
-    table::{ColumnSchema, TableId, TableSchema},
-};
+use crate::pg_replicate::table::{ColumnSchema, TableId, TableSchema};
 
 use super::{
     table_row::TableRow,
@@ -207,17 +204,4 @@ pub enum CdcEvent {
     StreamStop(StreamStopBody),
     StreamCommit(StreamCommitBody),
     StreamAbort(StreamAbortBody),
-}
-
-impl BatchBoundary for CdcEvent {
-    fn is_last_in_batch(&self) -> bool {
-        matches!(
-            self,
-            CdcEvent::Commit(_)
-                | CdcEvent::StreamCommit(_)
-                | CdcEvent::StreamStop(_)
-                | CdcEvent::StreamAbort(_)
-                | CdcEvent::PrimaryKeepAlive(_)
-        )
-    }
 }

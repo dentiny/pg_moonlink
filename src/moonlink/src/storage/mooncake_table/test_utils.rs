@@ -1,15 +1,20 @@
 use super::*;
 use crate::row::{IdentityProp, RowValue};
+use crate::storage::iceberg::deletion_vector::DeletionVector;
 use crate::storage::iceberg::iceberg_table_manager::IcebergTableConfig;
+use crate::storage::iceberg::puffin_utils;
+use crate::storage::mooncake_table::snapshot::PuffinDeletionBlobAtRead;
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field};
+use futures::future::join_all;
+use iceberg::io::FileIOBuilder;
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use std::collections::HashSet;
 use std::fs::{create_dir_all, File};
 use tempfile::{tempdir, TempDir};
 
 pub struct TestContext {
-    _temp_dir: TempDir,
+    temp_dir: TempDir,
     test_dir: PathBuf,
 }
 
@@ -19,10 +24,7 @@ impl TestContext {
         let test_dir = temp_dir.path().join(subdir_name);
         create_dir_all(&test_dir).unwrap();
 
-        Self {
-            _temp_dir: temp_dir,
-            test_dir,
-        }
+        Self { temp_dir, test_dir }
     }
 
     fn path(&self) -> PathBuf {
@@ -65,7 +67,9 @@ pub async fn test_table(
         warehouse_uri: context.path().to_str().unwrap().to_string(),
         namespace: vec!["default".to_string()],
         table_name: table_name.to_string(),
+        drop_table_if_exists: false,
     };
+    let table_config = TableConfig::new(context.temp_dir.path().to_str().unwrap().to_string());
     MooncakeTable::new(
         test_schema(),
         table_name.to_string(),
@@ -73,9 +77,10 @@ pub async fn test_table(
         context.path(),
         identity,
         iceberg_table_config,
-        TableConfig::new(),
+        table_config,
     )
     .await
+    .unwrap()
 }
 
 pub fn read_batch(reader: ParquetRecordBatchReader) -> Option<RecordBatch> {
@@ -152,7 +157,7 @@ pub async fn append_commit_flush_snapshot(
     Ok(())
 }
 
-pub fn verify_files_and_deletions(
+fn verify_files_and_deletions_impl(
     files: &[String],
     deletions: &[(u32, u32)],
     expected_ids: &[i32],
@@ -169,4 +174,43 @@ pub fn verify_files_and_deletions(
     }
     res.sort();
     assert_eq!(res, expected_ids);
+}
+
+pub async fn verify_files_and_deletions(
+    data_file_paths: &[String],
+    puffin_file_paths: &[String],
+    position_deletes: Vec<(u32, u32)>,
+    deletion_vectors: Vec<PuffinDeletionBlobAtRead>,
+    expected_ids: &[i32],
+) {
+    // Read deletion vector blobs and add to position deletes.
+    let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+    let mut position_deletes = position_deletes;
+    let mut load_blob_futures = Vec::with_capacity(deletion_vectors.len());
+    for cur_blob in deletion_vectors.iter() {
+        let get_blob_future = puffin_utils::load_blob_from_puffin_file(
+            file_io.clone(),
+            puffin_file_paths
+                .get(cur_blob.puffin_file_index as usize)
+                .unwrap(),
+        );
+        load_blob_futures.push(get_blob_future);
+    }
+
+    let load_blob_results = join_all(load_blob_futures).await;
+    for (idx, cur_load_blob_res) in load_blob_results.into_iter().enumerate() {
+        let blob = cur_load_blob_res.unwrap();
+        let dv = DeletionVector::deserialize(blob).unwrap();
+        let batch_deletion_vector = dv.take_as_batch_delete_vector(TableConfig::DEFAULT_BATCH_SIZE);
+        let deleted_rows = batch_deletion_vector.collect_deleted_rows();
+        assert!(!deleted_rows.is_empty());
+        position_deletes.append(
+            &mut deleted_rows
+                .iter()
+                .map(|row_idx| (deletion_vectors[idx].data_file_index, *row_idx as u32))
+                .collect::<Vec<(u32, u32)>>(),
+        );
+    }
+
+    verify_files_and_deletions_impl(data_file_paths, &position_deletes, expected_ids)
 }
