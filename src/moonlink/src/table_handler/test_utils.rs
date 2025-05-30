@@ -67,7 +67,7 @@ pub struct TestEnvironment {
     read_state_manager: Arc<ReadStateManager>,
     replication_tx: watch::Sender<u64>,
     last_commit_tx: watch::Sender<u64>,
-    iceberg_snapshot_manager: IcebergTableEventManager,
+    iceberg_table_event_manager: IcebergTableEventManager,
     pub(crate) temp_dir: TempDir,
 }
 
@@ -104,7 +104,7 @@ impl TestEnvironment {
             iceberg_snapshot_completion_rx,
         };
         let handler = TableHandler::new(mooncake_table, iceberg_event_sync_sender);
-        let iceberg_snapshot_manager =
+        let iceberg_table_event_manager =
             IcebergTableEventManager::new(handler.get_event_sender(), iceberg_event_sync_receiver);
         let event_sender = handler.get_event_sender();
 
@@ -114,7 +114,7 @@ impl TestEnvironment {
             read_state_manager,
             replication_tx,
             last_commit_tx,
-            iceberg_snapshot_manager,
+            iceberg_table_event_manager,
             temp_dir,
         }
     }
@@ -172,12 +172,14 @@ impl TestEnvironment {
 
     /// Initiate an iceberg snapshot event at best effort.
     pub async fn initiate_snapshot(&mut self, lsn: u64) {
-        self.iceberg_snapshot_manager.initiate_snapshot(lsn).await
+        self.iceberg_table_event_manager
+            .initiate_snapshot(lsn)
+            .await
     }
 
     /// Wait iceberg snapshot creation completion.
     pub async fn sync_snapshot_completion(&mut self) -> Result<()> {
-        self.iceberg_snapshot_manager
+        self.iceberg_table_event_manager
             .sync_snapshot_completion()
             .await
     }
@@ -186,7 +188,7 @@ impl TestEnvironment {
 
     /// Request to drop iceberg table and block wait its completion.
     pub async fn drop_iceberg_table(&mut self) -> Result<()> {
-        self.iceberg_snapshot_manager.drop_table().await
+        self.iceberg_table_event_manager.drop_table().await
     }
 
     // --- Operation Helpers ---

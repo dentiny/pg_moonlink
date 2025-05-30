@@ -76,7 +76,7 @@ impl<T: Eq + Hash + Clone> MoonlinkBackend<T> {
     pub async fn create_iceberg_snapshot(&self, table_id: &T, lsn: u64) -> Result<()> {
         let mut manager = self.replication_manager.write().await;
 
-        let writer = manager.get_iceberg_snapshot_manager(table_id);
+        let writer = manager.get_iceberg_table_event_manager(table_id);
         writer.initiate_snapshot(lsn).await;
         writer.sync_snapshot_completion().await?;
         Ok(())

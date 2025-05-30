@@ -37,7 +37,7 @@ pub struct ReplicationConnection {
     postgres_client: Client,
     handle: Option<JoinHandle<Result<()>>>,
     table_readers: HashMap<TableId, ReadStateManager>,
-    iceberg_snapshot_managers: HashMap<TableId, IcebergTableEventManager>,
+    iceberg_table_event_managers: HashMap<TableId, IcebergTableEventManager>,
     cmd_tx: mpsc::Sender<Command>,
     cmd_rx: Option<mpsc::Receiver<Command>>,
     replication_state: Arc<ReplicationState>,
@@ -80,7 +80,7 @@ impl ReplicationConnection {
             postgres_client,
             handle: None,
             table_readers: HashMap::new(),
-            iceberg_snapshot_managers: HashMap::new(),
+            iceberg_table_event_managers: HashMap::new(),
             cmd_tx,
             cmd_rx: Some(cmd_rx),
             replication_state: ReplicationState::new(),
@@ -132,11 +132,13 @@ impl ReplicationConnection {
         self.table_readers.get(&table_id).unwrap()
     }
 
-    pub fn get_iceberg_snapshot_manager(
+    pub fn get_iceberg_table_event_manager(
         &mut self,
         table_id: TableId,
     ) -> &mut IcebergTableEventManager {
-        self.iceberg_snapshot_managers.get_mut(&table_id).unwrap()
+        self.iceberg_table_event_managers
+            .get_mut(&table_id)
+            .unwrap()
     }
 
     async fn spawn_replication_task(
@@ -174,8 +176,8 @@ impl ReplicationConnection {
 
         self.table_readers
             .insert(table_id, resources.read_state_manager);
-        self.iceberg_snapshot_managers
-            .insert(table_id, resources.iceberg_snapshot_manager);
+        self.iceberg_table_event_managers
+            .insert(table_id, resources.iceberg_table_event_manager);
         self.cmd_tx
             .send(Command::AddTable {
                 table_id,
@@ -193,7 +195,7 @@ impl ReplicationConnection {
         self.drop_iceberg_table(table_id).await?;
 
         self.table_readers.remove_entry(&table_id).unwrap();
-        self.iceberg_snapshot_managers
+        self.iceberg_table_event_managers
             .remove_entry(&table_id)
             .unwrap();
         self.cmd_tx
@@ -206,7 +208,10 @@ impl ReplicationConnection {
 
     /// Clean up iceberg table in a blocking manner.
     async fn drop_iceberg_table(&mut self, table_id: u32) -> Result<()> {
-        let iceberg_state_manager = self.iceberg_snapshot_managers.get_mut(&table_id).unwrap();
+        let iceberg_state_manager = self
+            .iceberg_table_event_managers
+            .get_mut(&table_id)
+            .unwrap();
         iceberg_state_manager.drop_table().await?;
         Ok(())
     }
