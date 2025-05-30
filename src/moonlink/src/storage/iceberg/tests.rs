@@ -343,7 +343,7 @@ async fn test_drop_table() {
     let mut iceberg_table_manager =
         IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone()).unwrap();
     iceberg_table_manager
-        .initialize_iceberg_table()
+        .initialize_iceberg_table_for_once()
         .await
         .unwrap();
 
