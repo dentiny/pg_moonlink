@@ -47,6 +47,39 @@ async fn test_table_handler_flush() {
     println!("All table handler flush tests passed!");
 }
 
+// Testing scenario: assign small parquet file size, which leads to multiple disk slice in one flush operation.
+#[tokio::test]
+async fn test_append_with_small_disk_slice() {
+    let temp_dir = tempdir().unwrap();
+    let mooncake_table_config = MooncakeTableConfig {
+        batch_size: 1,                   // One mem slice only contains one row.
+        disk_slice_parquet_file_size: 1, // One parquet file only contains one arrow record.
+        mem_slice_size: 1000,
+        snapshot_deletion_record_count: 1000,
+        iceberg_snapshot_new_data_file_count: 1000,
+        iceberg_snapshot_new_committed_deletion_log: 1000,
+        temp_files_directory: temp_dir.path().to_str().unwrap().to_string(),
+    };
+    let env = TestEnvironment::new(temp_dir, mooncake_table_config.clone()).await;
+
+    // Append two rows, which appears in two parquet files.
+    env.append_row(
+        /*id=*/ 1, /*name=*/ "Alice", /*age=*/ 10, /*xact_id=*/ None,
+    )
+    .await;
+    env.append_row(
+        /*id=*/ 2, /*name=*/ "Blob", /*age=*/ 20, /*xact_id=*/ None,
+    )
+    .await;
+    env.commit(/*lsn=*/ 10).await;
+    env.flush_table(/*lsn=*/ 10).await;
+
+    // Check whether both rows are accessible in snapshot.
+    env.set_readable_lsn(10);
+    env.verify_snapshot(/*target_lsn=*/ 10, /*expected_id=*/ &[1, 2])
+        .await;
+}
+
 #[tokio::test]
 async fn test_streaming_append_and_commit() {
     let mut env = TestEnvironment::default().await;
