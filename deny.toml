@@ -16,6 +16,7 @@ allow = [
 [bans]
 multiple-versions = "allow"
 wildcards = "deny"
+workspace-dependencies = ["moonlink"]
 
 [sources]
 unknown-registry = "deny"
