@@ -25,6 +25,9 @@ pub enum Command {
         event_sender: mpsc::Sender<TableEvent>,
         commit_lsn_tx: watch::Sender<u64>,
     },
+    DropTable {
+        table_id: TableId,
+    },
 }
 
 pub struct ReplicationConnection {
@@ -193,15 +196,9 @@ impl ReplicationConnection {
         self.iceberg_snapshot_managers
             .remove_entry(&table_id)
             .unwrap();
-        self.event_senders
-            .write()
-            .unwrap()
-            .remove_entry(&table_id)
-            .unwrap();
-        self.commit_lsn_txs
-            .write()
-            .unwrap()
-            .remove_entry(&table_id)
+        self.cmd_tx
+            .send(Command::DropTable { table_id })
+            .await
             .unwrap();
 
         Ok(())
@@ -272,6 +269,9 @@ async fn run_event_loop(
                 Command::AddTable { table_id, schema, event_sender, commit_lsn_tx } => {
                     sink.add_table(table_id, event_sender, commit_lsn_tx);
                     stream.as_mut().add_table_schema(schema);
+                }
+                Command::DropTable { table_id } => {
+                    sink.drop_table(table_id);
                 }
             },
             event = StreamExt::next(&mut stream) => {

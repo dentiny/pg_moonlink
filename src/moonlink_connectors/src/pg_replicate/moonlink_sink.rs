@@ -51,6 +51,10 @@ impl Sink {
         self.event_senders.insert(table_id, event_sender);
         self.commit_lsn_txs.insert(table_id, commit_lsn_tx);
     }
+    pub fn drop_table(&mut self, table_id: TableId) {
+        self.event_senders.remove(&table_id).unwrap();
+        self.commit_lsn_txs.remove(&table_id).unwrap();
+    }
 
     pub async fn process_cdc_event(&mut self, event: CdcEvent) -> Result<PgLsn, Infallible> {
         match event {
