@@ -402,6 +402,7 @@ async fn test_iceberg_snapshot_creation_for_batch_write() {
     let temp_dir = tempdir().unwrap();
     let mooncake_table_config = MooncakeTableConfig {
         batch_size: MooncakeTableConfig::DEFAULT_BATCH_SIZE,
+        disk_slice_parquet_file_size: MooncakeTableConfig::DEFAULT_DISK_SLICE_PARQUET_FILE_SIZE,
         mem_slice_size: 1000,
         snapshot_deletion_record_count: 1000,
         iceberg_snapshot_new_data_file_count: 1000,
@@ -584,6 +585,7 @@ async fn test_iceberg_snapshot_creation_for_streaming_write() {
     let temp_dir = tempdir().unwrap();
     let mooncake_table_config = MooncakeTableConfig {
         batch_size: MooncakeTableConfig::DEFAULT_BATCH_SIZE,
+        disk_slice_parquet_file_size: MooncakeTableConfig::DEFAULT_DISK_SLICE_PARQUET_FILE_SIZE,
         mem_slice_size: 1000,
         snapshot_deletion_record_count: 1000,
         iceberg_snapshot_new_data_file_count: 1000,
