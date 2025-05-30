@@ -14,7 +14,7 @@ use std::fs::{create_dir_all, File};
 use tempfile::{tempdir, TempDir};
 
 pub struct TestContext {
-    _temp_dir: TempDir,
+    temp_dir: TempDir,
     test_dir: PathBuf,
 }
 
@@ -24,10 +24,7 @@ impl TestContext {
         let test_dir = temp_dir.path().join(subdir_name);
         create_dir_all(&test_dir).unwrap();
 
-        Self {
-            _temp_dir: temp_dir,
-            test_dir,
-        }
+        Self { temp_dir, test_dir }
     }
 
     fn path(&self) -> PathBuf {
@@ -72,6 +69,7 @@ pub async fn test_table(
         table_name: table_name.to_string(),
         drop_table_if_exists: false,
     };
+    let table_config = TableConfig::new(context.temp_dir.path().to_str().unwrap().to_string());
     MooncakeTable::new(
         test_schema(),
         table_name.to_string(),
@@ -79,7 +77,7 @@ pub async fn test_table(
         context.path(),
         identity,
         iceberg_table_config,
-        TableConfig::new(),
+        table_config,
     )
     .await
     .unwrap()

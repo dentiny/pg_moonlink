@@ -22,7 +22,7 @@ pub(crate) use crate::storage::mooncake_table::table_snapshot::{
 use crate::storage::storage_utils::FileId;
 use std::collections::HashMap;
 use std::mem::take;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use transaction_stream::{TransactionStreamOutput, TransactionStreamState};
 
@@ -47,11 +47,13 @@ pub struct TableConfig {
     pub iceberg_snapshot_new_data_file_count: usize,
     /// Number of unpersisted committed delete logs to trigger an iceberg snapshot.
     pub iceberg_snapshot_new_committed_deletion_log: usize,
+    /// Filesystem directory to store temporary files, used for union read.
+    pub temp_files_directory: String,
 }
 
 impl Default for TableConfig {
     fn default() -> Self {
-        Self::new()
+        Self::new(Self::DEFAULT_TEMP_FILE_DIRECTORY.to_string())
     }
 }
 
@@ -78,7 +80,10 @@ impl TableConfig {
     #[cfg(not(debug_assertions))]
     pub(crate) const DEFAULT_ICEBERG_SNAPSHOT_NEW_COMMITTED_DELETION_LOG: usize = 1000;
 
-    pub fn new() -> Self {
+    /// Default local directory to hold temporary files for union read.
+    pub(crate) const DEFAULT_TEMP_FILE_DIRECTORY: &str = "/tmp/moonlink_temp_file";
+
+    pub fn new(temp_files_directory: String) -> Self {
         Self {
             mem_slice_size: Self::DEFAULT_MEM_SLICE_SIZE,
             snapshot_deletion_record_count: Self::DEFAULT_SNAPSHOT_DELETION_RECORD_COUNT,
@@ -86,6 +91,7 @@ impl TableConfig {
             iceberg_snapshot_new_data_file_count: Self::DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT,
             iceberg_snapshot_new_committed_deletion_log:
                 Self::DEFAULT_ICEBERG_SNAPSHOT_NEW_COMMITTED_DELETION_LOG,
+            temp_files_directory,
         }
     }
     pub fn batch_size(&self) -> usize {
@@ -163,13 +169,12 @@ impl Snapshot {
     }
 
     pub fn get_name_for_inmemory_file(&self) -> PathBuf {
-        Path::join(
-            &self.metadata.path,
-            format!(
-                "inmemory_{}_{}_{}.parquet",
-                self.metadata.name, self.metadata.id, self.snapshot_version
-            ),
-        )
+        let mut directory = PathBuf::from(&self.metadata.config.temp_files_directory);
+        directory.push(format!(
+            "inmemory_{}_{}_{}.parquet",
+            self.metadata.name, self.metadata.id, self.snapshot_version
+        ));
+        directory
     }
 }
 

@@ -222,7 +222,7 @@ async fn test_snapshot_initialization() -> Result<()> {
         name: "test_table".to_string(),
         id: 1,
         schema: Arc::new(schema),
-        config: TableConfig::new(),
+        config: TableConfig::default(), // No temp files generated.
         path: PathBuf::new(),
         identity,
     });
@@ -412,7 +412,7 @@ async fn test_snapshot_load_failure() {
         name: "test_table".to_string(),
         id: 1,
         schema: Arc::new(test_schema()),
-        config: TableConfig::new(),
+        config: TableConfig::default(), // No temp files generated.
         path: PathBuf::new(),
         identity: IdentityProp::Keys(vec![0]),
     });
@@ -427,7 +427,7 @@ async fn test_snapshot_store_failure() {
         name: "test_table".to_string(),
         id: 1,
         schema: Arc::new(test_schema()),
-        config: TableConfig::new(),
+        config: TableConfig::default(), // No temp files generated.
         path: PathBuf::from(temp_dir.path()),
         identity: IdentityProp::Keys(vec![0]),
     });
@@ -456,7 +456,7 @@ async fn test_snapshot_store_failure() {
     let mut table = MooncakeTable::new_with_table_manager(
         table_metadata,
         Box::new(mock_table_manager),
-        MooncakeTableConfig::default(),
+        MooncakeTableConfig::default(), // No temp files generated.
     )
     .await
     .unwrap();

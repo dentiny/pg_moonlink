@@ -44,6 +44,7 @@ fn create_iceberg_event_syncer() -> (IcebergEventSyncSender, IcebergEventSyncRec
 pub async fn build_table_components(
     table_schema: &TableSchema,
     base_path: &Path,
+    table_temp_files_directory: String,
     replication_state: &ReplicationState,
 ) -> Result<TableResources> {
     let table_path = PathBuf::from(base_path).join(table_schema.table_name.to_string());
@@ -56,6 +57,7 @@ pub async fn build_table_components(
         // TODO(hjiang): Disable recovery in production, at the moment we only support create new table from scratch.
         drop_table_if_exists: true,
     };
+    let mooncake_table_config = TableConfig::new(table_temp_files_directory);
     let table = MooncakeTable::new(
         arrow_schema,
         table_schema.table_name.to_string(),
@@ -63,7 +65,7 @@ pub async fn build_table_components(
         table_path,
         identity,
         iceberg_table_config,
-        TableConfig::new(),
+        mooncake_table_config,
     )
     .await?;
 

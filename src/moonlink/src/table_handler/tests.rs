@@ -138,8 +138,6 @@ async fn test_stream_delete_unflushed_non_streamed_row() {
     let initial_insert_lsn = 10; // LSN for the non-streaming insert
     let stream_xact_id = 101; // Transaction ID for the streaming delete operation
 
-    println!("Initial insert LSN: {}", initial_insert_lsn);
-
     // The LSN passed to env.delete_row for a streaming op is used for the RawDeletionRecord,
     // but this LSN is typically overridden by the stream_commit_lsn when the transaction commits.
     // We use a distinct value here for clarity, but it's the stream_commit_lsn that's ultimately effective.
@@ -393,21 +391,24 @@ async fn test_streaming_transaction_periodic_flush_then_abort() {
 // This test only checks whether drop table event send and receive works through table handler.
 #[tokio::test]
 async fn test_iceberg_drop_table() {
-    let mut env = TestEnvironment::new(MooncakeTableConfig::default()).await;
+    let temp_dir = tempdir().unwrap();
+    let mut env = TestEnvironment::new(temp_dir, MooncakeTableConfig::default()).await; // No temp files created.
     env.drop_iceberg_table().await.unwrap()
 }
 
 #[tokio::test]
 async fn test_iceberg_snapshot_creation() {
     // Set mooncake and iceberg flush and snapshot threshold to huge value, to verify force flush and force snapshot works as expected.
+    let temp_dir = tempdir().unwrap();
     let mooncake_table_config = MooncakeTableConfig {
         batch_size: MooncakeTableConfig::DEFAULT_BATCH_SIZE,
         mem_slice_size: 1000,
         snapshot_deletion_record_count: 1000,
         iceberg_snapshot_new_data_file_count: 1000,
         iceberg_snapshot_new_committed_deletion_log: 1000,
+        temp_files_directory: temp_dir.path().to_str().unwrap().to_string(),
     };
-    let mut env = TestEnvironment::new(mooncake_table_config.clone()).await;
+    let mut env = TestEnvironment::new(temp_dir, mooncake_table_config.clone()).await;
 
     // Arrow batches used in test.
     let arrow_batch_1 = RecordBatch::try_new(
@@ -581,7 +582,7 @@ async fn test_iceberg_snapshot_creation() {
 #[tokio::test]
 async fn test_iceberg_snapshot_failure_mock_test() {
     let temp_dir = tempdir().unwrap();
-    let mooncake_table_config = TableConfig::new();
+    let mooncake_table_config = TableConfig::new(temp_dir.path().to_str().unwrap().to_string());
     let mooncake_table_metadata = Arc::new(MooncakeTableMetadata {
         name: "table_name".to_string(),
         id: 0,
@@ -637,7 +638,7 @@ async fn test_iceberg_snapshot_failure_mock_test() {
 #[tokio::test]
 async fn test_iceberg_drop_table_failure_mock_test() {
     let temp_dir = tempdir().unwrap();
-    let mooncake_table_config = TableConfig::new();
+    let mooncake_table_config = TableConfig::new(temp_dir.path().to_str().unwrap().to_string());
     let mooncake_table_metadata = Arc::new(MooncakeTableMetadata {
         name: "table_name".to_string(),
         id: 0,
