@@ -685,7 +685,7 @@ mod tests {
 
     #[test]
     fn test_postgres_table_row_to_moonlink_row() {
-        let postgres_table_row: PostgresTableRow = PostgresTableRow(TableRow {
+        let postgres_table_row = PostgresTableRow(TableRow {
             values: vec![
                 Cell::I32(1),
                 Cell::I64(2),
