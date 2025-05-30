@@ -87,7 +87,7 @@ impl<T: Eq + Hash + Clone> MoonlinkBackend<T> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-    use tokio_postgres::{connect, NoTls};
+    use tokio_postgres::{connect, NoTls, Client};
 
     #[test]
     fn test_recreate_directory() {
@@ -109,7 +109,7 @@ mod tests {
     }
 
     /// Test util function to create a table and attempt basic sql statements to verify creation success.
-    async fn test_table_creation(
+    async fn test_table_creation_impl(
         service: &MoonlinkBackend<&'static str>,
         client: &Client,
         uri: &str,
@@ -152,8 +152,8 @@ mod tests {
             }
         });
 
-        test_table_creation(&service, &client, uri).await;
+        test_table_creation_impl(&service, &client, uri).await;
         service.drop_table("test").await.unwrap();
-        test_table_creation(&service, &client, uri).await;
+        test_table_creation_impl(&service, &client, uri).await;
     }
 }
