@@ -109,6 +109,7 @@ impl TableHandler {
                 Some(event) = event_receiver.recv() => {
                     table_consistent_view_lsn = match event {
                         TableEvent::Commit { lsn } => Some(lsn),
+                        TableEvent::StreamCommit { lsn, .. } => Some(lsn),
                         // `ForceSnapshot` event doesn't affect whether mooncake is at a committed state.
                         TableEvent::ForceSnapshot { .. } => table_consistent_view_lsn,
                         _ => None,
@@ -158,9 +159,17 @@ impl TableHandler {
                             }
                         }
                         TableEvent::StreamCommit { lsn, xact_id } => {
-                            // TODO(hiang): Support force snapshot creation.
+                            // Force create snapshot if
+                            // 1. force snapshot is requested
+                            // and 2. LSN which meets force snapshot requirement has appeared, before that we still allow buffering
+                            // and 3. there's no snapshot creation operation ongoing
+                            let need_force_snapshot = force_snapshot_lsn.is_some() && lsn >= force_snapshot_lsn.unwrap() && mooncake_snapshot_handle.is_none();
+
                             if let Err(e) = table.commit_transaction_stream(xact_id, lsn).await {
                                 println!("Stream commit flush failed: {}", e);
+                            }
+                            if need_force_snapshot {
+                                mooncake_snapshot_handle = table.force_create_snapshot();
                             }
                         }
                         TableEvent::StreamAbort { xact_id } => {

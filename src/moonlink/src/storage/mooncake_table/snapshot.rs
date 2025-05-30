@@ -279,8 +279,12 @@ impl SnapshotTableState {
         //
         // TODO(hjiang): Error handling for snapshot sync-up.
         let mut iceberg_snapshot_payload: Option<IcebergSnapshotPayload> = None;
-        let flush_by_data_files =
-            self.create_iceberg_snapshot_by_data_files(new_data_files.as_slice(), force_create);
+        let flush_by_data_files = self.create_iceberg_snapshot_by_data_files(
+            self.unpersisted_iceberg_records
+                .unpersisted_data_files
+                .as_slice(),
+            force_create,
+        );
         let flush_by_deletion_logs = self.create_iceberg_snapshot_by_committed_logs(force_create);
 
         if self.current_snapshot.data_file_flush_lsn.is_some()

@@ -31,6 +31,13 @@ pub struct TransactionStreamCommit {
     pending_deletions: Vec<RawDeletionRecord>,
 }
 
+impl TransactionStreamCommit {
+    /// Get flushed data files for current streaming commit.
+    pub(crate) fn get_flushed_data_files(&self) -> Vec<MooncakeDataFileRef> {
+        self.flushed_files.keys().cloned().collect::<Vec<_>>()
+    }
+}
+
 impl TransactionStreamState {
     fn new(schema: Arc<Schema>, batch_size: usize, identity: IdentityProp) -> Self {
         Self {
