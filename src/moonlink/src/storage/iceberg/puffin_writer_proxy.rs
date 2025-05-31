@@ -21,7 +21,7 @@ use iceberg::io::FileIO;
 use iceberg::puffin::{CompressionCodec, PuffinWriter, DELETION_VECTOR_V1};
 use iceberg::spec::{
     DataContentType, DataFile, DataFileFormat, Datum, FormatVersion, ManifestContentType,
-    ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Struct, TableMetadata,
+    ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Snapshot, Struct, TableMetadata,
 };
 use iceberg::Result as IcebergResult;
 
@@ -284,6 +284,33 @@ fn get_data_file_for_deletion_vector(
     (referenced_data_filepath, data_file)
 }
 
+/// Util function to create manifest list writer and delete current one.
+async fn create_new_manifest_list_writer(
+    table_metadata: &TableMetadata,
+    cur_snapshot: &Snapshot,
+    file_io: &FileIO,
+) -> IcebergResult<ManifestListWriter> {
+    file_io.delete(cur_snapshot.manifest_list()).await?;
+    let manifest_list_outfile = file_io.new_output(cur_snapshot.manifest_list())?;
+
+    let latest_seq_no = table_metadata.last_sequence_number();
+    let manifest_list_writer = if table_metadata.format_version() == FormatVersion::V1 {
+        ManifestListWriter::v1(
+            manifest_list_outfile,
+            cur_snapshot.snapshot_id(),
+            /*parent_snapshot_id=*/ None,
+        )
+    } else {
+        ManifestListWriter::v2(
+            manifest_list_outfile,
+            cur_snapshot.snapshot_id(),
+            /*parent_snapshot_id=*/ None,
+            latest_seq_no,
+        )
+    };
+    Ok(manifest_list_writer)
+}
+
 /// Get all manifest files, keep data files unchanged, and merge existing deletion vectors with puffion deletion vector blob and rewrite it.
 /// For more details, please refer to https://docs.google.com/document/d/1fIvrRfEHWBephsX0Br2G-Ils_30JIkmGkcdbFbovQjI/edit?usp=sharing
 ///
@@ -299,29 +326,14 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
         return Ok(());
     }
 
-    let latest_seq_no = table_metadata.last_sequence_number();
     let cur_snapshot = table_metadata.current_snapshot().unwrap();
     let manifest_list = cur_snapshot
         .load_manifest_list(file_io, table_metadata)
         .await?;
 
     // Delete existing manifest list file and rewrite.
-    file_io.delete(cur_snapshot.manifest_list()).await?;
-    let manifest_list_outfile = file_io.new_output(cur_snapshot.manifest_list())?;
-    let mut manifest_list_writer = if table_metadata.format_version() == FormatVersion::V1 {
-        ManifestListWriter::v1(
-            manifest_list_outfile,
-            cur_snapshot.snapshot_id(),
-            /*parent_snapshot_id=*/ None,
-        )
-    } else {
-        ManifestListWriter::v2(
-            manifest_list_outfile,
-            cur_snapshot.snapshot_id(),
-            /*parent_snapshot_id=*/ None,
-            latest_seq_no,
-        )
-    };
+    let mut manifest_list_writer =
+        create_new_manifest_list_writer(table_metadata, &cur_snapshot, file_io).await?;
 
     // Rewrite the deletion vector manifest files.
     // TODO(hjiang): Double confirm for deletion vector manifest filename.
