@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use crate::storage::iceberg::puffin_utils;
-use crate::storage::index::file_index_id::get_next_file_index_id;
 use crate::storage::index::persisted_bucket_hash_map::IndexBlock as MooncakeIndexBlock;
 /// This module defines the file index struct used for iceberg, which corresponds to in-memory mooncake table file index structs, and supports the serde between mooncake table format and iceberg format.
 use crate::storage::index::FileIndex as MooncakeFileIndex;
@@ -98,7 +97,6 @@ impl FileIndex {
         let index_blocks = futures::future::join_all(index_block_futures).await;
 
         MooncakeFileIndex {
-            global_index_id: get_next_file_index_id(),
             files: self
                 .data_files
                 .iter()
@@ -231,7 +229,6 @@ mod tests {
         let local_data_file = create_data_file(/*file_id=*/ 0, local_data_filepath.clone());
 
         let original_mooncake_file_index = MooncakeFileIndex {
-            global_index_id: 0,
             num_rows: 10,
             hash_bits: 10,
             hash_upper_bits: 4,
