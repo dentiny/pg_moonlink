@@ -293,9 +293,12 @@ fn get_data_file_for_deletion_vector(
 pub(crate) async fn append_puffin_metadata_and_rewrite(
     table_metadata: &TableMetadata,
     file_io: &FileIO,
-    puffin_filepath: &str,
-    blob_metadata: Vec<PuffinBlobMetadataProxy>,
+    puffin_blobs: &HashMap<String, Vec<PuffinBlobMetadataProxy>>,
 ) -> IcebergResult<()> {
+    if puffin_blobs.is_empty() {
+        return Ok(());
+    }
+
     let latest_seq_no = table_metadata.last_sequence_number();
     let cur_snapshot = table_metadata.current_snapshot().unwrap();
     let manifest_list = cur_snapshot
@@ -401,30 +404,34 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
     }
 
     // Append puffin blobs into existing manifest entries.
-    for cur_blob_metadata in blob_metadata.iter() {
-        // Handle mooncake hash index v1.
-        if cur_blob_metadata.r#type == MOONCAKE_HASH_INDEX_V1 {
-            let new_data_file = get_data_file_for_file_index(puffin_filepath, cur_blob_metadata);
+    for (puffin_filepath, blob_metadata) in puffin_blobs.iter() {
+        for cur_blob_metadata in blob_metadata.iter() {
+            // Handle mooncake hash index v1.
+            if cur_blob_metadata.r#type == MOONCAKE_HASH_INDEX_V1 {
+                let new_data_file =
+                    get_data_file_for_file_index(puffin_filepath, cur_blob_metadata);
+                let data_file =
+                    unsafe { std::mem::transmute::<DataFileProxy, DataFile>(new_data_file) };
+                init_file_index_manifest_writer(&mut file_index_manifest_writer)?;
+                file_index_manifest_writer
+                    .as_mut()
+                    .unwrap()
+                    .add_file(data_file, cur_blob_metadata.sequence_number)?;
+                continue;
+            }
+
+            // Handle deletion vectors.
+            let (referenced_data_filepath, new_data_file) =
+                get_data_file_for_deletion_vector(puffin_filepath, cur_blob_metadata);
+            existing_deletion_vector_entries.remove(&referenced_data_filepath);
             let data_file =
                 unsafe { std::mem::transmute::<DataFileProxy, DataFile>(new_data_file) };
-            init_file_index_manifest_writer(&mut file_index_manifest_writer)?;
-            file_index_manifest_writer
+            init_deletion_vector_manifest_writer_for_once(&mut deletion_vector_manifest_writer)?;
+            deletion_vector_manifest_writer
                 .as_mut()
                 .unwrap()
                 .add_file(data_file, cur_blob_metadata.sequence_number)?;
-            continue;
         }
-
-        // Handle deletion vectors.
-        let (referenced_data_filepath, new_data_file) =
-            get_data_file_for_deletion_vector(puffin_filepath, cur_blob_metadata);
-        existing_deletion_vector_entries.remove(&referenced_data_filepath);
-        let data_file = unsafe { std::mem::transmute::<DataFileProxy, DataFile>(new_data_file) };
-        init_deletion_vector_manifest_writer_for_once(&mut deletion_vector_manifest_writer)?;
-        deletion_vector_manifest_writer
-            .as_mut()
-            .unwrap()
-            .add_file(data_file, cur_blob_metadata.sequence_number)?;
     }
 
     // Add old deletion vector entries which doesn't get overwritten.
