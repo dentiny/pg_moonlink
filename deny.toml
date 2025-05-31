@@ -5,9 +5,9 @@ allow = [
     "Unicode-3.0",
     "Zlib",
     "BSD-3-Clause",
-    "CC0-1.0",
-    "ISC",
-    "CDLA-Permissive-2.0",
+    # "CC0-1.0",
+    # "ISC",
+    # "CDLA-Permissive-2.0",
     # Moonlink permission.
     "LicenseRef-BSL-1.1",
 ]
