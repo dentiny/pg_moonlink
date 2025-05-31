@@ -105,6 +105,11 @@ impl DiskSliceWriter {
         self.files.as_slice()
     }
 
+    /// Get the list of files in the DiskSlice
+    pub(crate) fn get_file_indice(&self) -> Option<FileIndex> {
+        self.new_index.clone()
+    }
+
     pub(super) fn old_index(&self) -> &Arc<MemIndex> {
         &self.old_index
     }

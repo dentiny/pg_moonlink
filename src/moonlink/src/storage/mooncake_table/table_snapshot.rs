@@ -11,13 +11,11 @@ use std::collections::HashMap;
 pub struct IcebergSnapshotPayload {
     /// Flush LSN.
     pub(crate) flush_lsn: u64,
-    /// New data files to introduce to iceberg table.
+    /// New data files to introduce to the iceberg table.
     pub(crate) data_files: Vec<MooncakeDataFileRef>,
     /// Maps from data filepath to its latest deletion vector.
     pub(crate) new_deletion_vector: Vec<(MooncakeDataFileRef, BatchDeletionVector)>,
-    /// All file indices which have been persisted locally.
-    ///
-    /// TODO(hjiang): It's ok to take only new moooncake file index, instead of all file indices.
+    /// New data files to import to the iceberg table.
     pub(crate) file_indices: Vec<MooncakeFileIndex>,
 }
 
@@ -31,4 +29,6 @@ pub(crate) struct IcebergSnapshotResult {
     pub(crate) new_data_files: Vec<MooncakeDataFileRef>,
     /// Persisted puffin blob reference.
     pub(crate) puffin_blob_ref: HashMap<MooncakeDataFileRef, PuffinBlobRef>,
+    /// Persisted file indices.
+    pub(crate) new_file_indices: Vec<MooncakeFileIndex>,
 }

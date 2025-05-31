@@ -32,9 +32,13 @@ pub struct TransactionStreamCommit {
 }
 
 impl TransactionStreamCommit {
-    /// Get flushed data files for current streaming commit.
+    /// Get flushed data files for the current streaming commit.
     pub(crate) fn get_flushed_data_files(&self) -> Vec<MooncakeDataFileRef> {
         self.flushed_files.keys().cloned().collect::<Vec<_>>()
+    }
+    /// Get flushed file indices for the current streaming commit.
+    pub(crate) fn get_file_indices(&self) -> Vec<FileIndex> {
+        self.flushed_file_index.file_indices.clone()
     }
 }
 

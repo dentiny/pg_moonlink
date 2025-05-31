@@ -8,7 +8,7 @@ mod table_snapshot;
 mod transaction_stream;
 
 use super::iceberg::puffin_utils::PuffinBlobRef;
-use super::index::{MemIndex, MooncakeIndex};
+use super::index::{FileIndex, MemIndex, MooncakeIndex};
 use super::storage_utils::{MooncakeDataFileRef, RawDeletionRecord, RecordLocation};
 use crate::error::{Error, Result};
 use crate::row::{IdentityProp, MoonlinkRow};
@@ -218,6 +218,8 @@ pub struct SnapshotTask {
     iceberg_persisted_data_files: Vec<MooncakeDataFileRef>,
     /// Puffin blobs which have been persisted into iceberg snapshot.
     iceberg_persisted_puffin_blob: HashMap<MooncakeDataFileRef, PuffinBlobRef>,
+    /// Persisted new file indices.
+    iceberg_persisted_file_indices: Vec<FileIndex>,
 }
 
 impl SnapshotTask {
@@ -237,6 +239,7 @@ impl SnapshotTask {
             iceberg_flush_lsn: None,
             iceberg_persisted_data_files: Vec::new(),
             iceberg_persisted_puffin_blob: HashMap::new(),
+            iceberg_persisted_file_indices: Vec::new(),
         }
     }
 
@@ -269,6 +272,28 @@ impl SnapshotTask {
         }
 
         new_files
+    }
+
+    /// Get newly created file indices, including both batch write ones and stream write ones.
+    pub(crate) fn get_new_file_indices(&self) -> Vec<FileIndex> {
+        let mut new_file_indices = vec![];
+
+        // Batch write file indices.
+        for cur_disk_slice in self.new_disk_slices.iter() {
+            let file_indice = cur_disk_slice.get_file_indice();
+            if let Some(file_indice) = file_indice {
+                new_file_indices.push(file_indice);
+            }
+        }
+
+        // Stream write file indices.
+        for cur_stream_xact in self.new_streaming_xact.iter() {
+            if let TransactionStreamOutput::Commit(cur_stream_commit) = cur_stream_xact {
+                new_file_indices.extend(cur_stream_commit.get_file_indices());
+            }
+        }
+
+        new_file_indices
     }
 }
 
@@ -392,6 +417,13 @@ impl MooncakeTable {
             .is_empty());
         self.next_snapshot_task.iceberg_persisted_puffin_blob =
             iceberg_snapshot_res.puffin_blob_ref;
+
+        assert!(self
+            .next_snapshot_task
+            .iceberg_persisted_file_indices
+            .is_empty());
+        self.next_snapshot_task.iceberg_persisted_file_indices =
+            iceberg_snapshot_res.new_file_indices;
     }
 
     /// Get iceberg snapshot flush LSN.
@@ -553,6 +585,7 @@ impl MooncakeTable {
     ) -> Result<IcebergSnapshotResult> {
         let flush_lsn = snapshot_payload.flush_lsn;
         let new_data_files = snapshot_payload.data_files.clone();
+        let new_file_indices = snapshot_payload.file_indices.clone();
         let puffin_blob_ref = iceberg_table_manager
             .sync_snapshot(snapshot_payload)
             .await?;
@@ -560,6 +593,7 @@ impl MooncakeTable {
             table_manager: iceberg_table_manager,
             flush_lsn,
             new_data_files,
+            new_file_indices,
             puffin_blob_ref,
         })
     }

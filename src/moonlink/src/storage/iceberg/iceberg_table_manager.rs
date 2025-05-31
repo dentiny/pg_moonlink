@@ -126,9 +126,6 @@ pub struct IcebergTableManager {
     ///
     /// TODO(hjiang): Consider using `MooncakeDataFileRef` as map key.
     pub(crate) persisted_data_files: HashMap<String, DataFileEntry>,
-
-    /// A set of file index id which has been managed by the iceberg table.
-    pub(crate) persisted_file_index_ids: HashSet<u32>,
 }
 
 impl IcebergTableManager {
@@ -143,7 +140,6 @@ impl IcebergTableManager {
             catalog,
             iceberg_table: None,
             persisted_data_files: HashMap::new(),
-            persisted_file_index_ids: HashSet::new(),
         })
     }
 
@@ -217,10 +213,6 @@ impl IcebergTableManager {
             .iter_mut()
             .map(|cur_file_index| cur_file_index.as_mooncake_file_index());
         let file_indices = futures::future::join_all(file_index_futures).await;
-        for mooncake_file_index in file_indices.iter() {
-            self.persisted_file_index_ids
-                .insert(mooncake_file_index.global_index_id);
-        }
 
         Ok(file_indices)
     }
@@ -447,7 +439,7 @@ impl IcebergTableManager {
         file_indices: &[MooncakeFileIndex],
         local_data_file_to_remote: HashMap<MooncakeDataFileRef, String>,
     ) -> IcebergResult<()> {
-        if file_indices.len() == self.persisted_file_index_ids.len() {
+        if file_indices.is_empty() {
             return Ok(());
         }
 
@@ -464,26 +456,18 @@ impl IcebergTableManager {
         // The hash map here is merely a workaround to pass remote path to iceberg file index structure.
         let mut local_index_file_to_remote = HashMap::new();
 
-        let mut new_file_indices: Vec<&MooncakeFileIndex> =
-            Vec::with_capacity(file_indices.len() - self.persisted_file_index_ids.len());
+        let mut new_file_indices: Vec<&MooncakeFileIndex> = Vec::with_capacity(file_indices.len());
         for cur_file_index in file_indices.iter() {
-            // An un-persisted index file index.
-            if self
-                .persisted_file_index_ids
-                .insert(cur_file_index.global_index_id)
-            {
-                // Record new index file id.
-                new_file_indices.push(cur_file_index);
-                // Upload new index file to iceberg table.
-                for cur_index_block in cur_file_index.index_blocks.iter() {
-                    let remote_index_block = utils::upload_index_file(
-                        self.iceberg_table.as_ref().unwrap(),
-                        &cur_index_block.file_path,
-                    )
-                    .await?;
-                    local_index_file_to_remote
-                        .insert(cur_index_block.file_path.clone(), remote_index_block);
-                }
+            new_file_indices.push(cur_file_index);
+            // Upload new index file to iceberg table.
+            for cur_index_block in cur_file_index.index_blocks.iter() {
+                let remote_index_block = utils::upload_index_file(
+                    self.iceberg_table.as_ref().unwrap(),
+                    &cur_index_block.file_path,
+                )
+                .await?;
+                local_index_file_to_remote
+                    .insert(cur_index_block.file_path.clone(), remote_index_block);
             }
         }
 
@@ -554,8 +538,6 @@ impl TableManager for IcebergTableManager {
     }
 
     async fn load_snapshot_from_table(&mut self) -> IcebergResult<MooncakeSnapshot> {
-        assert!(self.persisted_file_index_ids.is_empty());
-
         // Handle cases which iceberg table doesn't exist.
         self.initialize_iceberg_table_if_exists().await?;
         if self.iceberg_table.is_none() {

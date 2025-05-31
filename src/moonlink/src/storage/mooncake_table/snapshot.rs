@@ -7,7 +7,7 @@ use super::{
 use crate::error::Result;
 use crate::storage::iceberg::iceberg_table_manager::TableManager;
 use crate::storage::iceberg::puffin_utils::PuffinBlobRef;
-use crate::storage::index::Index;
+use crate::storage::index::{FileIndex, Index};
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 use crate::storage::mooncake_table::MoonlinkRow;
 use crate::storage::storage_utils::FileId;
@@ -66,10 +66,12 @@ pub struct PuffinDeletionBlobAtRead {
     pub blob_size: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 struct UnpersistedIcebergSnapshotRecords {
     /// Unpersisted data files, new data files are appended to the end.
     unpersisted_data_files: Vec<MooncakeDataFileRef>,
+    /// Unpersisted file indices, new file indices are appended to the end.
+    unpersisted_file_indices: Vec<FileIndex>,
 }
 
 pub struct ReadOutput {
@@ -107,6 +109,7 @@ impl SnapshotTableState {
             uncommitted_deletion_log: Vec::new(),
             unpersisted_iceberg_records: UnpersistedIcebergSnapshotRecords {
                 unpersisted_data_files: Vec::new(),
+                unpersisted_file_indices: Vec::new(),
             },
         })
     }
@@ -209,6 +212,18 @@ impl SnapshotTableState {
             .drain(0..persisted_new_data_files.len());
     }
 
+    /// Update unpersisted file indices from successful iceberg snapshot operation.
+    fn prune_persisted_file_indices(&mut self, persisted_new_file_indices: Vec<FileIndex>) {
+        assert!(self.unpersisted_iceberg_records.unpersisted_file_indices.len() >= persisted_new_file_indices.len(),
+            "There're in total {} unpersisted file indices, but successful iceberg snapshot shows {} file indices persisted.",
+            self.unpersisted_iceberg_records.unpersisted_file_indices.len(),
+            persisted_new_file_indices.len());
+
+        self.unpersisted_iceberg_records
+            .unpersisted_file_indices
+            .drain(0..persisted_new_file_indices.len());
+    }
+
     /// Util function to decide whether to create iceberg snapshot by new data files.
     fn create_iceberg_snapshot_by_data_files(
         &self,
@@ -242,6 +257,7 @@ impl SnapshotTableState {
         // Reflect iceberg snapshot to mooncake snapshot.
         self.prune_committed_deletion_logs(&task);
         self.prune_persisted_data_files(std::mem::take(&mut task.iceberg_persisted_data_files));
+        self.prune_persisted_file_indices(std::mem::take(&mut task.iceberg_persisted_file_indices));
         self.update_current_snapshot_with_iceberg_snapshot(std::mem::take(
             &mut task.iceberg_persisted_puffin_blob,
         ));
@@ -250,6 +266,7 @@ impl SnapshotTableState {
         //
         // To reduce iceberg write frequency, only create new iceberg snapshot when there're new data files.
         let new_data_files = task.get_new_data_files();
+        let new_file_indices = task.get_new_file_indices();
 
         self.apply_transaction_stream(&mut task);
         self.merge_mem_indices(&mut task);
@@ -272,7 +289,10 @@ impl SnapshotTableState {
         // Batch new data files, whether we decide to create an iceberg snapshot.
         self.unpersisted_iceberg_records
             .unpersisted_data_files
-            .extend(new_data_files.clone());
+            .extend(new_data_files);
+        self.unpersisted_iceberg_records
+            .unpersisted_file_indices
+            .extend(new_file_indices);
 
         // Till this point, committed changes have been reflected to current snapshot; sync the latest change to iceberg.
         // To reduce iceberg persistence overhead, we only snapshot when (1) there're persisted data files, or (2) accumulated unflushed deletion vector exceeds threshold.
@@ -301,7 +321,10 @@ impl SnapshotTableState {
                     .unpersisted_data_files
                     .to_vec(),
                 new_deletion_vector: aggregated_committed_deletion_logs,
-                file_indices: self.current_snapshot.indices.file_indices.clone(),
+                file_indices: self
+                    .unpersisted_iceberg_records
+                    .unpersisted_file_indices
+                    .to_vec(),
             });
         }
 
