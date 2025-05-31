@@ -8,6 +8,6 @@ RUN apt update && \
 # Switch to vscode user for cargo installations, otherwise later cargo commands required root permission.
 USER vscode
 
-RUN cargo install cargo-sort
+RUN cargo install cargo-sort cargo-deny
 
 WORKDIR /workspaces/moonlink
