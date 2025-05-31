@@ -311,6 +311,25 @@ async fn create_new_manifest_list_writer(
     Ok(manifest_list_writer)
 }
 
+/// Util function to create manifest write.
+fn create_manifest_writer_builder(
+    table_metadata: &TableMetadata,
+    file_io: &FileIO,
+) -> IcebergResult<ManifestWriterBuilder> {
+    let manifest_writer_builder = ManifestWriterBuilder::new(
+        file_io.new_output(format!(
+            "{}/metadata/{}-m0.avro",
+            table_metadata.location(),
+            Uuid::new_v4()
+        ))?,
+        table_metadata.current_snapshot_id(),
+        /*key_metadata=*/ vec![],
+        table_metadata.current_schema().clone(),
+        table_metadata.default_partition_spec().as_ref().clone(),
+    );
+    Ok(manifest_writer_builder)
+}
+
 /// Get all manifest files, keep data files unchanged, and merge existing deletion vectors with puffion deletion vector blob and rewrite it.
 /// For more details, please refer to https://docs.google.com/document/d/1fIvrRfEHWBephsX0Br2G-Ils_30JIkmGkcdbFbovQjI/edit?usp=sharing
 ///
@@ -344,18 +363,8 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
             if writer.is_some() {
                 return Ok(());
             }
-            let new_writer = ManifestWriterBuilder::new(
-                file_io.new_output(format!(
-                    "{}/metadata/{}-m0.avro",
-                    table_metadata.location(),
-                    Uuid::new_v4()
-                ))?,
-                table_metadata.current_snapshot_id(),
-                /*key_metadata=*/ vec![],
-                table_metadata.current_schema().clone(),
-                table_metadata.default_partition_spec().as_ref().clone(),
-            )
-            .build_v2_deletes();
+            let new_writer_builder = create_manifest_writer_builder(table_metadata, file_io)?;
+            let new_writer = new_writer_builder.build_v2_deletes();
             *writer = Some(new_writer);
             Ok(())
         };
@@ -366,18 +375,8 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
             if writer.is_some() {
                 return Ok(());
             }
-            let new_writer = ManifestWriterBuilder::new(
-                file_io.new_output(format!(
-                    "{}/metadata/{}-m0.avro",
-                    table_metadata.location(),
-                    Uuid::new_v4()
-                ))?,
-                table_metadata.current_snapshot_id(),
-                /*key_metadata=*/ vec![],
-                table_metadata.current_schema().clone(),
-                table_metadata.default_partition_spec().as_ref().clone(),
-            )
-            .build_v2_data();
+            let new_writer_builder = create_manifest_writer_builder(table_metadata, file_io)?;
+            let new_writer = new_writer_builder.build_v2_data();
             *writer = Some(new_writer);
             Ok(())
         };
