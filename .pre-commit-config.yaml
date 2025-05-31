@@ -24,3 +24,9 @@ repos:
         files: '\.rs$'
         entry: cargo clippy --all-targets --all-features -- -D warnings
         pass_filenames: false
+      - id: check-dependency-license
+        name: check-dependency-license
+        language: system
+        files: '\.toml$'
+        entry: cargo deny check
+        pass_filenames: false
