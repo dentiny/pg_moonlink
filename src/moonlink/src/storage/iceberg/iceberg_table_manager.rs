@@ -110,6 +110,9 @@ pub(crate) struct DataFileEntry {
 /// 2. Support a deletion vector handle, which is a remote file path, with an optional in-memory buffer and a local cache filepath.
 #[derive(Debug)]
 pub struct IcebergTableManager {
+    /// Iceberg snapshot should be loaded only once at recovery, this boolean records whether recovery has attempted.
+    snapshot_loaded: bool,
+
     /// Iceberg table configuration.
     pub(crate) config: IcebergTableConfig,
 
@@ -135,6 +138,7 @@ impl IcebergTableManager {
     ) -> IcebergResult<IcebergTableManager> {
         let catalog = utils::create_catalog(&config.warehouse_uri)?;
         Ok(Self {
+            snapshot_loaded: false,
             config,
             mooncake_table_metadata,
             catalog,
@@ -538,6 +542,9 @@ impl TableManager for IcebergTableManager {
     }
 
     async fn load_snapshot_from_table(&mut self) -> IcebergResult<MooncakeSnapshot> {
+        assert!(!self.snapshot_loaded);
+        self.snapshot_loaded = true;
+
         // Handle cases which iceberg table doesn't exist.
         self.initialize_iceberg_table_if_exists().await?;
         if self.iceberg_table.is_none() {
