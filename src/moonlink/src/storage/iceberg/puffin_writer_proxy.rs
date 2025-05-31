@@ -209,9 +209,9 @@ pub(crate) async fn get_puffin_metadata_and_close(
 fn get_data_file_for_file_index(
     puffin_filepath: &str,
     blob_metadata: &PuffinBlobMetadataProxy,
-) -> DataFileProxy {
+) -> DataFile {
     assert_eq!(blob_metadata.r#type, MOONCAKE_HASH_INDEX_V1);
-    DataFileProxy {
+    let data_file_proxy = DataFileProxy {
         content: DataContentType::Data,
         file_path: puffin_filepath.to_string(),
         file_format: DataFileFormat::Puffin,
@@ -238,14 +238,15 @@ fn get_data_file_for_file_index(
         referenced_data_file: None,
         content_offset: None,
         content_size_in_bytes: None,
-    }
+    };
+    unsafe { std::mem::transmute::<DataFileProxy, DataFile>(data_file_proxy) }
 }
 
 /// Util function to get `DataFileProxy` for deletion vector puffin blob.
 fn get_data_file_for_deletion_vector(
     puffin_filepath: &str,
     blob_metadata: &PuffinBlobMetadataProxy,
-) -> (String /*referenced_data_filepath*/, DataFileProxy) {
+) -> (String /*referenced_data_filepath*/, DataFile) {
     assert_eq!(blob_metadata.r#type, DELETION_VECTOR_V1);
     let referenced_data_filepath = blob_metadata
         .properties
@@ -253,7 +254,7 @@ fn get_data_file_for_deletion_vector(
         .unwrap()
         .clone();
 
-    let data_file = DataFileProxy {
+    let data_file_proxy = DataFileProxy {
         content: DataContentType::PositionDeletes,
         file_path: puffin_filepath.to_string(),
         file_format: DataFileFormat::Puffin,
@@ -281,6 +282,7 @@ fn get_data_file_for_deletion_vector(
         content_offset: Some(blob_metadata.offset as i64),
         content_size_in_bytes: Some(blob_metadata.length as i64),
     };
+    let data_file = unsafe { std::mem::transmute::<DataFileProxy, DataFile>(data_file_proxy) };
     (referenced_data_filepath, data_file)
 }
 
@@ -419,10 +421,7 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
         for cur_blob_metadata in blob_metadata.iter() {
             // Handle mooncake hash index v1.
             if cur_blob_metadata.r#type == MOONCAKE_HASH_INDEX_V1 {
-                let new_data_file =
-                    get_data_file_for_file_index(puffin_filepath, cur_blob_metadata);
-                let data_file =
-                    unsafe { std::mem::transmute::<DataFileProxy, DataFile>(new_data_file) };
+                let data_file = get_data_file_for_file_index(puffin_filepath, cur_blob_metadata);
                 init_file_index_manifest_writer(&mut file_index_manifest_writer)?;
                 file_index_manifest_writer
                     .as_mut()
@@ -432,11 +431,9 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
             }
 
             // Handle deletion vectors.
-            let (referenced_data_filepath, new_data_file) =
+            let (referenced_data_filepath, data_file) =
                 get_data_file_for_deletion_vector(puffin_filepath, cur_blob_metadata);
             existing_deletion_vector_entries.remove(&referenced_data_filepath);
-            let data_file =
-                unsafe { std::mem::transmute::<DataFileProxy, DataFile>(new_data_file) };
             init_deletion_vector_manifest_writer_for_once(&mut deletion_vector_manifest_writer)?;
             deletion_vector_manifest_writer
                 .as_mut()
