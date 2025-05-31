@@ -354,7 +354,7 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
 
     // Delete existing manifest list file and rewrite.
     let mut manifest_list_writer =
-        create_new_manifest_list_writer(table_metadata, &cur_snapshot, file_io).await?;
+        create_new_manifest_list_writer(table_metadata, cur_snapshot, file_io).await?;
 
     // Rewrite the deletion vector manifest files.
     // TODO(hjiang): Double confirm for deletion vector manifest filename.
