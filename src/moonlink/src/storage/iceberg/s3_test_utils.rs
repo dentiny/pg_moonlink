@@ -1,5 +1,3 @@
-#![cfg(feature = "storage-s3")]
-
 /// This module provides a few test util functions.
 use crate::storage::iceberg::file_catalog::{CatalogConfig, FileCatalog};
 

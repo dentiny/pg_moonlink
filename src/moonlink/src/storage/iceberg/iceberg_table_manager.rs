@@ -164,9 +164,13 @@ impl IcebergTableManager {
     }
 
     /// Get or create an iceberg table based on the iceberg manager config.
-    pub(crate) async fn initialize_iceberg_table(&mut self) -> IcebergResult<()> {
+    ///
+    /// This function is executed in a lazy style, so no iceberg table will get created if
+    /// (1) It doesn't exist before any mooncake table events
+    /// (2) Iceberg snapshot is not requested to create
+    pub(crate) async fn initialize_iceberg_table_for_once(&mut self) -> IcebergResult<()> {
         if self.iceberg_table.is_none() {
-            let table = utils::get_iceberg_table(
+            let table = utils::get_or_create_iceberg_table(
                 &*self.catalog,
                 &self.config.warehouse_uri,
                 &self.config.namespace,
@@ -177,6 +181,18 @@ impl IcebergTableManager {
             .await?;
             self.iceberg_table = Some(table);
         }
+        Ok(())
+    }
+
+    /// Initialize table if it exists.
+    pub(crate) async fn initialize_iceberg_table_if_exists(&mut self) -> IcebergResult<()> {
+        assert!(self.iceberg_table.is_none());
+        self.iceberg_table = utils::get_table_if_exists(
+            &*self.catalog,
+            &self.config.namespace,
+            &self.config.table_name,
+        )
+        .await?;
         Ok(())
     }
 
@@ -496,7 +512,7 @@ impl TableManager for IcebergTableManager {
         mut snapshot_payload: IcebergSnapshotPayload,
     ) -> IcebergResult<HashMap<MooncakeDataFileRef, PuffinBlobRef>> {
         // Initialize iceberg table on access.
-        self.initialize_iceberg_table().await?;
+        self.initialize_iceberg_table_for_once().await?;
 
         // Persist data files.
         let (new_iceberg_data_files, local_data_file_to_remote) = self
@@ -540,14 +556,19 @@ impl TableManager for IcebergTableManager {
     async fn load_snapshot_from_table(&mut self) -> IcebergResult<MooncakeSnapshot> {
         assert!(self.persisted_file_index_ids.is_empty());
 
-        self.initialize_iceberg_table().await?;
+        // Handle cases which iceberg table doesn't exist.
+        self.initialize_iceberg_table_if_exists().await?;
+        if self.iceberg_table.is_none() {
+            return Ok(MooncakeSnapshot::new(self.mooncake_table_metadata.clone()));
+        }
+
         let table_metadata = self.iceberg_table.as_ref().unwrap().metadata();
         let mut flush_lsn: Option<u64> = None;
         if let Some(lsn) = table_metadata.properties().get(MOONCAKE_TABLE_FLUSH_LSN) {
             flush_lsn = Some(lsn.parse().unwrap());
         }
 
-        // There's nothing stored in iceberg table (aka, first time initialization).
+        // There's nothing stored in iceberg table.
         if table_metadata.current_snapshot().is_none() {
             return Ok(MooncakeSnapshot::new(self.mooncake_table_metadata.clone()));
         }

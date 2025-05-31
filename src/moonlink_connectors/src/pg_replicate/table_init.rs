@@ -21,7 +21,7 @@ pub struct TableComponents {
 pub struct TableResources {
     pub event_sender: Sender<TableEvent>,
     pub read_state_manager: ReadStateManager,
-    pub iceberg_snapshot_manager: IcebergTableEventManager,
+    pub iceberg_table_event_manager: IcebergTableEventManager,
     pub commit_lsn_tx: watch::Sender<u64>,
 }
 
@@ -74,14 +74,14 @@ pub async fn build_table_components(
         ReadStateManager::new(&table, replication_state.subscribe(), commit_lsn_rx);
     let (iceberg_event_sync_sender, iceberg_event_sync_receiver) = create_iceberg_event_syncer();
     let handler = TableHandler::new(table, iceberg_event_sync_sender);
-    let iceberg_snapshot_manager =
+    let iceberg_table_event_manager =
         IcebergTableEventManager::new(handler.get_event_sender(), iceberg_event_sync_receiver);
     let event_sender = handler.get_event_sender();
 
     Ok(TableResources {
         event_sender,
         read_state_manager,
-        iceberg_snapshot_manager,
+        iceberg_table_event_manager,
         commit_lsn_tx,
     })
 }

@@ -141,22 +141,24 @@ fn bench_write(c: &mut Criterion) {
                         );
                     }
                     let handle = table.flush_transaction_stream(1);
-                    let _ = handle.await.unwrap();
+                    handle.await.unwrap();
                 });
                 table
             },
             |mut table| {
                 rt.block_on(async {
                     for i in 0..1000000 {
-                        let _ = table.delete_in_stream_batch(
-                            MoonlinkRow {
-                                values: vec![RowValue::Int32(i)],
-                            },
-                            1,
-                        );
+                        table
+                            .delete_in_stream_batch(
+                                MoonlinkRow {
+                                    values: vec![RowValue::Int32(i)],
+                                },
+                                1,
+                            )
+                            .await;
                     }
                     let handle = table.flush_transaction_stream(1);
-                    let _ = handle.await.unwrap();
+                    handle.await.unwrap();
                     //let handle = table.create_snapshot();
                     //let _ = handle.unwrap().await.unwrap();
                 });

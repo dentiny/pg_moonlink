@@ -273,6 +273,12 @@ pub struct GlobalIndexBuilder {
     directory: PathBuf,
 }
 
+impl Default for GlobalIndexBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GlobalIndexBuilder {
     pub fn new() -> Self {
         Self {

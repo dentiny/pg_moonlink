@@ -807,6 +807,15 @@ async fn test_iceberg_snapshot_creation_for_streaming_write() {
     env.sync_snapshot_completion().await.unwrap();
 }
 
+/// Testing scenario: iceberg snapshot request shouldn't block, even if there's no write operations to the table.
+#[tokio::test]
+async fn test_empty_table_snapshot_creation() {
+    let temp_dir = tempdir().unwrap();
+    let mut env = TestEnvironment::new(temp_dir, MooncakeTableConfig::default()).await;
+    env.initiate_snapshot(/*lsn=*/ 0).await;
+    env.sync_snapshot_completion().await.unwrap();
+}
+
 /// ---- Mock unit test ----
 #[tokio::test]
 async fn test_iceberg_snapshot_failure_mock_test() {
