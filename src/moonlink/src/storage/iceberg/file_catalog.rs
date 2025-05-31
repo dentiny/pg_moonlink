@@ -719,18 +719,8 @@ impl Catalog for FileCatalog {
 
         // Manifest files and manifest list has persisted into storage, make modifications based on puffin blobs.
         //
-        // TODO(hjiang):
-        // 1. Add unit test for update and check manifest population.
-        // 2. Here for possible deletion vector and hash index, we potentially rewrite manifest file for data files for twice.
-        for (puffin_filepath, puffin_blob_metadata) in self.puffin_blobs.iter() {
-            append_puffin_metadata_and_rewrite(
-                &metadata,
-                &self.file_io,
-                puffin_filepath,
-                puffin_blob_metadata.clone(),
-            )
-            .await?;
-        }
+        // TODO(hjiang): Add unit test for update and check manifest population.
+        append_puffin_metadata_and_rewrite(&metadata, &self.file_io, &self.puffin_blobs).await?;
 
         // Write version hint file.
         let version_hint_path = format!("{}/version-hint.text", metadata_directory);
