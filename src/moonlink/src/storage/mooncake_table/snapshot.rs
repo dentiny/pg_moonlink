@@ -321,10 +321,11 @@ impl SnapshotTableState {
                     .unpersisted_data_files
                     .to_vec(),
                 new_deletion_vector: aggregated_committed_deletion_logs,
-                file_indices: self
+                file_indices_to_import: self
                     .unpersisted_iceberg_records
                     .unpersisted_file_indices
                     .to_vec(),
+                file_indices_to_remove: vec![],
             });
         }
 

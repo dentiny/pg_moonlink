@@ -15,8 +15,10 @@ pub struct IcebergSnapshotPayload {
     pub(crate) data_files: Vec<MooncakeDataFileRef>,
     /// Maps from data filepath to its latest deletion vector.
     pub(crate) new_deletion_vector: Vec<(MooncakeDataFileRef, BatchDeletionVector)>,
-    /// New data files to import to the iceberg table.
-    pub(crate) file_indices: Vec<MooncakeFileIndex>,
+    /// New file indices to import to the iceberg table.
+    pub(crate) file_indices_to_import: Vec<MooncakeFileIndex>,
+    /// Merged file indices to remove from the iceberg table.
+    pub(crate) file_indices_to_remove: Vec<MooncakeFileIndex>,
 }
 
 /// Return type of async iceberg snapshot creation.
@@ -29,6 +31,9 @@ pub(crate) struct IcebergSnapshotResult {
     pub(crate) new_data_files: Vec<MooncakeDataFileRef>,
     /// Persisted puffin blob reference.
     pub(crate) puffin_blob_ref: HashMap<MooncakeDataFileRef, PuffinBlobRef>,
-    /// Persisted file indices.
-    pub(crate) new_file_indices: Vec<MooncakeFileIndex>,
+    /// Imported file indices.
+    pub(crate) imported_file_indices: Vec<MooncakeFileIndex>,
+    /// Removed file indices.
+    #[allow(dead_code)]
+    pub(crate) removed_file_indices: Vec<MooncakeFileIndex>,
 }

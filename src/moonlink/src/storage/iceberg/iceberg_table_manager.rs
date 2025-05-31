@@ -513,8 +513,11 @@ impl TableManager for IcebergTableManager {
             .await?;
 
         // Persist file index changes.
-        self.sync_file_indices(&snapshot_payload.file_indices, local_data_file_to_remote)
-            .await?;
+        self.sync_file_indices(
+            &snapshot_payload.file_indices_to_import,
+            local_data_file_to_remote,
+        )
+        .await?;
 
         // Only start append action when there're new data files.
         let mut txn = Transaction::new(self.iceberg_table.as_ref().unwrap());

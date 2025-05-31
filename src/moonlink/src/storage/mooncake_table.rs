@@ -423,7 +423,7 @@ impl MooncakeTable {
             .iceberg_persisted_file_indices
             .is_empty());
         self.next_snapshot_task.iceberg_persisted_file_indices =
-            iceberg_snapshot_res.new_file_indices;
+            iceberg_snapshot_res.imported_file_indices;
     }
 
     /// Get iceberg snapshot flush LSN.
@@ -585,7 +585,8 @@ impl MooncakeTable {
     ) -> Result<IcebergSnapshotResult> {
         let flush_lsn = snapshot_payload.flush_lsn;
         let new_data_files = snapshot_payload.data_files.clone();
-        let new_file_indices = snapshot_payload.file_indices.clone();
+        let imported_file_indices = snapshot_payload.file_indices_to_import.clone();
+        let removed_file_indices = snapshot_payload.file_indices_to_remove.clone();
         let puffin_blob_ref = iceberg_table_manager
             .sync_snapshot(snapshot_payload)
             .await?;
@@ -593,7 +594,8 @@ impl MooncakeTable {
             table_manager: iceberg_table_manager,
             flush_lsn,
             new_data_files,
-            new_file_indices,
+            imported_file_indices,
+            removed_file_indices,
             puffin_blob_ref,
         })
     }

@@ -227,7 +227,8 @@ async fn test_store_and_load_snapshot_impl(
         flush_lsn: 0,
         data_files: vec![data_file.clone()],
         new_deletion_vector: test_committed_deletion_log_1(data_file.clone()),
-        file_indices: vec![],
+        file_indices_to_import: vec![],
+        file_indices_to_remove: vec![],
     };
     iceberg_table_manager
         .sync_snapshot(iceberg_snapshot_payload)
@@ -244,7 +245,8 @@ async fn test_store_and_load_snapshot_impl(
         flush_lsn: 1,
         data_files: vec![data_file.clone()],
         new_deletion_vector: test_committed_deletion_log_2(data_file.clone()),
-        file_indices: vec![],
+        file_indices_to_import: vec![],
+        file_indices_to_remove: vec![],
     };
     iceberg_table_manager
         .sync_snapshot(iceberg_snapshot_payload)
@@ -431,7 +433,8 @@ async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {
         flush_lsn: 0,
         data_files: vec![],
         new_deletion_vector: vec![],
-        file_indices: vec![],
+        file_indices_to_import: vec![],
+        file_indices_to_remove: vec![],
     };
     iceberg_table_manager
         .sync_snapshot(iceberg_snapshot_payload)
