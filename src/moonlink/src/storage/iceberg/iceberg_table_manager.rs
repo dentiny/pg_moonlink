@@ -67,18 +67,6 @@ pub trait TableManager: Send {
     ///   both of which are stored in puffin files.
     /// - For deletion vectors, we store one blob in one puffin file.
     /// - For hash index, we store one mooncake file index in one puffin file.
-    ///
-    /// # Arguments
-    ///
-    /// * disk_files: new data files to be managed by iceberg
-    /// * file_indices: all file indexes which have been persisted, could be either local or remote.
-    ///
-    /// Please notice, it takes full content to commit snapshot.
-    ///
-    /// TODO(hjiang): We're storing the iceberg table status in two places, one for iceberg table manager, another at snapshot.
-    /// Provide delta change interface, so snapshot doesn't need to store everything.
-    ///
-    /// TODO(hjiang): It's ok to take only new moooncake file index, instead of all file indices.
     #[allow(async_fn_in_trait)]
     async fn sync_snapshot(
         &mut self,
