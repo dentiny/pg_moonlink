@@ -1,7 +1,7 @@
 use super::data_batches::{create_batch_from_rows, InMemoryBatch};
 use super::delete_vector::BatchDeletionVector;
 use super::{
-    DiskFileDeletionVector, FileIndiceMergeResult, IcebergSnapshotPayload, Snapshot, SnapshotTask,
+    DiskFileDeletionVector, IcebergSnapshotPayload, Snapshot, SnapshotTask,
     TableConfig, TableMetadata,
 };
 use crate::error::Result;
@@ -415,6 +415,16 @@ impl SnapshotTableState {
             let aggregated_committed_deletion_logs =
                 self.aggregate_committed_deletion_logs(flush_lsn);
 
+            let mut file_indices_to_import = self
+                .unpersisted_iceberg_records
+                .unpersisted_file_indices
+                .clone();
+            file_indices_to_import.extend(
+                self.unpersisted_file_indices_records
+                    .unpersisted_file_indices_to_add
+                    .clone(),
+            );
+
             iceberg_snapshot_payload = Some(IcebergSnapshotPayload {
                 flush_lsn,
                 data_files: self
@@ -422,11 +432,11 @@ impl SnapshotTableState {
                     .unpersisted_data_files
                     .to_vec(),
                 new_deletion_vector: aggregated_committed_deletion_logs,
-                file_indices_to_import: self
-                    .unpersisted_iceberg_records
-                    .unpersisted_file_indices
+                file_indices_to_import,
+                file_indices_to_remove: self
+                    .unpersisted_file_indices_records
+                    .unpersisted_file_indices_to_remove
                     .to_vec(),
-                file_indices_to_remove: vec![],
             });
         }
 
