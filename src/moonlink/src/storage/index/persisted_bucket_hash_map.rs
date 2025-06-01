@@ -34,7 +34,7 @@ fn splitmix64(mut x: u64) -> u64 {
 /// Configurations for merging file indices.
 #[derive(Clone, Default, Debug, TypedBuilder)]
 pub struct FileIndexMergeConfig {
-    /// Number of existing unmerged index blocks to trigger a merge operation.
+    /// Number of existing index blocks under final size to trigger a merge operation.
     #[cfg(debug_assertions)]
     #[builder(default = 10)]
     pub file_indices_to_merge: u32,
@@ -206,6 +206,11 @@ impl GlobalIndex {
             }
         }
         vec![]
+    }
+
+    /// Get total index block files size.
+    pub fn get_index_blocks_size(&self) -> u64 {
+        self.index_blocks.iter().map(|cur_index_block| cur_index_block.file_size).sum()
     }
 
     pub async fn _create_iterator<'a>(

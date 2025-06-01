@@ -8,6 +8,7 @@ mod table_snapshot;
 mod transaction_stream;
 
 use super::iceberg::puffin_utils::PuffinBlobRef;
+use super::index::persisted_bucket_hash_map::FileIndexMergeConfig;
 use super::index::{FileIndex, MemIndex, MooncakeIndex};
 use super::storage_utils::{MooncakeDataFileRef, RawDeletionRecord, RecordLocation};
 use crate::error::{Error, Result};
@@ -17,7 +18,7 @@ use crate::storage::iceberg::iceberg_table_manager::{
 };
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 pub(crate) use crate::storage::mooncake_table::table_snapshot::{
-    IcebergSnapshotPayload, IcebergSnapshotResult,
+    IcebergSnapshotPayload, IcebergSnapshotResult, FileIndiceMergePayload, FileIndiceMergeResult
 };
 use crate::storage::storage_utils::FileId;
 use std::collections::HashMap;
@@ -552,7 +553,7 @@ impl MooncakeTable {
     fn create_snapshot_impl(
         &mut self,
         force_create: bool,
-    ) -> Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> {
+    ) -> Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>, Option<FileIndiceMergePayload>)>> {
         self.next_snapshot_task.new_rows = Some(self.mem_slice.get_latest_rows());
         let next_snapshot_task = take(&mut self.next_snapshot_task);
         self.next_snapshot_task = SnapshotTask::new(self.metadata.config.clone());
@@ -564,7 +565,7 @@ impl MooncakeTable {
         )))
     }
 
-    pub fn create_snapshot(&mut self) -> Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> {
+    pub fn create_snapshot(&mut self) -> Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>, Option<FileIndiceMergePayload>)>> {
         if !self.next_snapshot_task.should_create_snapshot() {
             return None;
         }
@@ -573,7 +574,7 @@ impl MooncakeTable {
 
     pub fn force_create_snapshot(
         &mut self,
-    ) -> Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> {
+    ) -> Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>, Option<FileIndiceMergePayload>)>> {
         self.create_snapshot_impl(/*force_snapshot=*/ true)
     }
 
@@ -628,7 +629,7 @@ impl MooncakeTable {
         snapshot: Arc<RwLock<SnapshotTableState>>,
         next_snapshot_task: SnapshotTask,
         force_create: bool,
-    ) -> (u64, Option<IcebergSnapshotPayload>) {
+    ) -> (u64, Option<IcebergSnapshotPayload>, Option<FileIndiceMergePayload>) {
         snapshot
             .write()
             .await

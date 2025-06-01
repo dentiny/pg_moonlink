@@ -4,6 +4,7 @@ use super::{
     DiskFileDeletionVector, IcebergSnapshotPayload, Snapshot, SnapshotTask, TableConfig,
     TableMetadata,
 };
+use crate::storage::mooncake_table::table_snapshot::FileIndiceMergePayload;
 use crate::error::Result;
 use crate::storage::iceberg::iceberg_table_manager::TableManager;
 use crate::storage::iceberg::puffin_utils::PuffinBlobRef;
@@ -185,47 +186,47 @@ impl SnapshotTableState {
         self.committed_deletion_log = new_committed_deletion_log;
     }
 
-    /// Attempt to merge multiple file indices into one, and update at current snapshot.
-    /// Return index id for those being merged, and newly merged.
-    async fn merge_file_indices(&mut self) -> (Vec<FileIndex> /*index block files being merged*/, Vec<FileIndex> /*newly merged index block files*/) {
-        let mut index_files_to_merge = vec![];
-        let mut index_files_to_keep = vec![];
+    // /// Attempt to merge multiple file indices into one, and update at current snapshot.
+    // /// Return index id for those being merged, and newly merged.
+    // async fn merge_file_indices(&mut self) -> (Vec<FileIndex> /*index block files being merged*/, Vec<FileIndex> /*newly merged index block files*/) {
+    //     let mut index_files_to_merge = vec![];
+    //     let mut index_files_to_keep = vec![];
 
-        // Currently we always have one index block within one file index.
-        let cur_file_indices = std::mem::take(&mut self.current_snapshot.indices.file_indices);
-        for cur_file_index in cur_file_indices {
-            let index_block_size: u64 = cur_file_index.index_blocks.iter().map(|cur_index_block| cur_index_block.file_size).sum();
-            if index_block_size >= self.mooncake_table_config.file_index_config.index_block_final_size {
-                index_files_to_keep.push(cur_file_index.clone());
-                continue;
-            }
-            old_merged_index_blocks.insert(cur_file_index.global_index_id);
-            index_files_to_merge.push(cur_file_index);
-        }
+    //     // Currently we always have one index block within one file index.
+    //     let cur_file_indices = std::mem::take(&mut self.current_snapshot.indices.file_indices);
+    //     for cur_file_index in cur_file_indices {
+    //         let index_block_size: u64 = cur_file_index.index_blocks.iter().map(|cur_index_block| cur_index_block.file_size).sum();
+    //         if index_block_size >= self.mooncake_table_config.file_index_config.index_block_final_size {
+    //             index_files_to_keep.push(cur_file_index.clone());
+    //             continue;
+    //         }
+    //         old_merged_index_blocks.insert(cur_file_index.global_index_id);
+    //         index_files_to_merge.push(cur_file_index);
+    //     }
 
-        // No need to merge, if there're not enough small index files to manage.
-        if index_files_to_merge.len() < self.mooncake_table_config.file_index_config.file_indices_to_merge as usize {
-            old_merged_index_blocks.clear();
-            self.current_snapshot.indices.file_indices.extend(index_files_to_keep);
-            self.current_snapshot.indices.file_indices.extend(index_files_to_merge);
-            return (old_merged_index_blocks, new_merged_index_blocks);
-        }
+    //     // No need to merge, if there're not enough small index files to manage.
+    //     if index_files_to_merge.len() < self.mooncake_table_config.file_index_config.file_indices_to_merge as usize {
+    //         old_merged_index_blocks.clear();
+    //         self.current_snapshot.indices.file_indices.extend(index_files_to_keep);
+    //         self.current_snapshot.indices.file_indices.extend(index_files_to_merge);
+    //         return (old_merged_index_blocks, new_merged_index_blocks);
+    //     }
 
-        // Perform index merge operation if we've accumuated a number of small index files.
-        //
-        // TODO(hjiang): Take the easiest implementation to merge all given index files for now, switch to finer granularity merge in the future.
-        // For example, have a target size for merged index files, parallel merge operations, etc.
-        let builder = GlobalIndexBuilder::new();
-        let merged = builder._build_from_merge(index_files_to_merge).await;
-        new_merged_index_blocks.insert(merged.global_index_id);
+    //     // Perform index merge operation if we've accumuated a number of small index files.
+    //     //
+    //     // TODO(hjiang): Take the easiest implementation to merge all given index files for now, switch to finer granularity merge in the future.
+    //     // For example, have a target size for merged index files, parallel merge operations, etc.
+    //     let builder = GlobalIndexBuilder::new();
+    //     let merged = builder._build_from_merge(index_files_to_merge).await;
+    //     new_merged_index_blocks.insert(merged.global_index_id);
 
-        // Update current snapshot.
-        // TODO(hjiang): Likely could optimize by storing a map from <index-id, FileIndex>.
-        self.current_snapshot.indices.file_indices.retain(|cur_file_index| old_merged_index_blocks.contains(&cur_file_index.global_index_id));
-        self.current_snapshot.indices.file_indices.push(merged);
+    //     // Update current snapshot.
+    //     // TODO(hjiang): Likely could optimize by storing a map from <index-id, FileIndex>.
+    //     self.current_snapshot.indices.file_indices.retain(|cur_file_index| old_merged_index_blocks.contains(&cur_file_index.global_index_id));
+    //     self.current_snapshot.indices.file_indices.push(merged);
 
-        (old_merged_index_blocks, new_merged_index_blocks)
-    }
+    //     (old_merged_index_blocks, new_merged_index_blocks)
+    // }
 
     /// Update current mooncake snapshot with persisted deletion vector.
     fn update_current_snapshot_with_iceberg_snapshot(
@@ -292,7 +293,19 @@ impl SnapshotTableState {
     }
 
     /// Util function to decide whether to merge index.
-    fn _get_file_indices_to_merge(&self) -> Vec<FileIndex> {
+    fn get_file_indices_to_merge(&self) -> Vec<FileIndex> {
+        let mut file_indices_to_merge = vec![];
+        let all_file_indices = &self.current_snapshot.indices.file_indices;
+        for cur_file_index in all_file_indices.iter() {
+            if cur_file_index.get_index_blocks_size() >= self.mooncake_table_config.file_index_config.index_block_final_size {
+                continue;
+            }
+            file_indices_to_merge.push(cur_file_index.clone());
+        }
+        // To avoid too many small IO operations, only attempt an index merge when accumulated small indices exceeds the threshold.
+        if file_indices_to_merge.len() >= self.mooncake_table_config.file_index_config.file_indices_to_merge as usize {
+            return file_indices_to_merge;
+        }
         vec![]
     }
 
@@ -300,7 +313,7 @@ impl SnapshotTableState {
         &mut self,
         mut task: SnapshotTask,
         force_create: bool,
-    ) -> (u64, Option<IcebergSnapshotPayload>) {
+    ) -> (u64, Option<IcebergSnapshotPayload>, Option<FileIndiceMergePayload>) {
         // Reflect iceberg snapshot to mooncake snapshot.
         self.prune_committed_deletion_logs(&task);
         self.prune_persisted_data_files(std::mem::take(&mut task.iceberg_persisted_data_files));
@@ -333,12 +346,6 @@ impl SnapshotTableState {
             self.last_commit = cp;
         }
 
-        // Till this point, all file indices have been tracked by current snapshot.
-        // Periodically, we check whether we could merge small file indices.
-        let (_old_merged_index_blocks, _new_merged_index_blocks) = self.merge_file_indices().await;
-
-
-
         // Batch new data files, whether we decide to create an iceberg snapshot.
         self.unpersisted_iceberg_records
             .unpersisted_data_files
@@ -347,10 +354,11 @@ impl SnapshotTableState {
             .unpersisted_file_indices
             .extend(new_file_indices);
 
+    
+        // TODO(hjiang): for both iceberg snapshot and index merge operation, we don't need to check if there's already an ongoing operation.
+        // 
         // Till this point, committed changes have been reflected to current snapshot; sync the latest change to iceberg.
         // To reduce iceberg persistence overhead, we only snapshot when (1) there're persisted data files, or (2) accumulated unflushed deletion vector exceeds threshold.
-        //
-        // TODO(hjiang): Error handling for snapshot sync-up.
         let mut iceberg_snapshot_payload: Option<IcebergSnapshotPayload> = None;
         let flush_by_data_files = self.create_iceberg_snapshot_by_data_files(
             self.unpersisted_iceberg_records
@@ -360,8 +368,16 @@ impl SnapshotTableState {
         );
         let flush_by_deletion_logs = self.create_iceberg_snapshot_by_committed_logs(force_create);
 
-        if self.current_snapshot.data_file_flush_lsn.is_some()
-            && (flush_by_data_files || flush_by_deletion_logs || flush_by_merged_file_indices)
+        // Decide whether to merge an index merge.
+        let mut file_indices_merge_payload : Option<FileIndiceMergePayload> = None;
+        let file_indices_to_merge = self.get_file_indices_to_merge();
+        if !file_indices_to_merge.is_empty() {
+            file_indices_merge_payload = Some(FileIndiceMergePayload {
+                file_indices: file_indices_to_merge,
+            });
+        }
+
+        if self.current_snapshot.data_file_flush_lsn.is_some() && (flush_by_data_files || flush_by_deletion_logs)
         {
             let flush_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
             let aggregated_committed_deletion_logs =
@@ -385,6 +401,7 @@ impl SnapshotTableState {
         (
             self.current_snapshot.snapshot_version,
             iceberg_snapshot_payload,
+            file_indices_merge_payload,
         )
     }
 
