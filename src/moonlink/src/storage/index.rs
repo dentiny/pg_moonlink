@@ -6,6 +6,7 @@ use crate::row::MoonlinkRow;
 use crate::storage::storage_utils::{RawDeletionRecord, RecordLocation};
 use multimap::MultiMap;
 use persisted_bucket_hash_map::GlobalIndex;
+use persisted_bucket_hash_map::GlobalIndexBuilder;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;

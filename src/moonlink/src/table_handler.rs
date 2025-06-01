@@ -1,10 +1,10 @@
 use crate::row::MoonlinkRow;
+use crate::storage::index::persisted_bucket_hash_map::GlobalIndexBuilder;
 use crate::storage::mooncake_table::FileIndiceMergePayload;
 use crate::storage::mooncake_table::FileIndiceMergeResult;
 use crate::storage::mooncake_table::IcebergSnapshotPayload;
 use crate::storage::mooncake_table::IcebergSnapshotResult;
 use crate::storage::MooncakeTable;
-use crate::storage::index::persisted_bucket_hash_map;
 use crate::Result;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
@@ -93,7 +93,11 @@ impl TableHandler {
 
         // Join handle for mooncake snapshot.
         let mut mooncake_snapshot_handle: Option<
-            JoinHandle<(u64, Option<IcebergSnapshotPayload>, Option<FileIndiceMergePayload>)>,
+            JoinHandle<(
+                u64,
+                Option<IcebergSnapshotPayload>,
+                Option<FileIndiceMergePayload>,
+            )>,
         > = None;
 
         // TODO: refactor join handles and use channel instead for IO related async operations.
@@ -102,7 +106,8 @@ impl TableHandler {
         let mut iceberg_snapshot_handle: Option<JoinHandle<Result<IcebergSnapshotResult>>> = None;
 
         // Join handle for index merge.
-        let mut file_indices_merge_handle : Option<JoinHandle<Result<FileIndiceMergeResult>>> = None;
+        // TODO(hjiang): Error propagation.
+        let mut file_indices_merge_handle: Option<JoinHandle<FileIndiceMergeResult>> = None;
 
         // Requested minimum LSN for a force snapshot request.
         let mut force_snapshot_lsn: Option<u64> = None;
@@ -263,10 +268,14 @@ impl TableHandler {
 
                     // Process file indices merge.
                     if file_indices_merge_handle.is_none() {
-                        if let Some(file_indices_merge_payload) = file_indices_merge_handle {
-                            let handle = tokio::task::spawn(async || {
-                                let mut builder = GlobalIndexBuilder::new();
-                                let merged = builder._build_from_merge(file_indices_merge_payload.file_indices).await;
+                        if let Some(file_indices_merge_payload) = file_indices_merge_payload {
+                            let handle = tokio::task::spawn(async move {
+                                let builder = GlobalIndexBuilder::new();
+                                let merged = builder._build_from_merge(file_indices_merge_payload.file_indices.clone()).await;
+                                FileIndiceMergeResult {
+                                    old_file_indices: file_indices_merge_payload.file_indices,
+                                    merged_file_indices: merged,
+                                }
                             });
                             file_indices_merge_handle = Some(handle);
                         }

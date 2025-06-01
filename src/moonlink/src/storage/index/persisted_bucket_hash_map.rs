@@ -210,7 +210,10 @@ impl GlobalIndex {
 
     /// Get total index block files size.
     pub fn get_index_blocks_size(&self) -> u64 {
-        self.index_blocks.iter().map(|cur_index_block| cur_index_block.file_size).sum()
+        self.index_blocks
+            .iter()
+            .map(|cur_index_block| cur_index_block.file_size)
+            .sum()
     }
 
     pub async fn _create_iterator<'a>(

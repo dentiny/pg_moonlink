@@ -4,12 +4,12 @@ use super::{
     DiskFileDeletionVector, IcebergSnapshotPayload, Snapshot, SnapshotTask, TableConfig,
     TableMetadata,
 };
-use crate::storage::mooncake_table::table_snapshot::FileIndiceMergePayload;
 use crate::error::Result;
 use crate::storage::iceberg::iceberg_table_manager::TableManager;
 use crate::storage::iceberg::puffin_utils::PuffinBlobRef;
 use crate::storage::index::{FileIndex, Index};
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
+use crate::storage::mooncake_table::table_snapshot::FileIndiceMergePayload;
 use crate::storage::mooncake_table::MoonlinkRow;
 use crate::storage::storage_utils::FileId;
 use crate::storage::storage_utils::{
@@ -297,13 +297,23 @@ impl SnapshotTableState {
         let mut file_indices_to_merge = vec![];
         let all_file_indices = &self.current_snapshot.indices.file_indices;
         for cur_file_index in all_file_indices.iter() {
-            if cur_file_index.get_index_blocks_size() >= self.mooncake_table_config.file_index_config.index_block_final_size {
+            if cur_file_index.get_index_blocks_size()
+                >= self
+                    .mooncake_table_config
+                    .file_index_config
+                    .index_block_final_size
+            {
                 continue;
             }
             file_indices_to_merge.push(cur_file_index.clone());
         }
         // To avoid too many small IO operations, only attempt an index merge when accumulated small indices exceeds the threshold.
-        if file_indices_to_merge.len() >= self.mooncake_table_config.file_index_config.file_indices_to_merge as usize {
+        if file_indices_to_merge.len()
+            >= self
+                .mooncake_table_config
+                .file_index_config
+                .file_indices_to_merge as usize
+        {
             return file_indices_to_merge;
         }
         vec![]
@@ -313,7 +323,11 @@ impl SnapshotTableState {
         &mut self,
         mut task: SnapshotTask,
         force_create: bool,
-    ) -> (u64, Option<IcebergSnapshotPayload>, Option<FileIndiceMergePayload>) {
+    ) -> (
+        u64,
+        Option<IcebergSnapshotPayload>,
+        Option<FileIndiceMergePayload>,
+    ) {
         // Reflect iceberg snapshot to mooncake snapshot.
         self.prune_committed_deletion_logs(&task);
         self.prune_persisted_data_files(std::mem::take(&mut task.iceberg_persisted_data_files));
@@ -354,9 +368,8 @@ impl SnapshotTableState {
             .unpersisted_file_indices
             .extend(new_file_indices);
 
-    
         // TODO(hjiang): for both iceberg snapshot and index merge operation, we don't need to check if there's already an ongoing operation.
-        // 
+        //
         // Till this point, committed changes have been reflected to current snapshot; sync the latest change to iceberg.
         // To reduce iceberg persistence overhead, we only snapshot when (1) there're persisted data files, or (2) accumulated unflushed deletion vector exceeds threshold.
         let mut iceberg_snapshot_payload: Option<IcebergSnapshotPayload> = None;
@@ -369,7 +382,7 @@ impl SnapshotTableState {
         let flush_by_deletion_logs = self.create_iceberg_snapshot_by_committed_logs(force_create);
 
         // Decide whether to merge an index merge.
-        let mut file_indices_merge_payload : Option<FileIndiceMergePayload> = None;
+        let mut file_indices_merge_payload: Option<FileIndiceMergePayload> = None;
         let file_indices_to_merge = self.get_file_indices_to_merge();
         if !file_indices_to_merge.is_empty() {
             file_indices_merge_payload = Some(FileIndiceMergePayload {
@@ -377,7 +390,8 @@ impl SnapshotTableState {
             });
         }
 
-        if self.current_snapshot.data_file_flush_lsn.is_some() && (flush_by_data_files || flush_by_deletion_logs)
+        if self.current_snapshot.data_file_flush_lsn.is_some()
+            && (flush_by_data_files || flush_by_deletion_logs)
         {
             let flush_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
             let aggregated_committed_deletion_logs =
