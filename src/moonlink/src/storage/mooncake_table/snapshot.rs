@@ -55,7 +55,6 @@ pub(crate) struct SnapshotTableState {
     /// Iceberg snapshot is created in an async style, which means it doesn't correspond 1-1 to mooncake snapshot, so we need to ensure idempotency for iceberg snapshot payload.
     /// The following fields record unpersisted content, which will be placed in iceberg payload everytime.
     unpersisted_iceberg_records: UnpersistedIcebergSnapshotRecords,
-    unpersisted_file_indices_records: UnpersistedFileIndicesRecords,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,12 +71,6 @@ pub struct PuffinDeletionBlobAtRead {
 struct UnpersistedIcebergSnapshotRecords {
     /// Unpersisted data files, new data files are appended to the end.
     unpersisted_data_files: Vec<MooncakeDataFileRef>,
-    /// Unpersisted file indices, new file indices are appended to the end.
-    unpersisted_file_indices: Vec<FileIndex>,
-}
-
-#[derive(Clone, Debug)]
-struct UnpersistedFileIndicesRecords {
     /// Unpersisted old merged file indices, which should not appear in the later iceberg snapshots.
     unpersisted_file_indices_to_remove: Vec<FileIndex>,
     /// Unpersisted new merged indices, which should be added to the later iceberg snapshots.
@@ -119,9 +112,6 @@ impl SnapshotTableState {
             uncommitted_deletion_log: Vec::new(),
             unpersisted_iceberg_records: UnpersistedIcebergSnapshotRecords {
                 unpersisted_data_files: Vec::new(),
-                unpersisted_file_indices: Vec::new(),
-            },
-            unpersisted_file_indices_records: UnpersistedFileIndicesRecords {
                 unpersisted_file_indices_to_add: Vec::new(),
                 unpersisted_file_indices_to_remove: Vec::new(),
             },
@@ -228,13 +218,13 @@ impl SnapshotTableState {
 
     /// Update unpersisted file indices from successful iceberg snapshot operation.
     fn prune_persisted_file_indices(&mut self, persisted_new_file_indices: Vec<FileIndex>) {
-        assert!(self.unpersisted_iceberg_records.unpersisted_file_indices.len() >= persisted_new_file_indices.len(),
+        assert!(self.unpersisted_iceberg_records.unpersisted_file_indices_to_add.len() >= persisted_new_file_indices.len(),
             "There're in total {} unpersisted file indices, but successful iceberg snapshot shows {} file indices persisted.",
-            self.unpersisted_iceberg_records.unpersisted_file_indices.len(),
+            self.unpersisted_iceberg_records.unpersisted_file_indices_to_add.len(),
             persisted_new_file_indices.len());
 
         self.unpersisted_iceberg_records
-            .unpersisted_file_indices
+            .unpersisted_file_indices_to_add
             .drain(0..persisted_new_file_indices.len());
     }
 
@@ -261,6 +251,20 @@ impl SnapshotTableState {
             1
         };
         self.committed_deletion_log.len() >= deletion_record_snapshot_threshold
+    }
+    /// Util function to decide whether to create iceberg snapshot by file indices.
+    fn create_iceberg_snapshot_by_file_indices(
+        &self,
+        new_file_indices: &[FileIndex],
+        force_create: bool,
+    ) -> bool {
+        let file_indices_snapshot_threshold = if !force_create {
+            self.mooncake_table_config
+                .iceberg_snapshot_new_file_indices_count()
+        } else {
+            1
+        };
+        new_file_indices.len() >= file_indices_snapshot_threshold
     }
 
     /// Util function to decide whether to merge index.
@@ -295,14 +299,14 @@ impl SnapshotTableState {
         old_merged_file_indices: &HashSet<FileIndex>,
         new_merged_file_indices: &Vec<FileIndex>,
     ) {
-        self.unpersisted_file_indices_records
+        self.unpersisted_iceberg_records
             .unpersisted_file_indices_to_add
             .extend(
                 old_merged_file_indices
                     .iter()
                     .map(|cur_file_index| cur_file_index.clone()),
             );
-        self.unpersisted_file_indices_records
+        self.unpersisted_iceberg_records
             .unpersisted_file_indices_to_remove
             .extend(new_merged_file_indices.clone());
     }
@@ -383,7 +387,7 @@ impl SnapshotTableState {
             .unpersisted_data_files
             .extend(new_data_files);
         self.unpersisted_iceberg_records
-            .unpersisted_file_indices
+            .unpersisted_file_indices_to_add
             .extend(new_file_indices);
 
         // TODO(hjiang): for both iceberg snapshot and index merge operation, we don't need to check if there's already an ongoing operation.
@@ -398,6 +402,12 @@ impl SnapshotTableState {
             force_create,
         );
         let flush_by_deletion_logs = self.create_iceberg_snapshot_by_committed_logs(force_create);
+        let flush_by_file_indices = self.create_iceberg_snapshot_by_file_indices(
+            &self
+                .unpersisted_iceberg_records
+                .unpersisted_file_indices_to_add,
+            force_create,
+        );
 
         // Decide whether to merge an index merge.
         let mut file_indices_merge_payload: Option<FileIndiceMergePayload> = None;
@@ -409,21 +419,11 @@ impl SnapshotTableState {
         }
 
         if self.current_snapshot.data_file_flush_lsn.is_some()
-            && (flush_by_data_files || flush_by_deletion_logs)
+            && (flush_by_data_files || flush_by_deletion_logs || flush_by_file_indices)
         {
             let flush_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
             let aggregated_committed_deletion_logs =
                 self.aggregate_committed_deletion_logs(flush_lsn);
-
-            let mut file_indices_to_import = self
-                .unpersisted_iceberg_records
-                .unpersisted_file_indices
-                .clone();
-            file_indices_to_import.extend(
-                self.unpersisted_file_indices_records
-                    .unpersisted_file_indices_to_add
-                    .clone(),
-            );
 
             iceberg_snapshot_payload = Some(IcebergSnapshotPayload {
                 flush_lsn,
@@ -432,9 +432,12 @@ impl SnapshotTableState {
                     .unpersisted_data_files
                     .to_vec(),
                 new_deletion_vector: aggregated_committed_deletion_logs,
-                file_indices_to_import,
+                file_indices_to_import: self
+                    .unpersisted_iceberg_records
+                    .unpersisted_file_indices_to_add
+                    .to_vec(),
                 file_indices_to_remove: self
-                    .unpersisted_file_indices_records
+                    .unpersisted_iceberg_records
                     .unpersisted_file_indices_to_remove
                     .to_vec(),
             });

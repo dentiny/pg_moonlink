@@ -59,6 +59,7 @@ async fn test_append_with_small_disk_slice() {
         snapshot_deletion_record_count: 1000,
         iceberg_snapshot_new_data_file_count: 1000,
         iceberg_snapshot_new_committed_deletion_log: 1000,
+        iceberg_snapshot_new_file_indices_count: 1000,
         temp_files_directory: temp_dir.path().to_str().unwrap().to_string(),
         file_index_config: FileIndexMergeConfig::default(),
     };
@@ -442,6 +443,7 @@ async fn test_iceberg_snapshot_creation_for_batch_write() {
         snapshot_deletion_record_count: 1000,
         iceberg_snapshot_new_data_file_count: 1000,
         iceberg_snapshot_new_committed_deletion_log: 1000,
+        iceberg_snapshot_new_file_indices_count: 1000,
         temp_files_directory: temp_dir.path().to_str().unwrap().to_string(),
         file_index_config: FileIndexMergeConfig::default(),
     };
@@ -626,6 +628,7 @@ async fn test_iceberg_snapshot_creation_for_streaming_write() {
         snapshot_deletion_record_count: 1000,
         iceberg_snapshot_new_data_file_count: 1000,
         iceberg_snapshot_new_committed_deletion_log: 1000,
+        iceberg_snapshot_new_file_indices_count: 1000,
         temp_files_directory: temp_dir.path().to_str().unwrap().to_string(),
         file_index_config: FileIndexMergeConfig::default(),
     };

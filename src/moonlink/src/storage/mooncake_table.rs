@@ -53,6 +53,8 @@ pub struct TableConfig {
     pub iceberg_snapshot_new_data_file_count: usize,
     /// Number of unpersisted committed delete logs to trigger an iceberg snapshot.
     pub iceberg_snapshot_new_committed_deletion_log: usize,
+    /// Number of new file indices to import, to trigger an iceberg snapshot.
+    pub iceberg_snapshot_new_file_indices_count: usize,
     /// Config for file index.
     pub file_index_config: FileIndexMergeConfig,
 }
@@ -75,6 +77,9 @@ impl TableConfig {
     #[cfg(debug_assertions)]
     pub(crate) const DEFAULT_ICEBERG_SNAPSHOT_NEW_COMMITTED_DELETION_LOG: usize = 1000;
     #[cfg(debug_assertions)]
+    pub(crate) const DEFAULT_ICEBERG_NEW_FILE_INDICES_COUNT: usize =
+        Self::DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT;
+    #[cfg(debug_assertions)]
     pub(crate) const DEFAULT_DISK_SLICE_PARQUET_FILE_SIZE: usize = 1024 * 1024 * 2; // 2MiB
 
     #[cfg(not(debug_assertions))]
@@ -87,6 +92,9 @@ impl TableConfig {
     pub(crate) const DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT: usize = 1;
     #[cfg(not(debug_assertions))]
     pub(crate) const DEFAULT_ICEBERG_SNAPSHOT_NEW_COMMITTED_DELETION_LOG: usize = 1000;
+    #[cfg(not(debug_assertions))]
+    pub(crate) const DEFAULT_ICEBERG_NEW_FILE_INDICES_COUNT: usize =
+        Self::DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT;
     #[cfg(not(debug_assertions))]
     pub(crate) const DEFAULT_DISK_SLICE_PARQUET_FILE_SIZE: usize = 1024 * 1024 * 128; // 128MiB
 
@@ -103,6 +111,7 @@ impl TableConfig {
             iceberg_snapshot_new_data_file_count: Self::DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT,
             iceberg_snapshot_new_committed_deletion_log:
                 Self::DEFAULT_ICEBERG_SNAPSHOT_NEW_COMMITTED_DELETION_LOG,
+            iceberg_snapshot_new_file_indices_count: Self::DEFAULT_ICEBERG_NEW_FILE_INDICES_COUNT,
             file_index_config: FileIndexMergeConfig::default(),
         }
     }
@@ -111,6 +120,9 @@ impl TableConfig {
     }
     pub fn iceberg_snapshot_new_data_file_count(&self) -> usize {
         self.iceberg_snapshot_new_data_file_count
+    }
+    pub fn iceberg_snapshot_new_file_indices_count(&self) -> usize {
+        self.iceberg_snapshot_new_file_indices_count
     }
     pub fn snapshot_deletion_record_count(&self) -> usize {
         self.snapshot_deletion_record_count
