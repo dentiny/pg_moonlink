@@ -63,8 +63,6 @@ fn test_committed_deletion_log_2(
 }
 
 /// Test util function to create file indices.
-///
-/// TODO(hjiang): Better to use real data files, but having multiple file indices make
 fn test_global_index(data_files: Vec<MooncakeDataFileRef>) -> GlobalIndex {
     GlobalIndex {
         files: data_files,

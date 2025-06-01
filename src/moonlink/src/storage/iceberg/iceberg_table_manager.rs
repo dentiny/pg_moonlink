@@ -435,6 +435,7 @@ impl IcebergTableManager {
     }
 
     /// Process file indices to import.
+    /// [`local_data_file_to_remote`] should contain all local data filepath to remote data filepath mapping.
     async fn import_file_indices(
         &mut self,
         file_indices_to_import: &[MooncakeFileIndex],
@@ -487,7 +488,7 @@ impl IcebergTableManager {
         Ok(())
     }
 
-    /// Dump file indexes into the iceberg table, only new file indexes will be persisted into the table.
+    /// Dump file indices into the iceberg table, only new file indices will be persisted into the table.
     /// Return file index ids which should be added into iceberg table.
     ///
     /// TODO(hjiang): Need to configure (1) the number of blobs in a puffin file; and (2) the number of file index in a puffin blob.
@@ -498,7 +499,7 @@ impl IcebergTableManager {
         file_indices_to_remove: &[MooncakeFileIndex],
         local_data_file_to_remote: HashMap<String, String>,
     ) -> IcebergResult<()> {
-        // Invariant assertion.
+        // Invariant assertion: file indices to remove should only come from compaction, so there must be new file indices to import.
         if !file_indices_to_remove.is_empty() {
             assert!(!file_indices_to_import.is_empty());
         }

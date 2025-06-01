@@ -396,6 +396,7 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
 
         // Keep data files unchanged.
         // Assumption: we store all data file manifest entries in one manifest file.
+        assert!(!manifest_entries.is_empty());
         if *manifest_metadata.content() == ManifestContentType::Data
             && manifest_entries.first().unwrap().file_format() == DataFileFormat::Parquet
         {
