@@ -225,9 +225,14 @@ async fn check_deletion_vector_consistency_for_snapshot(snapshot: &Snapshot) {
 
 /// Test snapshot store and load for different types of catalogs based on the given warehouse.
 async fn test_store_and_load_snapshot_impl(
-    iceberg_table_manager: &mut IcebergTableManager,
+    mooncake_table_metadata: Arc<MooncakeTableMetadata>,
+    iceberg_table_config: IcebergTableConfig,
 ) -> IcebergResult<()> {
     // At the beginning of the test, there's nothing in table.
+    let mut iceberg_table_manager = IcebergTableManager::new(
+        mooncake_table_metadata.clone(),
+        iceberg_table_config.clone(),
+    )?;
     assert!(iceberg_table_manager.persisted_data_files.is_empty());
 
     // Create arrow schema and table.
@@ -347,6 +352,16 @@ async fn test_store_and_load_snapshot_impl(
         .await?;
     assert_eq!(iceberg_table_manager.persisted_file_indices.len(), 1);
 
+    // Create a new iceberg table manager and check persisted content.
+    let mut iceberg_table_manager = IcebergTableManager::new(
+        mooncake_table_metadata.clone(),
+        iceberg_table_config.clone(),
+    )?;
+    let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
+    assert!(snapshot.indices.in_memory_index.is_empty());
+    assert_eq!(snapshot.indices.file_indices.len(), 1);
+    validate_recovered_snapshot(&snapshot, &iceberg_table_config.warehouse_uri).await;
+
     Ok(())
 }
 
@@ -357,14 +372,17 @@ async fn test_sync_snapshots() -> IcebergResult<()> {
     let tmp_dir = tempdir()?;
     let mooncake_table_metadata =
         create_test_table_metadata(tmp_dir.path().to_str().unwrap().to_string());
-    let config = IcebergTableConfig {
+    let iceberg_table_config = IcebergTableConfig {
         warehouse_uri: tmp_dir.path().to_str().unwrap().to_string(),
         namespace: vec!["namespace".to_string()],
         table_name: "test_table".to_string(),
         drop_table_if_exists: false,
     };
-    let mut iceberg_table_manager = IcebergTableManager::new(mooncake_table_metadata, config)?;
-    test_store_and_load_snapshot_impl(&mut iceberg_table_manager).await?;
+    test_store_and_load_snapshot_impl(
+        mooncake_table_metadata.clone(),
+        iceberg_table_config.clone(),
+    )
+    .await?;
     Ok(())
 }
 
