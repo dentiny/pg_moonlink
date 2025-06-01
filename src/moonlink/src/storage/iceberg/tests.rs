@@ -7,6 +7,7 @@ use crate::storage::iceberg::iceberg_table_manager::*;
 use crate::storage::iceberg::puffin_utils;
 #[cfg(feature = "storage-s3")]
 use crate::storage::iceberg::s3_test_utils;
+use crate::storage::index::persisted_bucket_hash_map::GlobalIndex;
 use crate::storage::index::Index;
 use crate::storage::index::MooncakeIndex;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
@@ -59,6 +60,23 @@ fn test_committed_deletion_log_2(
     deletion_vector.delete_row(2);
 
     vec![(data_filepath.clone(), deletion_vector)]
+}
+
+/// Test util function to create file indices.
+/// 
+/// TODO(hjiang): Better to use real data files, but having multiple file indices make
+fn test_global_index(data_files: Vec<MooncakeDataFileRef>) -> GlobalIndex {
+    GlobalIndex {
+        files: data_files,
+        num_rows: 0,
+        hash_bits: 0,
+        hash_upper_bits: 0,
+        hash_lower_bits: 0,
+        seg_id_bits: 0,
+        row_id_bits: 0,
+        bucket_bits: 0,
+        index_blocks: vec![],
+    }
 }
 
 /// Test util function to create arrow schema.
@@ -220,14 +238,15 @@ async fn test_store_and_load_snapshot_impl(
     let data_filename_1 = "data-1.parquet";
     let batch = test_batch_1(arrow_schema.clone());
     let parquet_path = tmp_dir.path().join(data_filename_1);
-    let data_file = create_data_file(0, parquet_path.to_str().unwrap().to_string());
+    let data_file_1 = create_data_file(0, parquet_path.to_str().unwrap().to_string());
     write_arrow_record_batch_to_local(parquet_path.as_path(), arrow_schema.clone(), &batch).await?;
+    let file_indice_1 = test_global_index(vec![data_file_1.clone()]);
 
     let iceberg_snapshot_payload = IcebergSnapshotPayload {
         flush_lsn: 0,
-        data_files: vec![data_file.clone()],
-        new_deletion_vector: test_committed_deletion_log_1(data_file.clone()),
-        file_indices_to_import: vec![],
+        data_files: vec![data_file_1.clone()],
+        new_deletion_vector: test_committed_deletion_log_1(data_file_1.clone()),
+        file_indices_to_import: vec![file_indice_1.clone()],
         file_indices_to_remove: vec![],
     };
     iceberg_table_manager
@@ -238,14 +257,15 @@ async fn test_store_and_load_snapshot_impl(
     let data_filename_2 = "data-2.parquet";
     let batch = test_batch_2(arrow_schema.clone());
     let parquet_path = tmp_dir.path().join(data_filename_2);
-    let data_file = create_data_file(1, parquet_path.to_str().unwrap().to_string());
+    let data_file_2 = create_data_file(1, parquet_path.to_str().unwrap().to_string());
     write_arrow_record_batch_to_local(parquet_path.as_path(), arrow_schema.clone(), &batch).await?;
+    let file_indice_2 = test_global_index(vec![data_file_2.clone()]);
 
     let iceberg_snapshot_payload = IcebergSnapshotPayload {
         flush_lsn: 1,
-        data_files: vec![data_file.clone()],
-        new_deletion_vector: test_committed_deletion_log_2(data_file.clone()),
-        file_indices_to_import: vec![],
+        data_files: vec![data_file_2.clone()],
+        new_deletion_vector: test_committed_deletion_log_2(data_file_2.clone()),
+        file_indices_to_import: vec![file_indice_2.clone()],
         file_indices_to_remove: vec![],
     };
     iceberg_table_manager
@@ -259,6 +279,7 @@ async fn test_store_and_load_snapshot_impl(
         "Persisted items for table manager is {:?}",
         iceberg_table_manager.persisted_data_files
     );
+    assert_eq!(iceberg_table_manager.persisted_file_indices.len(), 2);
 
     // Check the loaded data file is of the expected format and content.
     let file_io = iceberg_table_manager
@@ -310,9 +331,38 @@ async fn test_store_and_load_snapshot_impl(
         );
     }
 
+    // Write third snapshot to iceberg table, with file indices to add and remove.
+    for (cur_file_index, puffin_path) in iceberg_table_manager.persisted_file_indices.iter() {
+        println!("cur file = {:?}, puffin file = {:?}", cur_file_index.files.iter().map(|f| {
+            f.file_path()
+        }).collect::<Vec<_>>(), puffin_path);
+    }
+    println!("\n\n====\n\n");
+
+    let iceberg_snapshot_payload = IcebergSnapshotPayload {
+        flush_lsn: 2,
+        data_files: vec![],
+        new_deletion_vector: vec![],
+        file_indices_to_import: vec![test_global_index(vec![data_file_1.clone(), data_file_2.clone()])],
+        file_indices_to_remove: vec![file_indice_1.clone(), file_indice_2.clone()]
+    };
+    iceberg_table_manager
+        .sync_snapshot(iceberg_snapshot_payload)
+        .await?;
+
+    
+    for (cur_file_index, puffin_path) in iceberg_table_manager.persisted_file_indices.iter() {
+        println!("cur file = {:?}, puffin file = {:?}\n\n", cur_file_index.files.iter().map(|f| {
+            f.file_path()
+        }).collect::<Vec<_>>(), puffin_path);
+    }
+
+    assert_eq!(iceberg_table_manager.persisted_file_indices.len(), 1);
+
     Ok(())
 }
 
+/// Basic iceberg snapshot sync and load test via iceberg table manager.
 #[tokio::test]
 async fn test_sync_snapshots() -> IcebergResult<()> {
     // Create arrow schema and table.
@@ -451,7 +501,7 @@ async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {
     Ok(())
 }
 
-/// Testing senario: mooncake snapshot and iceberg snapshot doesn't correspond to each other 1-1.
+/// Testing scenario: mooncake snapshot and iceberg snapshot doesn't correspond to each other 1-1.
 /// In the test case we perform one iceberg snapshot after three mooncake snapshots.
 #[tokio::test]
 async fn test_async_iceberg_snapshot() {
