@@ -698,7 +698,7 @@ impl MooncakeTable {
         if let Some(mooncake_join_handle) = self.create_snapshot() {
             // Wait for the snapshot async task to complete.
             match mooncake_join_handle.await {
-                Ok((lsn, payload)) => {
+                Ok((lsn, payload, _)) => {
                     // Notify readers that the mooncake snapshot has been created.
                     self.notify_snapshot_reader(lsn);
 

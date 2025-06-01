@@ -1,8 +1,8 @@
 use super::data_batches::{create_batch_from_rows, InMemoryBatch};
 use super::delete_vector::BatchDeletionVector;
 use super::{
-    DiskFileDeletionVector, IcebergSnapshotPayload, Snapshot, SnapshotTask,
-    TableConfig, TableMetadata,
+    DiskFileDeletionVector, IcebergSnapshotPayload, Snapshot, SnapshotTask, TableConfig,
+    TableMetadata,
 };
 use crate::error::Result;
 use crate::storage::iceberg::iceberg_table_manager::TableManager;

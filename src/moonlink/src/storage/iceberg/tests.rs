@@ -551,7 +551,7 @@ async fn test_async_iceberg_snapshot() {
     table.commit(/*lsn=*/ 10);
     table.flush(/*lsn=*/ 10).await.unwrap();
     let mooncake_snapshot_handle = table.create_snapshot().unwrap();
-    let (_, iceberg_snapshot_payload) = mooncake_snapshot_handle.await.unwrap();
+    let (_, iceberg_snapshot_payload, _) = mooncake_snapshot_handle.await.unwrap();
 
     // Operation group 2: Append new rows and create mooncake snapshot.
     let row_2 = MoonlinkRow::new(vec![
@@ -564,7 +564,7 @@ async fn test_async_iceberg_snapshot() {
     table.commit(/*lsn=*/ 30);
     table.flush(/*lsn=*/ 30).await.unwrap();
     let mooncake_snapshot_handle = table.create_snapshot().unwrap();
-    let (_, _) = mooncake_snapshot_handle.await.unwrap();
+    let (_, _, _) = mooncake_snapshot_handle.await.unwrap();
 
     // Create iceberg snapshot for the first mooncake snapshot.
     let iceberg_snapshot_handle = table.persist_iceberg_snapshot(iceberg_snapshot_payload.unwrap());
@@ -603,7 +603,7 @@ async fn test_async_iceberg_snapshot() {
     table.commit(/*lsn=*/ 40);
     table.flush(/*lsn=*/ 40).await.unwrap();
     let mooncake_snapshot_handle = table.create_snapshot().unwrap();
-    let (_, iceberg_snapshot_payload) = mooncake_snapshot_handle.await.unwrap();
+    let (_, iceberg_snapshot_payload, _) = mooncake_snapshot_handle.await.unwrap();
 
     // Create iceberg snapshot for the mooncake snapshot.
     let iceberg_snapshot_handle = table.persist_iceberg_snapshot(iceberg_snapshot_payload.unwrap());

@@ -32,22 +32,24 @@ fn splitmix64(mut x: u64) -> u64 {
 }
 
 /// Configurations for merging file indices.
+///
+/// TODO(hjiang): To reduce code change before preview release, disable index merge by default until we do further testing to make sure moonlink fine.
 #[derive(Clone, Default, Debug, TypedBuilder)]
 pub struct FileIndexMergeConfig {
     /// Number of existing index blocks under final size to trigger a merge operation.
     #[cfg(debug_assertions)]
-    #[builder(default = 10)]
+    #[builder(default = u32::MAX)]
     pub file_indices_to_merge: u32,
     /// Number of bytes for a block index to consider it finalized and won't be merged again.
     #[cfg(debug_assertions)]
-    #[builder(default = 256)]
+    #[builder(default = u64::MAX)]
     pub index_block_final_size: u64,
 
     #[cfg(not(debug_assertions))]
-    #[builder(default = 50)]
+    #[builder(default = u32::MAX)]
     pub file_indices_to_merge: u32,
     #[cfg(not(debug_assertions))]
-    #[builder(default = 2 * 1024 * 1024)]
+    #[builder(default = u64::MAX)]
     pub index_block_final_size: u64,
 }
 
