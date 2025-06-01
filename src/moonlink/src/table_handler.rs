@@ -315,6 +315,25 @@ impl TableHandler {
                         }
                     }
                 }
+                // Wait for file indices merge operation to finish.
+                Some(file_indices_res) = async {
+                    if let Some(handle) = &mut file_indices_merge_handle {
+                        match handle.await {
+                            Ok(file_indices_res) => {
+                                Some(file_indices_res)
+                            }
+                            Err(e) => {
+                                println!("Index merge task gets cancelled: {:?}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        futures::future::pending::<Option<_>>().await
+                    }
+                } => {
+                    file_indices_merge_handle = None;
+                    table.set_file_indices_merge_res(file_indices_res);
+                }
                 // Periodic snapshot based on time
                 _ = periodic_snapshot_interval.tick() => {
                     // Only create a periodic snapshot if there isn't already one in progress

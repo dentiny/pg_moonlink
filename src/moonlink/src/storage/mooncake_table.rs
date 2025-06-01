@@ -16,12 +16,13 @@ use crate::row::{IdentityProp, MoonlinkRow};
 use crate::storage::iceberg::iceberg_table_manager::{
     IcebergTableConfig, IcebergTableManager, TableManager,
 };
+use crate::storage::index::persisted_bucket_hash_map::GlobalIndex;
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 pub(crate) use crate::storage::mooncake_table::table_snapshot::{
     FileIndiceMergePayload, FileIndiceMergeResult, IcebergSnapshotPayload, IcebergSnapshotResult,
 };
 use crate::storage::storage_utils::FileId;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::mem::take;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -213,6 +214,14 @@ pub struct SnapshotTask {
     /// streaming xact
     new_streaming_xact: Vec<TransactionStreamOutput>,
 
+    /// --- States related to file indices merge operation ---
+    /// These persisted items will be reflected to mooncake snapshot in the next invocation of periodic mooncake snapshot operation.
+    ///
+    /// Old file indices which have been merged.
+    old_merged_file_indices: HashSet<FileIndex>,
+    /// New merged file indices,
+    new_merged_file_indices: Vec<FileIndex>,
+
     /// ---- States have been recorded by mooncake snapshot, and persisted into iceberg table ----
     /// These persisted items will be reflected to mooncake snapshot in the next invocation of periodic mooncake snapshot operation.
     ///
@@ -240,6 +249,8 @@ impl SnapshotTask {
             new_flush_lsn: None,
             new_commit_point: None,
             new_streaming_xact: Vec::new(),
+            old_merged_file_indices: HashSet::new(),
+            new_merged_file_indices: Vec::new(),
             iceberg_flush_lsn: None,
             iceberg_persisted_data_files: Vec::new(),
             iceberg_persisted_puffin_blob: HashMap::new(),
@@ -428,6 +439,22 @@ impl MooncakeTable {
             .is_empty());
         self.next_snapshot_task.iceberg_persisted_file_indices =
             iceberg_snapshot_res.imported_file_indices;
+    }
+
+    /// Set file indices merge result, which will be sync-ed to mooncake and iceberg snapshot in the next periodic snapshot iteration.
+    pub(crate) fn set_file_indices_merge_res(&mut self, file_indices_res: FileIndiceMergeResult) {
+        // TODO(hjiang): Should be able to use HashSet at beginning so no need to convert.
+        assert!(self.next_snapshot_task.old_merged_file_indices.is_empty());
+        self.next_snapshot_task.old_merged_file_indices = file_indices_res
+            .old_file_indices
+            .iter()
+            .map(|cur_index| cur_index.clone())
+            .collect::<HashSet<GlobalIndex>>();
+
+        assert!(self.next_snapshot_task.new_merged_file_indices.is_empty());
+        self.next_snapshot_task
+            .new_merged_file_indices
+            .push(file_indices_res.merged_file_indices);
     }
 
     /// Get iceberg snapshot flush LSN.

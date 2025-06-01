@@ -45,12 +45,12 @@ pub(crate) struct IcebergSnapshotResult {
 ////////////////////////////
 // Index merge
 ////////////////////////////
-pub(crate) struct FileIndiceMergePayload {
+pub struct FileIndiceMergePayload {
     /// File indices to merge.
     pub(crate) file_indices: Vec<GlobalIndex>,
 }
 
-pub(crate) struct FileIndiceMergeResult {
+pub struct FileIndiceMergeResult {
     /// File indices merged.
     pub(crate) old_file_indices: Vec<GlobalIndex>,
     /// Merged file indices.
