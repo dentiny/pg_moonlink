@@ -6,7 +6,7 @@ use crate::storage::iceberg::puffin_writer_proxy::{
 
 use futures::future::join_all;
 use futures::StreamExt;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 /// This module contains the file-based catalog implementation, which relies on version hint file to decide current version snapshot.
 /// Dispite a few limitation (i.e. atomic rename for local filesystem), it's not a problem for moonlink, which guarantees at most one writer at the same time (for nows).
 /// It leverages `opendal` and iceberg `FileIO` as an abstraction layer to operate on all possible storage backends.
@@ -118,8 +118,11 @@ pub struct FileCatalog {
     /// Table location.
     warehouse_location: String,
     /// Used to record puffin blob metadata in one transaction, and cleaned up after transaction commits.
+    ///
     /// Maps from "puffin filepath" to "puffin blob metadata".
-    puffin_blobs: HashMap<String, Vec<PuffinBlobMetadataProxy>>,
+    puffin_blobs_to_add: HashMap<String, Vec<PuffinBlobMetadataProxy>>,
+    /// A vector of "puffin filepath"s.
+    puffin_blobs_to_remove: HashSet<String>,
 }
 
 impl FileCatalog {
@@ -130,7 +133,8 @@ impl FileCatalog {
             file_io,
             operator: OnceCell::new(),
             warehouse_location,
-            puffin_blobs: HashMap::new(),
+            puffin_blobs_to_add: HashMap::new(),
+            puffin_blobs_to_remove: HashSet::new(),
         })
     }
 
@@ -353,12 +357,19 @@ impl PuffinWrite for FileCatalog {
         puffin_writer: PuffinWriter,
     ) -> IcebergResult<()> {
         let puffin_metadata = get_puffin_metadata_and_close(puffin_writer).await?;
-        self.puffin_blobs.insert(puffin_filepath, puffin_metadata);
+        self.puffin_blobs_to_add
+            .insert(puffin_filepath, puffin_metadata);
         Ok(())
     }
 
+    fn set_puffin_file_to_remove(&mut self, puffin_filepaths: HashSet<String>) {
+        assert!(self.puffin_blobs_to_remove.is_empty());
+        self.puffin_blobs_to_remove = puffin_filepaths;
+    }
+
     fn clear_puffin_metadata(&mut self) {
-        self.puffin_blobs.clear();
+        self.puffin_blobs_to_add.clear();
+        self.puffin_blobs_to_remove.clear();
     }
 }
 
@@ -720,7 +731,13 @@ impl Catalog for FileCatalog {
         // Manifest files and manifest list has persisted into storage, make modifications based on puffin blobs.
         //
         // TODO(hjiang): Add unit test for update and check manifest population.
-        append_puffin_metadata_and_rewrite(&metadata, &self.file_io, &self.puffin_blobs).await?;
+        append_puffin_metadata_and_rewrite(
+            &metadata,
+            &self.file_io,
+            &self.puffin_blobs_to_add,
+            &self.puffin_blobs_to_remove,
+        )
+        .await?;
 
         // Write version hint file.
         let version_hint_path = format!("{}/version-hint.text", metadata_directory);

@@ -4,6 +4,7 @@ use memmap2::Mmap;
 use std::collections::BinaryHeap;
 use std::fmt;
 use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 use std::io::SeekFrom;
 use std::path::PathBuf;
@@ -49,6 +50,21 @@ pub struct GlobalIndex {
     pub(crate) bucket_bits: u32,
 
     pub(crate) index_blocks: Vec<IndexBlock>,
+}
+
+// For GlobalIndex, there won't be two indices pointing to same sets of data files, so we use data files for hash and equal.
+impl PartialEq for GlobalIndex {
+    fn eq(&self, other: &Self) -> bool {
+        self.files == other.files
+    }
+}
+
+impl Eq for GlobalIndex {}
+
+impl Hash for GlobalIndex {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.files.hash(state);
+    }
 }
 
 #[derive(Clone)]

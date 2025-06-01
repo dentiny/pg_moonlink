@@ -14,7 +14,7 @@ use crate::storage::iceberg::deletion_vector::{
 };
 use crate::storage::iceberg::index::{MOONCAKE_HASH_INDEX_V1, MOONCAKE_HASH_INDEX_V1_CARDINALITY};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use iceberg::io::FileIO;
@@ -341,9 +341,10 @@ fn create_manifest_writer_builder(
 pub(crate) async fn append_puffin_metadata_and_rewrite(
     table_metadata: &TableMetadata,
     file_io: &FileIO,
-    puffin_blobs: &HashMap<String, Vec<PuffinBlobMetadataProxy>>,
+    puffin_blobs_to_add: &HashMap<String, Vec<PuffinBlobMetadataProxy>>,
+    puffin_blobs_to_remove: &HashSet<String>,
 ) -> IcebergResult<()> {
-    if puffin_blobs.is_empty() {
+    if puffin_blobs_to_add.is_empty() {
         return Ok(());
     }
 
@@ -386,13 +387,20 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
     // Map from referenced data file to deletion vector manifest entry.
     let mut existing_deletion_vector_entries = HashMap::new();
 
-    // Iterate through all manifest files, keep data manifest files (including data files and hash index files) and merge all deletion vectors.
+    // Iterate through all manifest files, keep data manifest files, process hash index files, and merge all deletion vectors.
     for cur_manifest_file in manifest_list.entries() {
+        // If the current manifest files indicates hash index to remove, skip it directly.
+        if puffin_blobs_to_remove.contains(&cur_manifest_file.manifest_path) {
+            continue;
+        }
+
+        // Keep all data files and left hash index files.
         if cur_manifest_file.content == ManifestContentType::Data {
             manifest_list_writer.add_manifests([cur_manifest_file.clone()].into_iter())?;
             continue;
         }
 
+        // Process deletion vector puffin files.
         let manifest = cur_manifest_file.load_manifest(file_io).await?;
         let (manifest_entries, _) = manifest.into_parts();
         for cur_manifest_entry in manifest_entries.into_iter() {
@@ -417,7 +425,7 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
     }
 
     // Append puffin blobs into existing manifest entries.
-    for (puffin_filepath, blob_metadata) in puffin_blobs.iter() {
+    for (puffin_filepath, blob_metadata) in puffin_blobs_to_add.iter() {
         for cur_blob_metadata in blob_metadata.iter() {
             // Handle mooncake hash index v1.
             if cur_blob_metadata.r#type == MOONCAKE_HASH_INDEX_V1 {

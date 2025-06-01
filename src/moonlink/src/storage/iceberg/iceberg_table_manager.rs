@@ -117,6 +117,9 @@ pub struct IcebergTableManager {
     ///
     /// TODO(hjiang): Consider using `MooncakeDataFileRef` as map key.
     pub(crate) persisted_data_files: HashMap<String, DataFileEntry>,
+
+    /// Maps from mooncake file index to remote puffin filepath.
+    pub(crate) persisted_file_indices: HashMap<MooncakeFileIndex, String>,
 }
 
 impl IcebergTableManager {
@@ -132,6 +135,7 @@ impl IcebergTableManager {
             catalog,
             iceberg_table: None,
             persisted_data_files: HashMap::new(),
+            persisted_file_indices: HashMap::new(),
         })
     }
 
@@ -421,20 +425,12 @@ impl IcebergTableManager {
         Ok(puffin_deletion_blobs)
     }
 
-    /// Dump file indexes into the iceberg table, only new file indexes will be persisted into the table.
-    /// Return file index ids which should be added into iceberg table.
-    ///
-    /// TODO(hjiang): Need to configure (1) the number of blobs in a puffin file; and (2) the number of file index in a puffin blob.
-    /// For implementation simpicity, put everything in a single file and a single blob.
-    async fn sync_file_indices(
+    /// Process file indices to import.
+    async fn import_file_indices(
         &mut self,
-        file_indices: &[MooncakeFileIndex],
+        file_indices_to_import: &[MooncakeFileIndex],
         local_data_file_to_remote: HashMap<MooncakeDataFileRef, String>,
     ) -> IcebergResult<()> {
-        if file_indices.is_empty() {
-            return Ok(());
-        }
-
         let puffin_filepath = self.get_unique_hash_index_v1_filepath();
         let mut puffin_writer = puffin_utils::create_puffin_writer(
             self.iceberg_table.as_ref().unwrap().file_io(),
@@ -448,8 +444,9 @@ impl IcebergTableManager {
         // The hash map here is merely a workaround to pass remote path to iceberg file index structure.
         let mut local_index_file_to_remote = HashMap::new();
 
-        let mut new_file_indices: Vec<&MooncakeFileIndex> = Vec::with_capacity(file_indices.len());
-        for cur_file_index in file_indices.iter() {
+        let mut new_file_indices: Vec<&MooncakeFileIndex> =
+            Vec::with_capacity(file_indices_to_import.len());
+        for cur_file_index in file_indices_to_import.iter() {
             new_file_indices.push(cur_file_index);
             // Upload new index file to iceberg table.
             for cur_index_block in cur_file_index.index_blocks.iter() {
@@ -478,6 +475,41 @@ impl IcebergTableManager {
 
         Ok(())
     }
+
+    /// Dump file indexes into the iceberg table, only new file indexes will be persisted into the table.
+    /// Return file index ids which should be added into iceberg table.
+    ///
+    /// TODO(hjiang): Need to configure (1) the number of blobs in a puffin file; and (2) the number of file index in a puffin blob.
+    /// For implementation simpicity, put everything in a single file and a single blob.
+    async fn sync_file_indices(
+        &mut self,
+        file_indices_to_import: &[MooncakeFileIndex],
+        file_indices_to_remove: &[MooncakeFileIndex],
+        local_data_file_to_remote: HashMap<MooncakeDataFileRef, String>,
+    ) -> IcebergResult<()> {
+        // Invariant assertion.
+        if !file_indices_to_remove.is_empty() {
+            assert!(!file_indices_to_import.is_empty());
+        }
+
+        if file_indices_to_import.is_empty() {
+            return Ok(());
+        }
+
+        // Process file indices to import.
+        self.import_file_indices(file_indices_to_import, local_data_file_to_remote)
+            .await?;
+
+        // Process file indices to remove.
+        self.catalog.set_puffin_file_to_remove(
+            file_indices_to_remove
+                .iter()
+                .map(|cur_index| self.persisted_file_indices.get(cur_index).unwrap().clone())
+                .collect::<HashSet<String>>(),
+        );
+
+        Ok(())
+    }
 }
 
 /// TODO(hjiang): Parallelize all IO operations.
@@ -503,6 +535,7 @@ impl TableManager for IcebergTableManager {
         // Persist file index changes.
         self.sync_file_indices(
             &snapshot_payload.file_indices_to_import,
+            &snapshot_payload.file_indices_to_remove,
             local_data_file_to_remote,
         )
         .await?;
