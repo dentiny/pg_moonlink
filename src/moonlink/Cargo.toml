@@ -2,6 +2,16 @@
 name = "moonlink"
 version = { workspace = true }
 edition = { workspace = true }
+license = { workspace = true }
+
+[features]
+default = ["storage-fs"]
+storage-all = ["storage-fs", "storage-s3"]
+
+storage-fs = ["opendal/services-fs", "iceberg/storage-fs"]
+storage-s3 = ["opendal/services-s3", "iceberg/storage-s3", "aws-sdk-s3"]
+
+bench = []
 
 [dependencies]
 ahash = "0.8.11"
@@ -15,8 +25,11 @@ crc32fast = { workspace = true }
 futures = { workspace = true }
 hashbrown = { workspace = true }
 iceberg = { workspace = true }
+itertools = { workspace = true }
 memmap2 = "0.9"
 multimap = { workspace = true }
+num-bigint = { workspace = true }
+num-traits = { workspace = true }
 opendal = { workspace = true }
 parquet = { workspace = true }
 randomizer = "0.1"
@@ -60,12 +73,3 @@ required-features = ["bench"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(profiling_enabled)'] }
-
-[features]
-default = ["storage-fs"]
-storage-all = ["storage-fs", "storage-s3"]
-
-storage-fs = ["opendal/services-fs", "iceberg/storage-fs"]
-storage-s3 = ["opendal/services-s3", "iceberg/storage-s3", "aws-sdk-s3"]
-
-bench = []

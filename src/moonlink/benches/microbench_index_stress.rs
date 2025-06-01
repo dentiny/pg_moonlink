@@ -1,20 +1,22 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use moonlink::create_data_file;
 use moonlink::GlobalIndexBuilder;
 use rand::Rng;
-use std::path::PathBuf;
-use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 fn bench_index_stress(c: &mut Criterion) {
     let mut group = c.benchmark_group("index_stress");
     group.measurement_time(std::time::Duration::from_secs(10));
     group.sample_size(10);
-    let files = vec![Arc::new(PathBuf::from("test.parquet"))];
+    let files = vec![create_data_file(
+        /*file_id=*/ 0,
+        "test.parquet".to_string(),
+    )];
     let vec = (0..10000000).map(|i| (i as u64, 0, i)).collect::<Vec<_>>();
     let mut builder = GlobalIndexBuilder::new();
     builder
         .set_files(files)
-        .set_directory(tempfile::tempdir().unwrap().into_path());
+        .set_directory(tempfile::tempdir().unwrap().keep());
     let rt = Runtime::new().unwrap();
     let index = rt.block_on(builder.build_from_flush(vec));
 

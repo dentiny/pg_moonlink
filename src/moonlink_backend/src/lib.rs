@@ -1,23 +1,38 @@
 pub use moonlink::ReadState;
-use moonlink::{IcebergSnapshotStateManager, ReadStateManager};
 mod error;
 
 pub use error::Error;
 use error::Result;
-use moonlink_connectors::MoonlinkPostgresSource;
+use moonlink_connectors::ReplicationManager;
+use std::hash::Hash;
+use std::io::ErrorKind;
 use std::sync::Arc;
-use std::{collections::HashMap, hash::Hash};
 use tokio::sync::RwLock;
 
 // Default local filesystem directory where all tables data will be stored under.
 const DEFAULT_MOONLINK_TABLE_BASE_PATH: &str = "./mooncake/";
+// Default local filesystem directory where all temporary files (used for union read) will be stored under.
+// The whole directory is cleaned up at moonlink backend start, to prevent file leak.
+pub const DEFAULT_MOONLINK_TEMP_FILE_PATH: &str = "/tmp/moonlink_temp_file";
+
+/// Util function to delete and re-create the given directory.
+pub fn recreate_directory(dir: &str) -> Result<()> {
+    // Clean up directory to place moonlink temporary files.
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => {}
+        Err(e) => {
+            if e.kind() != ErrorKind::NotFound {
+                return Err(error::Error::Io(e));
+            }
+        }
+    }
+    std::fs::create_dir_all(dir)?;
+    Ok(())
+}
 
 pub struct MoonlinkBackend<T: Eq + Hash> {
     // Could be either relative or absolute path.
-    moonlink_table_base_path: String,
-    ingest_sources: RwLock<Vec<MoonlinkPostgresSource>>,
-    table_readers: RwLock<HashMap<T, ReadStateManager>>,
-    iceberg_snapshot_managers: RwLock<HashMap<T, IcebergSnapshotStateManager>>,
+    replication_manager: RwLock<ReplicationManager<T>>,
 }
 
 impl<T: Eq + Hash + Clone> Default for MoonlinkBackend<T> {
@@ -28,115 +43,42 @@ impl<T: Eq + Hash + Clone> Default for MoonlinkBackend<T> {
 
 impl<T: Eq + Hash + Clone> MoonlinkBackend<T> {
     pub fn new(base_path: String) -> Self {
+        recreate_directory(DEFAULT_MOONLINK_TEMP_FILE_PATH).unwrap();
         Self {
-            moonlink_table_base_path: base_path,
-            ingest_sources: RwLock::new(Vec::new()),
-            table_readers: RwLock::new(HashMap::new()),
-            iceberg_snapshot_managers: RwLock::new(HashMap::new()),
+            replication_manager: RwLock::new(ReplicationManager::new(
+                base_path.clone(),
+                DEFAULT_MOONLINK_TEMP_FILE_PATH.to_string(),
+            )),
         }
     }
 
     pub async fn create_table(&self, table_id: T, table_name: &str, uri: &str) -> Result<()> {
-        let mut ingest_sources = self.ingest_sources.write().await;
-        for ingest_source in ingest_sources.iter_mut() {
-            if ingest_source.check_table_belongs_to_source(uri) {
-                let (reader_state_manager, iceberg_snapshot_manager) =
-                    ingest_source.add_table(table_name).await?;
-                self.table_readers
-                    .write()
-                    .await
-                    .insert(table_id.clone(), reader_state_manager);
-                self.iceberg_snapshot_managers
-                    .write()
-                    .await
-                    .insert(table_id, iceberg_snapshot_manager);
-                return Ok(());
-            }
-        }
-
-        let base_path = std::path::Path::new(&self.moonlink_table_base_path);
-        tokio::fs::create_dir_all(base_path).await?;
-        let canonicalized_base_path = tokio::fs::canonicalize(base_path).await?;
-
-        let mut ingest_source = MoonlinkPostgresSource::new(
-            uri.to_owned(),
-            canonicalized_base_path.to_str().unwrap().to_string(),
-        )
-        .await?;
-        let (reader_state_manager, iceberg_snapshot_manager) =
-            ingest_source.add_table(table_name).await?;
-        ingest_sources.push(ingest_source);
-        self.table_readers
-            .write()
-            .await
-            .insert(table_id.clone(), reader_state_manager);
-        self.iceberg_snapshot_managers
-            .write()
-            .await
-            .insert(table_id, iceberg_snapshot_manager);
+        let mut manager = self.replication_manager.write().await;
+        manager.add_table(uri, table_id, table_name).await?;
         Ok(())
     }
 
-    pub async fn drop_table(&self, _table_id: T) -> Result<()> {
-        todo!()
+    pub async fn drop_table(&self, external_table_id: T) -> Result<()> {
+        let mut manager = self.replication_manager.write().await;
+        manager.drop_table(external_table_id).await?;
+        Ok(())
     }
 
     pub async fn scan_table(&self, table_id: &T, lsn: Option<u64>) -> Result<Arc<ReadState>> {
-        let table_readers = self.table_readers.read().await;
-        let reader = table_readers
-            .get(table_id)
-            .expect("try to scan a table that does not exist");
-        let read_state = reader.try_read(lsn).await?;
+        let manager = self.replication_manager.read().await;
+
+        let table_reader = manager.get_table_reader(table_id);
+        let read_state = table_reader.try_read(lsn).await?;
         Ok(read_state)
     }
 
-    /// Create an iceberg snapshot, return when the a snapshot is successfully created.
-    pub async fn create_iceberg_snapshot(&self, table_id: &T) -> Result<()> {
-        let mut iceberg_snapshot_managers = self.iceberg_snapshot_managers.write().await;
-        let writer = iceberg_snapshot_managers.get_mut(table_id).unwrap();
-        writer.initiate_snapshot().await;
-        writer.sync_snapshot_completion().await;
+    /// Create an iceberg snapshot with the given LSN, return when the a snapshot is successfully created.
+    pub async fn create_iceberg_snapshot(&self, table_id: &T, lsn: u64) -> Result<()> {
+        let mut manager = self.replication_manager.write().await;
+
+        let writer = manager.get_iceberg_table_event_manager(table_id);
+        writer.initiate_snapshot(lsn).await;
+        writer.sync_snapshot_completion().await?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-    use tokio_postgres::{connect, NoTls};
-
-    #[tokio::test]
-    async fn test_moonlink_service() {
-        let temp_dir = TempDir::new().expect("tempdir failed");
-        let uri = "postgresql://postgres:postgres@postgres:5432/postgres";
-        let service =
-            MoonlinkBackend::<&'static str>::new(temp_dir.path().to_str().unwrap().to_string());
-        // connect to postgres and create a table
-        let (client, connection) = connect(uri, NoTls).await.unwrap();
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
-            }
-        });
-
-        client.simple_query("DROP TABLE IF EXISTS test; CREATE TABLE test (id bigint PRIMARY KEY, name VARCHAR(255));").await.unwrap();
-        service
-            .create_table("test", "public.test", uri)
-            .await
-            .unwrap();
-        client
-            .simple_query("INSERT INTO test VALUES (1 ,'foo');")
-            .await
-            .unwrap();
-        client
-            .simple_query("INSERT INTO test VALUES (2 ,'bar');")
-            .await
-            .unwrap();
-        let old = service.scan_table(&"test", None).await.unwrap();
-        // wait 2 second
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        let new = service.scan_table(&"test", None).await.unwrap();
-        assert_ne!(old.data, new.data);
     }
 }

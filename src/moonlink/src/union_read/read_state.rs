@@ -18,22 +18,30 @@ pub struct ReadState {
 
 impl Drop for ReadState {
     fn drop(&mut self) {
-        println!("Dropping files: {:?}", self.associated_files);
-        for file in self.associated_files.iter() {
-            std::fs::remove_file(file).unwrap();
-        }
+        let associated_files = std::mem::take(&mut self.associated_files);
+        println!("Dropping files: {:?}", associated_files);
+        // Perform best-effort deletion by spawning detached task.
+        tokio::spawn(async move {
+            for file in associated_files.into_iter() {
+                if let Err(e) = tokio::fs::remove_file(&file).await {
+                    println!("Failed to delete file {} because {:?}", file, e);
+                }
+            }
+        });
     }
 }
 
 impl ReadState {
     pub(super) fn new(
         data_files: Vec<String>,
+        puffin_files: Vec<String>,
         deletion_vectors_at_read: Vec<PuffinDeletionBlobAtRead>,
         position_deletes: Vec<(u32 /*file_index*/, u32 /*row_index*/)>,
         associated_files: Vec<String>,
     ) -> Self {
         let metadata = TableMetadata {
             data_files,
+            puffin_files,
             deletion_vectors: deletion_vectors_at_read,
             position_deletes,
         };
@@ -46,12 +54,19 @@ impl ReadState {
 }
 
 #[cfg(test)]
+#[allow(clippy::type_complexity)]
 pub fn decode_read_state_for_testing(
     read_state: &ReadState,
-) -> (Vec<String>, Vec<PuffinDeletionBlobAtRead>, Vec<(u32, u32)>) {
+) -> (
+    Vec<String>, /*data_file_paths*/
+    Vec<String>, /*puffin_file_paths*/
+    Vec<PuffinDeletionBlobAtRead>,
+    Vec<(u32, u32)>,
+) {
     let metadata = TableMetadata::decode(&read_state.data);
     (
         metadata.data_files,
+        metadata.puffin_files,
         metadata.deletion_vectors,
         metadata.position_deletes,
     )

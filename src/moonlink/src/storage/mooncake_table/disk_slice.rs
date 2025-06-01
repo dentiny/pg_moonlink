@@ -2,14 +2,16 @@ use super::data_batches::BatchEntry;
 use crate::error::{Error, Result};
 use crate::storage::index::persisted_bucket_hash_map::GlobalIndexBuilder;
 use crate::storage::index::{FileIndex, MemIndex};
-use crate::storage::storage_utils::{FileId, ProcessedDeletionRecord, RecordLocation};
+use crate::storage::storage_utils::{
+    create_data_file, get_random_file_name_in_dir, get_unique_file_id_for_flush,
+    MooncakeDataFileRef, ProcessedDeletionRecord, RecordLocation,
+};
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
 use parquet::arrow::AsyncArrowWriter;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use uuid::Uuid;
 
 pub(crate) struct DiskSliceWriter {
     /// The schema of the DiskSlice.
@@ -25,6 +27,11 @@ pub(crate) struct DiskSliceWriter {
 
     old_index: Arc<MemIndex>,
 
+    table_auto_incr_id: u32,
+
+    /// Parquet file flush threshold size.
+    parquet_flush_threshold_size: usize,
+
     // a mapping of old record locations to new record locations
     // this is used to remap deletions on the disk slice
     batch_id_to_idx: HashMap<u64, usize>,
@@ -33,22 +40,18 @@ pub(crate) struct DiskSliceWriter {
     new_index: Option<FileIndex>,
 
     /// Records already flushed data files.
-    files: Vec<(PathBuf /* file path */, usize /* row count */)>,
+    files: Vec<(MooncakeDataFileRef, usize /* row count */)>,
 }
 
 impl DiskSliceWriter {
-    #[cfg(debug_assertions)]
-    const PARQUET_FILE_SIZE: usize = 1024 * 1024 * 2; // 2MB
-
-    #[cfg(not(debug_assertions))]
-    const PARQUET_FILE_SIZE: usize = 1024 * 1024 * 128; // 128MB
-
     pub(super) fn new(
         schema: Arc<Schema>,
         dir_path: PathBuf,
         batches: Vec<BatchEntry>,
         writer_lsn: Option<u64>,
+        table_auto_incr_id: u32,
         old_index: Arc<MemIndex>,
+        parquet_flush_threshold_size: usize,
     ) -> Self {
         Self {
             schema,
@@ -57,9 +60,11 @@ impl DiskSliceWriter {
             files: vec![],
             batch_id_to_idx: HashMap::new(),
             writer_lsn,
+            table_auto_incr_id,
             row_offset_mapping: vec![],
             old_index,
             new_index: None,
+            parquet_flush_threshold_size,
         }
     }
 
@@ -92,16 +97,17 @@ impl DiskSliceWriter {
         self.writer_lsn
     }
 
-    pub(super) fn set_lsn(&mut self, lsn: Option<u64>) {
-        self.writer_lsn = lsn;
-    }
-
     pub(super) fn input_batches(&self) -> &Vec<BatchEntry> {
         &self.batches
     }
     /// Get the list of files in the DiskSlice
-    pub(super) fn output_files(&self) -> &[(PathBuf, usize)] {
+    pub(super) fn output_files(&self) -> &[(MooncakeDataFileRef, usize)] {
         self.files.as_slice()
+    }
+
+    /// Get the list of files in the DiskSlice
+    pub(crate) fn get_file_indice(&self) -> Option<FileIndex> {
+        self.new_index.clone()
     }
 
     pub(super) fn old_index(&self) -> &Arc<MemIndex> {
@@ -119,17 +125,22 @@ impl DiskSliceWriter {
         let mut out_file_idx = 0;
         let mut out_row_idx = 0;
         let dir_path = &self.dir_path;
-        let mut file_path = None;
+        let mut data_file = None;
         for (batch_id, batch, row_indices) in record_batches {
             if writer.is_none() {
                 // Generate a unique file name
                 // Create the file
-                let file_name = format!("{}.parquet", Uuid::new_v4());
-                file_path = Some(dir_path.join(file_name));
-                let file = tokio::fs::File::create(file_path.as_ref().unwrap())
-                    .await
-                    .map_err(Error::Io)?;
                 out_file_idx = files.len();
+                let file_id = get_unique_file_id_for_flush(
+                    self.table_auto_incr_id as u64,
+                    out_file_idx as u64,
+                );
+                let file_path = get_random_file_name_in_dir(dir_path);
+                data_file = Some(create_data_file(file_id, file_path));
+                let file =
+                    tokio::fs::File::create(dir_path.join(data_file.as_ref().unwrap().file_path()))
+                        .await
+                        .map_err(Error::Io)?;
                 writer = Some(AsyncArrowWriter::try_new(file, self.schema.clone(), None)?);
                 out_row_idx = 0;
             }
@@ -139,17 +150,17 @@ impl DiskSliceWriter {
             }
             // Write the batch
             writer.as_mut().unwrap().write(batch).await?;
-            if writer.as_ref().unwrap().memory_size() > Self::PARQUET_FILE_SIZE {
+            if writer.as_ref().unwrap().memory_size() > self.parquet_flush_threshold_size {
                 // Finalize the writer
                 writer.unwrap().close().await?;
                 writer = None;
-                files.push((file_path.unwrap(), out_row_idx));
-                file_path = None;
+                files.push((data_file.unwrap(), out_row_idx));
+                data_file = None;
             }
         }
         if let Some(writer) = writer {
             writer.close().await?;
-            files.push((file_path.unwrap(), out_row_idx));
+            files.push((data_file.unwrap(), out_row_idx));
         }
         self.files = files;
         Ok(())
@@ -164,12 +175,7 @@ impl DiskSliceWriter {
             .remap_into_vec(&self.batch_id_to_idx, &self.row_offset_mapping);
 
         let mut index_builder = GlobalIndexBuilder::new();
-        index_builder.set_files(
-            self.files
-                .iter()
-                .map(|(path, _)| Arc::new(path.clone()))
-                .collect(),
-        );
+        index_builder.set_files(self.files.iter().map(|(file, _)| file.clone()).collect());
         index_builder.set_directory(self.dir_path.clone());
         self.new_index = Some(index_builder.build_from_flush(list).await);
         Ok(())
@@ -187,7 +193,7 @@ impl DiskSliceWriter {
                 let new_location = self.row_offset_mapping[old_location.0][old_location.1];
                 if let Some(new_location) = new_location {
                     deletion.pos = RecordLocation::DiskFile(
-                        FileId(Arc::new(self.files[new_location.0].0.clone())),
+                        self.files[new_location.0].0.file_id(),
                         new_location.1,
                     );
                 }
@@ -201,6 +207,7 @@ mod tests {
     use super::*;
     use crate::row::{IdentityProp, MoonlinkRow, RowValue};
     use crate::storage::mooncake_table::mem_slice::MemSlice;
+    use crate::storage::mooncake_table::TableConfig as MooncakeTableConfig;
     use crate::storage::storage_utils::RawDeletionRecord;
     use arrow::datatypes::{DataType, Field};
     use arrow_array::{Int32Array, StringArray};
@@ -252,7 +259,9 @@ mod tests {
             temp_dir.path().to_path_buf(),
             entries,
             Some(1),
+            /*table_auto_incr_id=*/ 0,
             Arc::new(old_index),
+            MooncakeTableConfig::DEFAULT_DISK_SLICE_PARQUET_FILE_SIZE,
         );
         disk_slice.write().await?;
 
@@ -261,7 +270,8 @@ mod tests {
 
         // Read the files and verify the data
         for (file, _rows) in disk_slice.output_files() {
-            let file = tokio::fs::File::open(file).await?;
+            let file_path = temp_dir.path().join(file.file_path());
+            let file = tokio::fs::File::open(file_path).await?;
             let builder = ParquetRecordBatchStreamBuilder::new(file).await?;
             let actual_schema = builder.schema();
             assert_eq!(*actual_schema, schema);
@@ -362,7 +372,9 @@ mod tests {
             temp_dir.path().to_path_buf(),
             entries,
             Some(1),
+            0,
             Arc::new(index),
+            MooncakeTableConfig::DEFAULT_DISK_SLICE_PARQUET_FILE_SIZE,
         );
 
         // Write the disk slice
@@ -387,12 +399,11 @@ mod tests {
                 match location {
                     RecordLocation::DiskFile(file_id, _) => {
                         // Verify the file exists in our output files
-                        let file_path = &file_id.0;
                         assert!(
                             disk_slice
                                 .output_files()
                                 .iter()
-                                .any(|(path, _)| path == file_path.as_ref()),
+                                .any(|(file, _)| file.file_id() == file_id),
                             "Referenced file path should exist in output files"
                         );
                     }

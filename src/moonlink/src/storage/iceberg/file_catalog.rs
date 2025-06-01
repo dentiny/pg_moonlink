@@ -6,7 +6,7 @@ use crate::storage::iceberg::puffin_writer_proxy::{
 
 use futures::future::join_all;
 use futures::StreamExt;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 /// This module contains the file-based catalog implementation, which relies on version hint file to decide current version snapshot.
 /// Dispite a few limitation (i.e. atomic rename for local filesystem), it's not a problem for moonlink, which guarantees at most one writer at the same time (for nows).
 /// It leverages `opendal` and iceberg `FileIO` as an abstraction layer to operate on all possible storage backends.
@@ -87,10 +87,10 @@ pub enum CatalogConfig {
 }
 
 /// Create `FileIO` object based on the catalog config.
-fn create_file_io(config: &CatalogConfig) -> FileIO {
+fn create_file_io(config: &CatalogConfig) -> IcebergResult<FileIO> {
     match config {
         #[cfg(feature = "storage-fs")]
-        CatalogConfig::FileSystem => FileIOBuilder::new_fs_io().build().unwrap(),
+        CatalogConfig::FileSystem => FileIOBuilder::new_fs_io().build(),
         #[cfg(feature = "storage-s3")]
         CatalogConfig::S3 {
             access_key_id,
@@ -103,8 +103,7 @@ fn create_file_io(config: &CatalogConfig) -> FileIO {
             .with_prop(iceberg::io::S3_ENDPOINT, endpoint)
             .with_prop(iceberg::io::S3_ACCESS_KEY_ID, access_key_id)
             .with_prop(iceberg::io::S3_SECRET_ACCESS_KEY, secret_access_key)
-            .build()
-            .unwrap(),
+            .build(),
     }
 }
 
@@ -119,20 +118,24 @@ pub struct FileCatalog {
     /// Table location.
     warehouse_location: String,
     /// Used to record puffin blob metadata in one transaction, and cleaned up after transaction commits.
+    ///
     /// Maps from "puffin filepath" to "puffin blob metadata".
-    puffin_blobs: HashMap<String, Vec<PuffinBlobMetadataProxy>>,
+    puffin_blobs_to_add: HashMap<String, Vec<PuffinBlobMetadataProxy>>,
+    /// A vector of "puffin filepath"s.
+    puffin_blobs_to_remove: HashSet<String>,
 }
 
 impl FileCatalog {
-    pub fn new(warehouse_location: String, config: CatalogConfig) -> Self {
-        let file_io = create_file_io(&config);
-        Self {
+    pub fn new(warehouse_location: String, config: CatalogConfig) -> IcebergResult<Self> {
+        let file_io = create_file_io(&config)?;
+        Ok(Self {
             config,
             file_io,
             operator: OnceCell::new(),
             warehouse_location,
-            puffin_blobs: HashMap::new(),
-        }
+            puffin_blobs_to_add: HashMap::new(),
+            puffin_blobs_to_remove: HashSet::new(),
+        })
     }
 
     /// Get IO operator from the catalog.
@@ -354,12 +357,19 @@ impl PuffinWrite for FileCatalog {
         puffin_writer: PuffinWriter,
     ) -> IcebergResult<()> {
         let puffin_metadata = get_puffin_metadata_and_close(puffin_writer).await?;
-        self.puffin_blobs.insert(puffin_filepath, puffin_metadata);
+        self.puffin_blobs_to_add
+            .insert(puffin_filepath, puffin_metadata);
         Ok(())
     }
 
+    fn set_puffin_file_to_remove(&mut self, puffin_filepaths: HashSet<String>) {
+        assert!(self.puffin_blobs_to_remove.is_empty());
+        self.puffin_blobs_to_remove = puffin_filepaths;
+    }
+
     fn clear_puffin_metadata(&mut self) {
-        self.puffin_blobs.clear();
+        self.puffin_blobs_to_add.clear();
+        self.puffin_blobs_to_remove.clear();
     }
 }
 
@@ -720,18 +730,14 @@ impl Catalog for FileCatalog {
 
         // Manifest files and manifest list has persisted into storage, make modifications based on puffin blobs.
         //
-        // TODO(hjiang):
-        // 1. Add unit test for update and check manifest population.
-        // 2. Here for possible deletion vector and hash index, we potentially rewrite manifest file for data files for twice.
-        for (puffin_filepath, puffin_blob_metadata) in self.puffin_blobs.iter() {
-            append_puffin_metadata_and_rewrite(
-                &metadata,
-                &self.file_io,
-                puffin_filepath,
-                puffin_blob_metadata.clone(),
-            )
-            .await?;
-        }
+        // TODO(hjiang): Add unit test for update and check manifest population.
+        append_puffin_metadata_and_rewrite(
+            &metadata,
+            &self.file_io,
+            &self.puffin_blobs_to_add,
+            &self.puffin_blobs_to_remove,
+        )
+        .await?;
 
         // Write version hint file.
         let version_hint_path = format!("{}/version-hint.text", metadata_directory);
@@ -1124,7 +1130,7 @@ mod tests {
     async fn test_catalog_namespace_operations_filesystem() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {});
+        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {})?;
         test_catalog_namespace_operations_impl(catalog).await
     }
     #[tokio::test]
@@ -1139,7 +1145,7 @@ mod tests {
     async fn test_catalog_table_operations_filesystem() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {});
+        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {})?;
         test_catalog_table_operations_impl(catalog).await
     }
     #[tokio::test]
@@ -1154,7 +1160,7 @@ mod tests {
     async fn test_list_operation_filesystem() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {});
+        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {})?;
         test_list_operation_impl(catalog).await
     }
     #[tokio::test]
@@ -1169,7 +1175,7 @@ mod tests {
     async fn test_update_table_filesystem() -> IcebergResult<()> {
         let temp_dir = TempDir::new().expect("tempdir failed");
         let warehouse_path = temp_dir.path().to_str().unwrap();
-        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {});
+        let catalog = FileCatalog::new(warehouse_path.to_string(), CatalogConfig::FileSystem {})?;
         test_update_table_impl(catalog).await
     }
     #[tokio::test]

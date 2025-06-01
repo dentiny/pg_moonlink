@@ -1,18 +1,16 @@
-use crate::storage::index::file_index_id::get_next_file_index_id;
-use crate::storage::storage_utils::{FileId, RecordLocation};
-use arrow_array::builder;
+use crate::storage::storage_utils::{MooncakeDataFileRef, RecordLocation};
 use futures::executor::block_on;
 use memmap2::Mmap;
 use std::collections::BinaryHeap;
 use std::fmt;
 use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 use std::io::SeekFrom;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::File as AsyncFile;
 use tokio::io::BufWriter as AsyncBufWriter;
-use tokio::sync::OnceCell;
 use tokio_bitstream_io::{
     BigEndian as AsyncBigEndian, BitRead as AsyncBitRead, BitReader as AsyncBitReader,
     BitWrite as AsyncBitWrite, BitWriter as AsyncBitWriter,
@@ -23,7 +21,7 @@ use typed_builder::TypedBuilder;
 const HASH_BITS: u32 = 64;
 const _MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024 * 1024; // 2GB
 const _TARGET_NUM_FILES_PER_INDEX: u32 = 4000;
-const INVALID_FILE_ID: u32 = 0xFFFFFFFF;
+const _INVALID_FILE_ID: u32 = 0xFFFFFFFF;
 
 fn splitmix64(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9E3779B97F4A7C15);
@@ -62,11 +60,9 @@ pub struct FileIndexMergeConfig {
 ///
 /// Values
 /// [lower_bit_hash, seg_idx, row_idx]
+#[derive(Clone)]
 pub struct GlobalIndex {
-    /// A unique id to identify each global index.
-    pub(crate) global_index_id: u32,
-
-    pub(crate) files: Vec<Arc<PathBuf>>, // data files
+    pub(crate) files: Vec<MooncakeDataFileRef>,
     pub(crate) num_rows: u32,
     pub(crate) hash_bits: u32,
     pub(crate) hash_upper_bits: u32,
@@ -78,6 +74,22 @@ pub struct GlobalIndex {
     pub(crate) index_blocks: Vec<IndexBlock>,
 }
 
+// For GlobalIndex, there won't be two indices pointing to same sets of data files, so we use data files for hash and equal.
+impl PartialEq for GlobalIndex {
+    fn eq(&self, other: &Self) -> bool {
+        self.files == other.files
+    }
+}
+
+impl Eq for GlobalIndex {}
+
+impl Hash for GlobalIndex {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.files.hash(state);
+    }
+}
+
+#[derive(Clone)]
 pub(crate) struct IndexBlock {
     pub(crate) bucket_start_idx: u32,
     pub(crate) bucket_end_idx: u32,
@@ -85,7 +97,7 @@ pub(crate) struct IndexBlock {
     pub(crate) file_path: String,
     /// File size for the index block file, used to decide whether to continue merge index blocks.
     pub(crate) file_size: u64,
-    data: Option<Mmap>,
+    data: Arc<Option<Mmap>>,
 }
 
 impl IndexBlock {
@@ -104,7 +116,7 @@ impl IndexBlock {
             bucket_start_offset,
             file_path,
             file_size: file_metadata.len(),
-            data: Some(data),
+            data: Arc::new(Some(data)),
         }
     }
 
@@ -113,7 +125,7 @@ impl IndexBlock {
         metadata: &'a GlobalIndex,
         file_id_remap: &'a Vec<u32>,
     ) -> IndexBlockIterator<'a> {
-        IndexBlockIterator::new(self, metadata, file_id_remap).await
+        IndexBlockIterator::_new(self, metadata, file_id_remap).await
     }
 
     #[inline]
@@ -153,7 +165,7 @@ impl IndexBlock {
         metadata: &GlobalIndex,
     ) -> Vec<RecordLocation> {
         assert!(bucket_idx >= self.bucket_start_idx && bucket_idx < self.bucket_end_idx);
-        let cursor = Cursor::new(self.data.as_ref().unwrap().as_ref());
+        let cursor = Cursor::new(self.data.as_ref().as_ref().unwrap().as_ref());
         let mut reader = AsyncBitReader::endian(cursor, AsyncBigEndian);
         let mut entry_reader = reader.clone();
         let (entry_start, entry_end) = self.read_bucket(bucket_idx, &mut reader, metadata).await;
@@ -171,7 +183,7 @@ impl IndexBlock {
                 let (hash, seg_idx, row_idx) = self.read_entry(&mut entry_reader, metadata).await;
                 if hash == target_lower_hash {
                     results.push(RecordLocation::DiskFile(
-                        FileId(metadata.files[seg_idx].clone()),
+                        metadata.files[seg_idx].file_id(),
                         row_idx,
                     ));
                 }
@@ -212,40 +224,30 @@ struct IndexBlockBuilder {
     bucket_end_idx: u32,
     buckets: Vec<u32>,
     file_path: PathBuf,
-    entry_writer: OnceCell<AsyncBitWriter<AsyncBufWriter<AsyncFile>, AsyncBigEndian>>,
+    entry_writer: AsyncBitWriter<AsyncBufWriter<AsyncFile>, AsyncBigEndian>,
     current_bucket: u32,
     current_entry: u32,
 }
 
 /// TODO(hjiang): Error handle for all IO operations.
 impl IndexBlockBuilder {
-    pub fn new(bucket_start_idx: u32, bucket_end_idx: u32, directory: PathBuf) -> Self {
+    pub async fn new(bucket_start_idx: u32, bucket_end_idx: u32, directory: PathBuf) -> Self {
         let file_name = format!("index_block_{}.bin", uuid::Uuid::new_v4());
         let file_path = directory.join(&file_name);
+
+        let file = AsyncFile::create(&file_path).await.unwrap();
+        let buf_writer = AsyncBufWriter::new(file);
+        let entry_writer = AsyncBitWriter::endian(buf_writer, AsyncBigEndian);
 
         Self {
             bucket_start_idx,
             bucket_end_idx,
             buckets: vec![0; (bucket_end_idx - bucket_start_idx) as usize],
             file_path,
-            entry_writer: OnceCell::new(),
+            entry_writer,
             current_bucket: bucket_start_idx,
             current_entry: 0,
         }
-    }
-
-    /// Initialize entry writer for once.
-    async fn get_entry_writer(
-        &mut self,
-    ) -> &mut AsyncBitWriter<AsyncBufWriter<AsyncFile>, AsyncBigEndian> {
-        self.entry_writer
-            .get_or_init(|| async {
-                let file = AsyncFile::create(self.file_path.clone()).await.unwrap();
-                let buf_writer = AsyncBufWriter::new(file);
-                AsyncBitWriter::endian(buf_writer, AsyncBigEndian)
-            })
-            .await;
-        self.entry_writer.get_mut().unwrap()
     }
 
     pub async fn write_entry(
@@ -259,21 +261,18 @@ impl IndexBlockBuilder {
             self.current_bucket += 1;
             self.buckets[self.current_bucket as usize] = self.current_entry;
         }
-        self.get_entry_writer()
-            .await
+        self.entry_writer
             .write(
                 metadata.hash_lower_bits,
                 hash & ((1 << metadata.hash_lower_bits) - 1),
             )
             .await
             .unwrap();
-        self.get_entry_writer()
-            .await
+        self.entry_writer
             .write(metadata.seg_id_bits, seg_idx as u32)
             .await
             .unwrap();
-        self.get_entry_writer()
-            .await
+        self.entry_writer
             .write(metadata.row_id_bits, row_idx as u32)
             .await
             .unwrap();
@@ -288,14 +287,13 @@ impl IndexBlockBuilder {
             * (metadata.hash_lower_bits + metadata.seg_id_bits + metadata.row_id_bits) as u64;
         let buckets = std::mem::take(&mut self.buckets);
         for cur_bucket in buckets {
-            self.get_entry_writer()
-                .await
+            self.entry_writer
                 .write(metadata.bucket_bits, cur_bucket)
                 .await
                 .unwrap();
         }
-        self.get_entry_writer().await.byte_align().await.unwrap();
-        self.get_entry_writer().await.flush().await.unwrap();
+        self.entry_writer.byte_align().await.unwrap();
+        self.entry_writer.flush().await.unwrap();
         drop(self.entry_writer);
         IndexBlock::new(
             self.bucket_start_idx,
@@ -309,8 +307,14 @@ impl IndexBlockBuilder {
 
 pub struct GlobalIndexBuilder {
     num_rows: u32,
-    files: Vec<Arc<PathBuf>>,
+    files: Vec<MooncakeDataFileRef>,
     directory: PathBuf,
+}
+
+impl Default for GlobalIndexBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GlobalIndexBuilder {
@@ -327,7 +331,7 @@ impl GlobalIndexBuilder {
         self
     }
 
-    pub fn set_files(&mut self, files: Vec<Arc<PathBuf>>) -> &mut Self {
+    pub fn set_files(&mut self, files: Vec<MooncakeDataFileRef>) -> &mut Self {
         self.files = files;
         self
     }
@@ -341,7 +345,6 @@ impl GlobalIndexBuilder {
         let lower_bits = 64 - upper_bits;
         let seg_id_bits = 32 - (self.files.len() as u32).trailing_zeros();
         let global_index = GlobalIndex {
-            global_index_id: get_next_file_index_id(),
             files: std::mem::take(&mut self.files),
             num_rows,
             hash_bits: HASH_BITS,
@@ -371,7 +374,7 @@ impl GlobalIndexBuilder {
         let (num_buckets, mut global_index) = self.create_global_index();
         let mut index_blocks = Vec::new();
         let mut index_block_builder =
-            IndexBlockBuilder::new(0, num_buckets + 1, self.directory.clone());
+            IndexBlockBuilder::new(0, num_buckets + 1, self.directory.clone()).await;
         for entry in iter {
             index_block_builder
                 .write_entry(entry.0, entry.1, entry.2, &global_index)
@@ -394,7 +397,7 @@ impl GlobalIndexBuilder {
         let mut file_id_remaps = vec![];
         let mut file_id_after_remap = 0;
         for index in &indices {
-            let mut file_id_remap = vec![INVALID_FILE_ID; index.files.len()];
+            let mut file_id_remap = vec![_INVALID_FILE_ID; index.files.len()];
             for (_, item) in file_id_remap.iter_mut().enumerate().take(index.files.len()) {
                 *item = file_id_after_remap;
                 file_id_after_remap += 1;
@@ -416,7 +419,7 @@ impl GlobalIndexBuilder {
         let (num_buckets, mut global_index) = self.create_global_index();
         let mut index_blocks = Vec::new();
         let mut index_block_builder =
-            IndexBlockBuilder::new(0, num_buckets + 1, self.directory.clone());
+            IndexBlockBuilder::new(0, num_buckets + 1, self.directory.clone()).await;
         while let Some(entry) = iter._next().await {
             index_block_builder
                 .write_entry(entry.0, entry.1, entry.2, &global_index)
@@ -431,6 +434,7 @@ impl GlobalIndexBuilder {
 // ================================
 // Iterators for merging indices
 // ================================
+#[allow(dead_code)]
 struct IndexBlockIterator<'a> {
     collection: &'a IndexBlock,
     metadata: &'a GlobalIndex,
@@ -444,13 +448,13 @@ struct IndexBlockIterator<'a> {
 }
 
 impl<'a> IndexBlockIterator<'a> {
-    async fn new(
+    async fn _new(
         collection: &'a IndexBlock,
         metadata: &'a GlobalIndex,
         file_id_remap: &'a Vec<u32>,
     ) -> Self {
         let mut bucket_reader = AsyncBitReader::endian(
-            Cursor::new(collection.data.as_ref().unwrap().as_ref()),
+            Cursor::new(collection.data.as_ref().as_ref().unwrap().as_ref()),
             AsyncBigEndian,
         );
         let entry_reader = bucket_reader.clone();
@@ -479,7 +483,7 @@ impl<'a> IndexBlockIterator<'a> {
         }
     }
 
-    async fn next(&mut self) -> Option<(u64, usize, usize)> {
+    async fn _next(&mut self) -> Option<(u64, usize, usize)> {
         loop {
             if self.current_bucket == self.collection.bucket_end_idx - 1 {
                 return None;
@@ -501,13 +505,14 @@ impl<'a> IndexBlockIterator<'a> {
                 .read_entry(&mut self.entry_reader, self.metadata)
                 .await;
             self.current_entry += 1;
-            if *self.file_id_remap.get(seg_idx).unwrap() != INVALID_FILE_ID {
+            if *self.file_id_remap.get(seg_idx).unwrap() != _INVALID_FILE_ID {
                 return Some((lower_hash + self.current_upper_hash, seg_idx, row_idx));
             }
         }
     }
 }
 
+#[allow(dead_code)]
 pub struct GlobalIndexIterator<'a> {
     index: &'a GlobalIndex,
     block_idx: usize,
@@ -534,10 +539,10 @@ impl<'a> GlobalIndexIterator<'a> {
         }
     }
 
-    pub async fn next(&mut self) -> Option<(u64, usize, usize)> {
+    pub async fn _next(&mut self) -> Option<(u64, usize, usize)> {
         loop {
             if let Some(ref mut iter) = self.block_iter {
-                if let Some(item) = iter.next().await {
+                if let Some(item) = iter._next().await {
                     return Some(item);
                 }
             }
@@ -588,7 +593,7 @@ impl<'a> GlobalIndexMergingIterator<'a> {
     pub async fn _new(iterators: Vec<GlobalIndexIterator<'a>>) -> Self {
         let mut heap = BinaryHeap::new();
         for mut it in iterators {
-            if let Some(value) = it.next().await {
+            if let Some(value) = it._next().await {
                 heap.push(HeapItem { value, iter: it });
             }
         }
@@ -598,7 +603,7 @@ impl<'a> GlobalIndexMergingIterator<'a> {
     pub async fn _next(&mut self) -> Option<(u64, usize, usize)> {
         if let Some(mut heap_item) = self.heap.pop() {
             let result = heap_item.value;
-            if let Some(next_value) = heap_item.iter.next().await {
+            if let Some(next_value) = heap_item.iter._next().await {
                 self.heap.push(HeapItem {
                     value: next_value,
                     iter: heap_item.iter,
@@ -621,7 +626,7 @@ impl IndexBlock {
             "\nIndexBlock {{ \n   bucket_start_idx: {}, \n   bucket_end_idx: {},",
             self.bucket_start_idx, self.bucket_end_idx
         )?;
-        let cursor = Cursor::new(self.data.as_ref().unwrap().as_ref());
+        let cursor = Cursor::new(self.data.as_ref().as_ref().unwrap().as_ref());
         let mut reader = AsyncBitReader::endian(cursor, AsyncBigEndian);
         write!(f, "\n   Buckets: ")?;
         let mut num = 0;
@@ -658,11 +663,11 @@ mod tests {
 
     use super::*;
 
-    use crate::storage::storage_utils::FileId;
+    use crate::storage::storage_utils::{create_data_file, FileId};
 
     #[tokio::test]
     async fn test_new() {
-        let data_file = Arc::new(PathBuf::from("test.parquet"));
+        let data_file = create_data_file(/*file_id=*/ 0, "a.parquet".to_string());
         let files = vec![data_file.clone()];
         let hash_entries = vec![
             (1, 0, 0),
@@ -682,13 +687,15 @@ mod tests {
         let mut builder = GlobalIndexBuilder::new();
         builder
             .set_files(files)
-            .set_directory(tempfile::tempdir().unwrap().into_path());
+            .set_directory(tempfile::tempdir().unwrap().keep());
         let index = builder.build_from_flush(hash_entries.clone()).await;
 
-        let data_file_ids = [FileId(data_file.clone())];
+        // Search for a non-existent key doesn't panic.
+        assert!(index.search(/*hash=*/ &0).await.is_empty());
+
+        let data_file_ids = [data_file.file_id()];
         for (hash, seg_idx, row_idx) in hash_entries.iter() {
-            let expected_record_loc =
-                RecordLocation::DiskFile(data_file_ids[*seg_idx].clone(), *row_idx);
+            let expected_record_loc = RecordLocation::DiskFile(data_file_ids[*seg_idx], *row_idx);
             assert_eq!(index.search(hash).await, vec![expected_record_loc]);
         }
 
@@ -696,7 +703,7 @@ mod tests {
         let file_id_remap = vec![0; index.files.len()];
         for block in index.index_blocks.iter() {
             let mut index_block_iter = block._create_iterator(&index, &file_id_remap).await;
-            while let Some((hash, seg_idx, row_idx)) = index_block_iter.next().await {
+            while let Some((hash, seg_idx, row_idx)) = index_block_iter._next().await {
                 println!("{} {} {}", hash, seg_idx, row_idx);
                 hash_entry_num += 1;
             }
@@ -708,28 +715,28 @@ mod tests {
     #[tokio::test]
     async fn test_merge() {
         let files = vec![
-            Arc::new(PathBuf::from("1.parquet")),
-            Arc::new(PathBuf::from("2.parquet")),
-            Arc::new(PathBuf::from("3.parquet")),
+            create_data_file(/*file_id=*/ 1, "1.parquet".to_string()),
+            create_data_file(/*file_id=*/ 2, "2.parquet".to_string()),
+            create_data_file(/*file_id=*/ 3, "3.parquet".to_string()),
         ];
         let vec = (0..100).map(|i| (i as u64, i % 3, i)).collect::<Vec<_>>();
         let mut builder = GlobalIndexBuilder::new();
         builder
             .set_files(files)
-            .set_directory(tempfile::tempdir().unwrap().into_path());
+            .set_directory(tempfile::tempdir().unwrap().keep());
         let index1 = builder.build_from_flush(vec).await;
         let files = vec![
-            Arc::new(PathBuf::from("4.parquet")),
-            Arc::new(PathBuf::from("5.parquet")),
+            create_data_file(/*file_id=*/ 4, "4.parquet".to_string()),
+            create_data_file(/*file_id=*/ 5, "5.parquet".to_string()),
         ];
         let vec = (100..200).map(|i| (i as u64, i % 2, i)).collect::<Vec<_>>();
         let mut builder = GlobalIndexBuilder::new();
         builder
             .set_files(files)
-            .set_directory(tempfile::tempdir().unwrap().into_path());
+            .set_directory(tempfile::tempdir().unwrap().keep());
         let index2 = builder.build_from_flush(vec).await;
         let mut builder = GlobalIndexBuilder::new();
-        builder.set_directory(tempfile::tempdir().unwrap().into_path());
+        builder.set_directory(tempfile::tempdir().unwrap().keep());
         let merged = builder._build_from_merge(vec![index1, index2]).await;
 
         for i in 0u64..100u64 {
@@ -738,7 +745,7 @@ mod tests {
             let RecordLocation::DiskFile(FileId(file_id), _) = record_location else {
                 panic!("No record location found for {}", i);
             };
-            assert_eq!(file_id.to_string_lossy(), format!("{}.parquet", i % 3 + 1));
+            assert_eq!(*file_id, i % 3 + 1);
         }
     }
 }

@@ -42,6 +42,9 @@ pub enum PostgresSourceError {
 
     #[error("cdc stream error: {0}")]
     CdcStream(#[from] CdcStreamError),
+
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 pub struct PostgresSource {
@@ -49,6 +52,7 @@ pub struct PostgresSource {
     table_schemas: HashMap<TableId, TableSchema>,
     slot_name: Option<String>,
     publication: Option<String>,
+    uri: String,
 }
 
 impl PostgresSource {
@@ -72,6 +76,7 @@ impl PostgresSource {
             table_schemas,
             publication,
             slot_name,
+            uri: uri.to_string(),
         })
     }
 
@@ -105,8 +110,43 @@ impl PostgresSource {
         })
     }
 
-    pub fn get_table_schemas(&self) -> &HashMap<TableId, TableSchema> {
-        &self.table_schemas
+    pub async fn get_table_schemas(&self) -> HashMap<TableId, TableSchema> {
+        self.table_schemas.clone()
+    }
+
+    pub async fn fetch_table_schema(
+        &mut self,
+        table_name: &str,
+        publication: Option<&str>,
+    ) -> Result<TableSchema, PostgresSourceError> {
+        // Open new connection to get table schema
+        let mut replication_client = ReplicationClient::connect_no_tls(&self.uri).await?;
+        replication_client.begin_readonly_transaction().await?;
+        let (schema, name) = TableName::parse_schema_name(table_name);
+        let table_schema = replication_client
+            .get_table_schema(TableName { schema, name }, publication)
+            .await?;
+        // Add the table schema to the source so that we can use it to convert cdc events.
+        self.table_schemas
+            .insert(table_schema.table_id, table_schema.clone());
+        Ok(table_schema)
+    }
+
+    /// Get table name from table id.
+    /// Precondition: table already exists in pg source, otherwise it panics.
+    pub fn get_table_name_from_id(&self, table_id: u32) -> String {
+        self.table_schemas
+            .get(&table_id)
+            .unwrap()
+            .table_name
+            .get_schema_name()
+    }
+
+    /// Remove table schema from source, and return table name.
+    /// Precondition: table already exists in pg source, otherwise it panics.
+    pub fn remove_table_schema(&mut self, table_id: u32) -> String {
+        let table_schema = self.table_schemas.remove(&table_id).unwrap();
+        table_schema.table_name.get_schema_name()
     }
 
     pub async fn get_table_copy_stream(
@@ -239,6 +279,11 @@ impl CdcStream {
 
         Ok(())
     }
+
+    pub fn add_table_schema(self: Pin<&mut Self>, schema: TableSchema) {
+        let this = self.project();
+        this.table_schemas.insert(schema.table_id, schema);
+    }
 }
 
 impl Stream for CdcStream {
@@ -247,7 +292,7 @@ impl Stream for CdcStream {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
         match ready!(this.stream.poll_next(cx)) {
-            Some(Ok(msg)) => match CdcEventConverter::try_from(msg, this.table_schemas) {
+            Some(Ok(msg)) => match CdcEventConverter::try_from(msg, &this.table_schemas) {
                 Ok(row) => Poll::Ready(Some(Ok(row))),
                 Err(e) => Poll::Ready(Some(Err(e.into()))),
             },

@@ -14,7 +14,7 @@ use std::fs::{create_dir_all, File};
 use tempfile::{tempdir, TempDir};
 
 pub struct TestContext {
-    _temp_dir: TempDir,
+    temp_dir: TempDir,
     test_dir: PathBuf,
 }
 
@@ -24,10 +24,7 @@ impl TestContext {
         let test_dir = temp_dir.path().join(subdir_name);
         create_dir_all(&test_dir).unwrap();
 
-        Self {
-            _temp_dir: temp_dir,
-            test_dir,
-        }
+        Self { temp_dir, test_dir }
     }
 
     fn path(&self) -> PathBuf {
@@ -70,7 +67,9 @@ pub async fn test_table(
         warehouse_uri: context.path().to_str().unwrap().to_string(),
         namespace: vec!["default".to_string()],
         table_name: table_name.to_string(),
+        drop_table_if_exists: false,
     };
+    let table_config = TableConfig::new(context.temp_dir.path().to_str().unwrap().to_string());
     MooncakeTable::new(
         test_schema(),
         table_name.to_string(),
@@ -78,9 +77,10 @@ pub async fn test_table(
         context.path(),
         identity,
         iceberg_table_config,
-        TableConfig::new(),
+        table_config,
     )
     .await
+    .unwrap()
 }
 
 pub fn read_batch(reader: ParquetRecordBatchReader) -> Option<RecordBatch> {
@@ -177,7 +177,8 @@ fn verify_files_and_deletions_impl(
 }
 
 pub async fn verify_files_and_deletions(
-    files: &[String],
+    data_file_paths: &[String],
+    puffin_file_paths: &[String],
     position_deletes: Vec<(u32, u32)>,
     deletion_vectors: Vec<PuffinDeletionBlobAtRead>,
     expected_ids: &[i32],
@@ -187,8 +188,12 @@ pub async fn verify_files_and_deletions(
     let mut position_deletes = position_deletes;
     let mut load_blob_futures = Vec::with_capacity(deletion_vectors.len());
     for cur_blob in deletion_vectors.iter() {
-        let get_blob_future =
-            puffin_utils::load_blob_from_puffin_file(file_io.clone(), &cur_blob.puffin_filepath);
+        let get_blob_future = puffin_utils::load_blob_from_puffin_file(
+            file_io.clone(),
+            puffin_file_paths
+                .get(cur_blob.puffin_file_index as usize)
+                .unwrap(),
+        );
         load_blob_futures.push(get_blob_future);
     }
 
@@ -207,5 +212,5 @@ pub async fn verify_files_and_deletions(
         );
     }
 
-    verify_files_and_deletions_impl(files, &position_deletes, expected_ids)
+    verify_files_and_deletions_impl(data_file_paths, &position_deletes, expected_ids)
 }
