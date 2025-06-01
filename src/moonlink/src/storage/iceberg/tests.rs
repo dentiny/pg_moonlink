@@ -63,7 +63,7 @@ fn test_committed_deletion_log_2(
 }
 
 /// Test util function to create file indices.
-/// 
+///
 /// TODO(hjiang): Better to use real data files, but having multiple file indices make
 fn test_global_index(data_files: Vec<MooncakeDataFileRef>) -> GlobalIndex {
     GlobalIndex {
@@ -332,31 +332,19 @@ async fn test_store_and_load_snapshot_impl(
     }
 
     // Write third snapshot to iceberg table, with file indices to add and remove.
-    for (cur_file_index, puffin_path) in iceberg_table_manager.persisted_file_indices.iter() {
-        println!("cur file = {:?}, puffin file = {:?}", cur_file_index.files.iter().map(|f| {
-            f.file_path()
-        }).collect::<Vec<_>>(), puffin_path);
-    }
-    println!("\n\n====\n\n");
-
     let iceberg_snapshot_payload = IcebergSnapshotPayload {
         flush_lsn: 2,
         data_files: vec![],
         new_deletion_vector: vec![],
-        file_indices_to_import: vec![test_global_index(vec![data_file_1.clone(), data_file_2.clone()])],
-        file_indices_to_remove: vec![file_indice_1.clone(), file_indice_2.clone()]
+        file_indices_to_import: vec![test_global_index(vec![
+            data_file_1.clone(),
+            data_file_2.clone(),
+        ])],
+        file_indices_to_remove: vec![file_indice_1.clone(), file_indice_2.clone()],
     };
     iceberg_table_manager
         .sync_snapshot(iceberg_snapshot_payload)
         .await?;
-
-    
-    for (cur_file_index, puffin_path) in iceberg_table_manager.persisted_file_indices.iter() {
-        println!("cur file = {:?}, puffin file = {:?}\n\n", cur_file_index.files.iter().map(|f| {
-            f.file_path()
-        }).collect::<Vec<_>>(), puffin_path);
-    }
-
     assert_eq!(iceberg_table_manager.persisted_file_indices.len(), 1);
 
     Ok(())

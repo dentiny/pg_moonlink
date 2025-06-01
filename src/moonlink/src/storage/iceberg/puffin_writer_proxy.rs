@@ -8,6 +8,8 @@
 // deletion vector table spec: https://github.com/apache/iceberg/pull/11240
 //
 // puffin blob spec: https://iceberg.apache.org/puffin-spec/?h=deletion#deletion-vector-v1-blob-type
+//
+// TODO(hjiang): Add documentation on how we store puffin blobs inside of puffinf file, what's the relationship between puffin file and manifest file, etc.
 
 use crate::storage::iceberg::deletion_vector::{
     DELETION_VECTOR_CADINALITY, DELETION_VECTOR_REFERENCED_DATA_FILE,
@@ -389,26 +391,40 @@ pub(crate) async fn append_puffin_metadata_and_rewrite(
 
     // Iterate through all manifest files, keep data manifest files, process hash index files, and merge all deletion vectors.
     for cur_manifest_file in manifest_list.entries() {
-        // If the current manifest files indicates hash index to remove, skip it directly.
-        if puffin_blobs_to_remove.contains(&cur_manifest_file.manifest_path) {
-            continue;
-        }
+        let manifest = cur_manifest_file.load_manifest(file_io).await?;
+        let (manifest_entries, manifest_metadata) = manifest.into_parts();
 
-        // Keep all data files and left hash index files.
-        if cur_manifest_file.content == ManifestContentType::Data {
+        // Keep data files unchanged.
+        // Assumption: we store all data file manifest entries in one manifest file.
+        if *manifest_metadata.content() == ManifestContentType::Data
+            && manifest_entries.get(0).unwrap().file_format() == DataFileFormat::Parquet
+        {
             manifest_list_writer.add_manifests([cur_manifest_file.clone()].into_iter())?;
             continue;
         }
 
         // Process deletion vector puffin files.
-        let manifest = cur_manifest_file.load_manifest(file_io).await?;
-        let (manifest_entries, _) = manifest.into_parts();
         for cur_manifest_entry in manifest_entries.into_iter() {
-            assert_eq!(
-                cur_manifest_entry.file_format(),
-                DataFileFormat::Puffin,
-                "Expect manifest entry to be either parquet or puffin."
-            );
+            assert_eq!(cur_manifest_entry.file_format(), DataFileFormat::Puffin,);
+
+            // Process file indices: skip those requested to remove, and keep those un-mentioned.
+            if *manifest_metadata.content() == ManifestContentType::Data {
+                // Skip file indices which are requested to remove.
+                if puffin_blobs_to_remove.contains(cur_manifest_entry.data_file().file_path()) {
+                    continue;
+                }
+
+                // Keep file indices which are not requested to remove.
+                init_file_index_manifest_writer(&mut file_index_manifest_writer)?;
+                file_index_manifest_writer.as_mut().unwrap().add_file(
+                    cur_manifest_entry.data_file().clone(),
+                    cur_manifest_entry.sequence_number().unwrap(),
+                )?;
+                continue;
+            }
+
+            // Process deletion vectors.
+            assert_eq!(*manifest_metadata.content(), ManifestContentType::Deletes);
             let old_entry = existing_deletion_vector_entries.insert(
                 cur_manifest_entry
                     .data_file()

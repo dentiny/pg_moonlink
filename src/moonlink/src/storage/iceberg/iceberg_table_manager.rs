@@ -210,7 +210,10 @@ impl IcebergTableManager {
 
         self.persisted_file_indices.reserve(file_indices.len());
         file_indices.iter().for_each(|cur_file_index| {
-            self.persisted_file_indices.insert(cur_file_index.clone(), entry.data_file().file_path().to_string());
+            self.persisted_file_indices.insert(
+                cur_file_index.clone(),
+                entry.data_file().file_path().to_string(),
+            );
         });
 
         Ok(file_indices)
@@ -370,7 +373,10 @@ impl IcebergTableManager {
     async fn sync_data_files(
         &mut self,
         new_data_files: Vec<MooncakeDataFileRef>,
-    ) -> IcebergResult<(Vec<DataFile>, HashMap<String, String> /*local to remote datafile mapping*/)> {
+    ) -> IcebergResult<(
+        Vec<DataFile>,
+        HashMap<String, String>, /*local to remote datafile mapping*/
+    )> {
         // Maps from local data filepath to remote filepath.
         let mut local_data_file_to_remote = HashMap::with_capacity(new_data_files.len());
 
@@ -434,9 +440,6 @@ impl IcebergTableManager {
         file_indices_to_import: &[MooncakeFileIndex],
         local_data_file_to_remote: HashMap<String, String>,
     ) -> IcebergResult<()> {
-
-        println!("local data file to remote {:?}", local_data_file_to_remote);
-
         let puffin_filepath = self.get_unique_hash_index_v1_filepath();
         let mut puffin_writer = puffin_utils::create_puffin_writer(
             self.iceberg_table.as_ref().unwrap().file_io(),
@@ -464,10 +467,9 @@ impl IcebergTableManager {
                 local_index_file_to_remote
                     .insert(cur_index_block.file_path.clone(), remote_index_block);
             }
-            self.persisted_file_indices.insert(cur_file_index.clone(), puffin_filepath.clone());
+            self.persisted_file_indices
+                .insert(cur_file_index.clone(), puffin_filepath.clone());
         }
-
-        println!("new file indices = {:?}", new_file_indices);
 
         let file_index_blob = FileIndexBlob::new(
             new_file_indices,
@@ -513,7 +515,7 @@ impl IcebergTableManager {
         self.catalog.set_puffin_file_to_remove(
             file_indices_to_remove
                 .iter()
-                .map(|cur_index| self.persisted_file_indices.get(cur_index).unwrap().clone())
+                .map(|cur_index| self.persisted_file_indices.remove(cur_index).unwrap())
                 .collect::<HashSet<String>>(),
         );
 
@@ -521,10 +523,17 @@ impl IcebergTableManager {
     }
 
     /// Util function to merge local to remote data filepath mapping, with already persisted one.
-    fn merge_local_to_remote_data_file_to_remote(&self, mut local_data_file_to_remote: HashMap<String, String>) -> HashMap<String, String> {
-        local_data_file_to_remote.reserve(local_data_file_to_remote.len() + self.persisted_data_files.len());
+    fn merge_local_to_remote_data_file_to_remote(
+        &self,
+        mut local_data_file_to_remote: HashMap<String, String>,
+    ) -> HashMap<String, String> {
+        local_data_file_to_remote
+            .reserve(local_data_file_to_remote.len() + self.persisted_data_files.len());
         for (cur_local_filepath, cur_entry) in self.persisted_data_files.iter() {
-            local_data_file_to_remote.insert(cur_local_filepath.clone(), cur_entry.data_file.file_path().to_string());
+            local_data_file_to_remote.insert(
+                cur_local_filepath.clone(),
+                cur_entry.data_file.file_path().to_string(),
+            );
         }
         local_data_file_to_remote
     }
@@ -546,7 +555,8 @@ impl TableManager for IcebergTableManager {
             .await?;
 
         // Update local data file to remote mapping.
-        let local_data_file_to_remote = self.merge_local_to_remote_data_file_to_remote(local_data_file_to_remote);
+        let local_data_file_to_remote =
+            self.merge_local_to_remote_data_file_to_remote(local_data_file_to_remote);
 
         // Persist committed deletion logs.
         let deletion_puffin_blobs = self

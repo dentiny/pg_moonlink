@@ -4,7 +4,7 @@ use crate::storage::iceberg::puffin_utils;
 use crate::storage::index::persisted_bucket_hash_map::IndexBlock as MooncakeIndexBlock;
 /// This module defines the file index struct used for iceberg, which corresponds to in-memory mooncake table file index structs, and supports the serde between mooncake table format and iceberg format.
 use crate::storage::index::FileIndex as MooncakeFileIndex;
-use crate::storage::storage_utils::{create_data_file, MooncakeDataFileRef};
+use crate::storage::storage_utils::create_data_file;
 
 use iceberg::io::FileIO;
 use iceberg::puffin::Blob;
@@ -102,8 +102,9 @@ impl FileIndex {
                 .data_files
                 .iter()
                 .map(|path| {
+                    let cur_file_id = next_file_id;
                     next_file_id += 1;
-                    create_data_file(next_file_id, path.to_string())
+                    create_data_file(cur_file_id, path.to_string())
                 })
                 .collect(),
             num_rows: self.num_rows,
