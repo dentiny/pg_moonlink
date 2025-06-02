@@ -268,8 +268,18 @@ impl SnapshotTableState {
     /// Util function to decide whether to merge index.
     /// To simplify states (aka, avoid merging file indices already in iceberg with those not), only merge those already persisted.
     fn get_file_indices_to_merge(&self) -> Vec<FileIndex> {
+        // Fast-path: not enough file indices to trigger index merge.
         let mut file_indices_to_merge = vec![];
         let all_file_indices = &self.current_snapshot.indices.file_indices;
+        if all_file_indices.len()
+            < self
+                .mooncake_table_config
+                .file_index_config
+                .index_block_final_size as usize
+        {
+            return file_indices_to_merge;
+        }
+
         for cur_file_index in all_file_indices.iter() {
             if cur_file_index.get_index_blocks_size()
                 >= self
@@ -300,7 +310,7 @@ impl SnapshotTableState {
     ) {
         self.unpersisted_iceberg_records
             .merged_file_indices_to_remove
-            .extend(old_merged_file_indices.iter().cloned());
+            .extend(old_merged_file_indices.to_owned());
         self.unpersisted_iceberg_records
             .merged_file_indices_to_add
             .extend(new_merged_file_indices.to_owned());
@@ -362,6 +372,8 @@ impl SnapshotTableState {
         ));
 
         // Reflect file indices merge result to mooncake snapshot.
+        assert!(task.old_merged_file_indices.is_empty());
+        assert!(task.new_merged_file_indices.is_empty());
         self.queue_file_indices_merge_to_iceberg_snapshot(
             &task.old_merged_file_indices,
             &task.new_merged_file_indices,
@@ -406,6 +418,7 @@ impl SnapshotTableState {
         // Decide whether to merge an index merge.
         let mut file_indices_merge_payload: Option<FileIndiceMergePayload> = None;
         let file_indices_to_merge = self.get_file_indices_to_merge();
+        assert!(file_indices_to_merge.is_empty());
 
         if !file_indices_to_merge.is_empty() {
             file_indices_merge_payload = Some(FileIndiceMergePayload {
