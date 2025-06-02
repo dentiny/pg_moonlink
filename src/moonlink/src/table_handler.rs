@@ -1,4 +1,7 @@
 use crate::row::MoonlinkRow;
+use crate::storage::index::persisted_bucket_hash_map::GlobalIndexBuilder;
+use crate::storage::mooncake_table::FileIndiceMergePayload;
+use crate::storage::mooncake_table::FileIndiceMergeResult;
 use crate::storage::mooncake_table::IcebergSnapshotPayload;
 use crate::storage::mooncake_table::IcebergSnapshotResult;
 use crate::storage::MooncakeTable;
@@ -89,12 +92,23 @@ impl TableHandler {
         let mut periodic_snapshot_interval = time::interval(Duration::from_millis(500));
 
         // Join handle for mooncake snapshot.
+        #[allow(clippy::type_complexity)]
         let mut mooncake_snapshot_handle: Option<
-            JoinHandle<(u64, Option<IcebergSnapshotPayload>)>,
+            JoinHandle<(
+                u64,
+                Option<IcebergSnapshotPayload>,
+                Option<FileIndiceMergePayload>,
+            )>,
         > = None;
 
+        // TODO: refactor join handles and use channel instead for IO related async operations.
+        //
         // Join handle for iceberg snapshot.
         let mut iceberg_snapshot_handle: Option<JoinHandle<Result<IcebergSnapshotResult>>> = None;
+
+        // Join handle for index merge.
+        // TODO(hjiang): Error propagation.
+        let mut file_indices_merge_handle: Option<JoinHandle<FileIndiceMergeResult>> = None;
 
         // Requested minimum LSN for a force snapshot request.
         let mut force_snapshot_lsn: Option<u64> = None;
@@ -225,11 +239,11 @@ impl TableHandler {
                     }
                 }
                 // Wait for the mooncake snapshot to complete.
-                Some((lsn, iceberg_snapshot_payload)) = async {
+                Some((lsn, iceberg_snapshot_payload, file_indices_merge_payload)) = async {
                     if let Some(handle) = &mut mooncake_snapshot_handle {
                         match handle.await {
-                            Ok((lsn, iceberg_snapshot_payload)) => {
-                                Some((lsn, iceberg_snapshot_payload))
+                            Ok((lsn, iceberg_snapshot_payload, file_indices_merge_payload)) => {
+                                Some((lsn, iceberg_snapshot_payload, file_indices_merge_payload))
                             }
                             Err(e) => {
                                 println!("Snapshot task was cancelled: {}", e);
@@ -250,6 +264,21 @@ impl TableHandler {
                     if iceberg_snapshot_handle.is_none() {
                         if let Some(iceberg_snapshot_payload) = iceberg_snapshot_payload {
                             iceberg_snapshot_handle = Some(table.persist_iceberg_snapshot(iceberg_snapshot_payload));
+                        }
+                    }
+
+                    // Process file indices merge.
+                    if file_indices_merge_handle.is_none() {
+                        if let Some(file_indices_merge_payload) = file_indices_merge_payload {
+                            let handle = tokio::task::spawn(async move {
+                                let builder = GlobalIndexBuilder::new();
+                                let merged = builder._build_from_merge(file_indices_merge_payload.file_indices.clone()).await;
+                                FileIndiceMergeResult {
+                                    old_file_indices: file_indices_merge_payload.file_indices,
+                                    merged_file_indices: merged,
+                                }
+                            });
+                            file_indices_merge_handle = Some(handle);
                         }
                     }
 
@@ -286,6 +315,25 @@ impl TableHandler {
                             iceberg_event_sync_sender.iceberg_snapshot_completion_tx.send(Err(e)).await.unwrap();
                         }
                     }
+                }
+                // Wait for file indices merge operation to finish.
+                Some(file_indices_res) = async {
+                    if let Some(handle) = &mut file_indices_merge_handle {
+                        match handle.await {
+                            Ok(file_indices_res) => {
+                                Some(file_indices_res)
+                            }
+                            Err(e) => {
+                                println!("Index merge task gets cancelled: {:?}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        futures::future::pending::<Option<_>>().await
+                    }
+                } => {
+                    file_indices_merge_handle = None;
+                    table.set_file_indices_merge_res(file_indices_res);
                 }
                 // Periodic snapshot based on time
                 _ = periodic_snapshot_interval.tick() => {

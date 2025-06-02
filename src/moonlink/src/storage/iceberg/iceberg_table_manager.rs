@@ -552,7 +552,9 @@ impl TableManager for IcebergTableManager {
 
         // Persist data files.
         let (new_iceberg_data_files, local_data_file_to_remote) = self
-            .sync_data_files(std::mem::take(&mut snapshot_payload.data_files))
+            .sync_data_files(std::mem::take(
+                &mut snapshot_payload.import_payload.data_files,
+            ))
             .await?;
 
         // Update local data file to remote mapping.
@@ -561,13 +563,26 @@ impl TableManager for IcebergTableManager {
 
         // Persist committed deletion logs.
         let deletion_puffin_blobs = self
-            .sync_deletion_vector(std::mem::take(&mut snapshot_payload.new_deletion_vector))
+            .sync_deletion_vector(std::mem::take(
+                &mut snapshot_payload.import_payload.new_deletion_vector,
+            ))
             .await?;
 
-        // Persist file index changes.
+        // Merge all file indices to import.
+        let mut all_file_indices_to_import = std::mem::take(
+            &mut snapshot_payload
+                .index_merge_payload
+                .new_file_indices_to_import,
+        );
+        all_file_indices_to_import.extend(std::mem::take(
+            &mut snapshot_payload.import_payload.file_indices,
+        ));
+
         self.sync_file_indices(
-            &snapshot_payload.file_indices_to_import,
-            &snapshot_payload.file_indices_to_remove,
+            &all_file_indices_to_import,
+            &snapshot_payload
+                .index_merge_payload
+                .old_file_indices_to_remove,
             local_data_file_to_remote,
         )
         .await?;

@@ -17,6 +17,9 @@ use crate::storage::mooncake_table::{
     DiskFileDeletionVector, TableConfig as MooncakeTableConfig,
     TableMetadata as MooncakeTableMetadata,
 };
+use crate::storage::mooncake_table::{
+    IcebergSnapshotImportPayload, IcebergSnapshotIndexMergePayload,
+};
 use crate::storage::storage_utils::create_data_file;
 use crate::storage::storage_utils::FileId;
 use crate::storage::storage_utils::MooncakeDataFileRef;
@@ -247,10 +250,15 @@ async fn test_store_and_load_snapshot_impl(
 
     let iceberg_snapshot_payload = IcebergSnapshotPayload {
         flush_lsn: 0,
-        data_files: vec![data_file_1.clone()],
-        new_deletion_vector: test_committed_deletion_log_1(data_file_1.clone()),
-        file_indices_to_import: vec![file_indice_1.clone()],
-        file_indices_to_remove: vec![],
+        import_payload: IcebergSnapshotImportPayload {
+            data_files: vec![data_file_1.clone()],
+            new_deletion_vector: test_committed_deletion_log_1(data_file_1.clone()),
+            file_indices: vec![file_indice_1.clone()],
+        },
+        index_merge_payload: IcebergSnapshotIndexMergePayload {
+            new_file_indices_to_import: vec![],
+            old_file_indices_to_remove: vec![],
+        },
     };
     iceberg_table_manager
         .sync_snapshot(iceberg_snapshot_payload)
@@ -266,10 +274,15 @@ async fn test_store_and_load_snapshot_impl(
 
     let iceberg_snapshot_payload = IcebergSnapshotPayload {
         flush_lsn: 1,
-        data_files: vec![data_file_2.clone()],
-        new_deletion_vector: test_committed_deletion_log_2(data_file_2.clone()),
-        file_indices_to_import: vec![file_indice_2.clone()],
-        file_indices_to_remove: vec![],
+        import_payload: IcebergSnapshotImportPayload {
+            data_files: vec![data_file_2.clone()],
+            new_deletion_vector: test_committed_deletion_log_2(data_file_2.clone()),
+            file_indices: vec![file_indice_2.clone()],
+        },
+        index_merge_payload: IcebergSnapshotIndexMergePayload {
+            new_file_indices_to_import: vec![],
+            old_file_indices_to_remove: vec![],
+        },
     };
     iceberg_table_manager
         .sync_snapshot(iceberg_snapshot_payload)
@@ -337,13 +350,18 @@ async fn test_store_and_load_snapshot_impl(
     // Write third snapshot to iceberg table, with file indices to add and remove.
     let iceberg_snapshot_payload = IcebergSnapshotPayload {
         flush_lsn: 2,
-        data_files: vec![],
-        new_deletion_vector: vec![],
-        file_indices_to_import: vec![test_global_index(vec![
-            data_file_1.clone(),
-            data_file_2.clone(),
-        ])],
-        file_indices_to_remove: vec![file_indice_1.clone(), file_indice_2.clone()],
+        import_payload: IcebergSnapshotImportPayload {
+            data_files: vec![],
+            new_deletion_vector: vec![],
+            file_indices: vec![],
+        },
+        index_merge_payload: IcebergSnapshotIndexMergePayload {
+            new_file_indices_to_import: vec![test_global_index(vec![
+                data_file_1.clone(),
+                data_file_2.clone(),
+            ])],
+            old_file_indices_to_remove: vec![file_indice_1.clone(), file_indice_2.clone()],
+        },
     };
     iceberg_table_manager
         .sync_snapshot(iceberg_snapshot_payload)
@@ -485,10 +503,15 @@ async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {
         IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone())?;
     let iceberg_snapshot_payload = IcebergSnapshotPayload {
         flush_lsn: 0,
-        data_files: vec![],
-        new_deletion_vector: vec![],
-        file_indices_to_import: vec![],
-        file_indices_to_remove: vec![],
+        import_payload: IcebergSnapshotImportPayload {
+            data_files: vec![],
+            new_deletion_vector: vec![],
+            file_indices: vec![],
+        },
+        index_merge_payload: IcebergSnapshotIndexMergePayload {
+            new_file_indices_to_import: vec![],
+            old_file_indices_to_remove: vec![],
+        },
     };
     iceberg_table_manager
         .sync_snapshot(iceberg_snapshot_payload)
@@ -551,7 +574,7 @@ async fn test_async_iceberg_snapshot() {
     table.commit(/*lsn=*/ 10);
     table.flush(/*lsn=*/ 10).await.unwrap();
     let mooncake_snapshot_handle = table.create_snapshot().unwrap();
-    let (_, iceberg_snapshot_payload) = mooncake_snapshot_handle.await.unwrap();
+    let (_, iceberg_snapshot_payload, _) = mooncake_snapshot_handle.await.unwrap();
 
     // Operation group 2: Append new rows and create mooncake snapshot.
     let row_2 = MoonlinkRow::new(vec![
@@ -564,7 +587,7 @@ async fn test_async_iceberg_snapshot() {
     table.commit(/*lsn=*/ 30);
     table.flush(/*lsn=*/ 30).await.unwrap();
     let mooncake_snapshot_handle = table.create_snapshot().unwrap();
-    let (_, _) = mooncake_snapshot_handle.await.unwrap();
+    let (_, _, _) = mooncake_snapshot_handle.await.unwrap();
 
     // Create iceberg snapshot for the first mooncake snapshot.
     let iceberg_snapshot_handle = table.persist_iceberg_snapshot(iceberg_snapshot_payload.unwrap());
@@ -603,7 +626,7 @@ async fn test_async_iceberg_snapshot() {
     table.commit(/*lsn=*/ 40);
     table.flush(/*lsn=*/ 40).await.unwrap();
     let mooncake_snapshot_handle = table.create_snapshot().unwrap();
-    let (_, iceberg_snapshot_payload) = mooncake_snapshot_handle.await.unwrap();
+    let (_, iceberg_snapshot_payload, _) = mooncake_snapshot_handle.await.unwrap();
 
     // Create iceberg snapshot for the mooncake snapshot.
     let iceberg_snapshot_handle = table.persist_iceberg_snapshot(iceberg_snapshot_payload.unwrap());

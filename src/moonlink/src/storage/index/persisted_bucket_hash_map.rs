@@ -15,6 +15,7 @@ use tokio_bitstream_io::{
     BigEndian as AsyncBigEndian, BitRead as AsyncBitRead, BitReader as AsyncBitReader,
     BitWrite as AsyncBitWrite, BitWriter as AsyncBitWriter,
 };
+use typed_builder::TypedBuilder;
 
 // Constants
 const HASH_BITS: u32 = 64;
@@ -29,6 +30,29 @@ fn splitmix64(mut x: u64) -> u64 {
     z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
     z ^ (z >> 31)
 }
+
+/// Configurations for merging file indices.
+///
+/// TODO(hjiang): To reduce code change before preview release, disable index merge by default until we do further testing to make sure moonlink fine.
+#[derive(Clone, Default, Debug, TypedBuilder)]
+pub struct FileIndexMergeConfig {
+    /// Number of existing index blocks under final size to trigger a merge operation.
+    #[cfg(debug_assertions)]
+    #[builder(default = u32::MAX)]
+    pub file_indices_to_merge: u32,
+    /// Number of bytes for a block index to consider it finalized and won't be merged again.
+    #[cfg(debug_assertions)]
+    #[builder(default = u64::MAX)]
+    pub index_block_final_size: u64,
+
+    #[cfg(not(debug_assertions))]
+    #[builder(default = u32::MAX)]
+    pub file_indices_to_merge: u32,
+    #[cfg(not(debug_assertions))]
+    #[builder(default = u64::MAX)]
+    pub index_block_final_size: u64,
+}
+
 /// Hash index
 /// that maps a u64 to [seg_idx, row_idx]
 ///
@@ -73,6 +97,8 @@ pub(crate) struct IndexBlock {
     pub(crate) bucket_end_idx: u32,
     pub(crate) bucket_start_offset: u64,
     pub(crate) file_path: String,
+    /// File size for the index block file, used to decide whether to continue merge index blocks.
+    pub(crate) file_size: u64,
     data: Arc<Option<Mmap>>,
 }
 
@@ -84,12 +110,14 @@ impl IndexBlock {
         file_path: String,
     ) -> Self {
         let file = tokio::fs::File::open(file_path.clone()).await.unwrap();
+        let file_metadata = file.metadata().await.unwrap();
         let data = unsafe { Mmap::map(&file).unwrap() };
         Self {
             bucket_start_idx,
             bucket_end_idx,
             bucket_start_offset,
             file_path,
+            file_size: file_metadata.len(),
             data: Arc::new(Some(data)),
         }
     }
@@ -180,6 +208,14 @@ impl GlobalIndex {
             }
         }
         vec![]
+    }
+
+    /// Get total index block files size.
+    pub fn get_index_blocks_size(&self) -> u64 {
+        self.index_blocks
+            .iter()
+            .map(|cur_index_block| cur_index_block.file_size)
+            .sum()
     }
 
     pub async fn _create_iterator<'a>(

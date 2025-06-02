@@ -1,5 +1,5 @@
 mod iceberg;
-mod index;
+pub(crate) mod index;
 pub(crate) mod mooncake_table;
 pub(crate) mod storage_utils;
 
