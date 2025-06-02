@@ -7,9 +7,9 @@ use crate::storage::iceberg::iceberg_table_manager::*;
 use crate::storage::iceberg::puffin_utils;
 #[cfg(feature = "storage-s3")]
 use crate::storage::iceberg::s3_test_utils;
+use crate::storage::index::persisted_bucket_hash_map::FileIndexMergeConfig;
 use crate::storage::index::persisted_bucket_hash_map::GlobalIndex;
 use crate::storage::index::Index;
-use crate::storage::index::persisted_bucket_hash_map::FileIndexMergeConfig;
 use crate::storage::index::MooncakeIndex;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 use crate::storage::mooncake_table::IcebergSnapshotPayload;
@@ -484,7 +484,7 @@ async fn test_snapshot_load_for_multiple_times() -> IcebergResult<()> {
     Ok(())
 }
 
-/// Testing scenario: create snapshot for index merge. 
+/// Testing scenario: create snapshot for index merge.
 #[tokio::test]
 async fn test_index_merge_and_create_snapshot() {
     let tmp_dir = tempdir().unwrap();
@@ -522,11 +522,53 @@ async fn test_index_merge_and_create_snapshot() {
         namespace: vec!["namespace".to_string()],
         table_name: "test_table".to_string(),
     };
-    
-    let iceberg_table_manager = IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone()).unwrap();
-    let mooncake_table = MooncakeTable::new_with_table_manager(mooncake_table_metadata.clone(), Box::new(iceberg_table_manager), mooncake_table_config.clone())
 
+    let iceberg_table_manager =
+        IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone()).unwrap();
+    let mut mooncake_table = MooncakeTable::new_with_table_manager(
+        mooncake_table_metadata.clone(),
+        Box::new(iceberg_table_manager),
+        mooncake_table_config.clone(),
+    )
+    .await
+    .unwrap();
 
+    // Append one row and commit/flush, so we have one file indice persisted.
+    let row_1 = MoonlinkRow::new(vec![
+        RowValue::Int32(1),
+        RowValue::ByteArray("Alice".as_bytes().to_vec()),
+        RowValue::Int32(10),
+    ]);
+    mooncake_table.append(row_1.clone()).unwrap();
+    mooncake_table.commit(/*lsn=*/ 1);
+    mooncake_table.flush(/*lsn=*/ 1).await.unwrap();
+
+    // Append one row and commit/flush, so we have one file indice persisted.
+    let row_2 = MoonlinkRow::new(vec![
+        RowValue::Int32(2),
+        RowValue::ByteArray("Bob".as_bytes().to_vec()),
+        RowValue::Int32(20),
+    ]);
+    mooncake_table.append(row_2.clone()).unwrap();
+    mooncake_table.commit(/*lsn=*/ 2);
+    mooncake_table.flush(/*lsn=*/ 2).await.unwrap();
+
+    // Attempt index merge and flush to iceberg table.
+    mooncake_table
+        .create_mooncake_and_iceberg_snapshot_for_index_merge_for_test()
+        .await
+        .unwrap();
+
+    // Create a new iceberg table manager and check states.
+    let mut iceberg_table_manager =
+        IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone()).unwrap();
+    let snapshot = iceberg_table_manager
+        .load_snapshot_from_table()
+        .await
+        .unwrap();
+    assert_eq!(snapshot.disk_files.len(), 2);
+    assert_eq!(snapshot.indices.file_indices.len(), 1);
+    assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 2);
 }
 
 /// Testing scenario: attempt an iceberg snapshot when no data file, deletion vector or index files generated.
