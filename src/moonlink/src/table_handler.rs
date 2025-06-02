@@ -6,6 +6,7 @@ use crate::Result;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
+use std::collections::BTreeSet;
 
 /// Event types that can be processed by the TableHandler
 #[derive(Debug)]
@@ -97,13 +98,20 @@ impl TableHandler {
         let mut iceberg_snapshot_handle: Option<JoinHandle<Result<IcebergSnapshotResult>>> = None;
 
         // Requested minimum LSN for a force snapshot request.
-        let mut force_snapshot_lsn: Option<u64> = None;
+        let mut force_snapshot_lsns: BTreeSet<u64> = BTreeSet::new();
 
         // Record LSN if the last handled table event is committed, which indicates mooncake table stays at a consistent view, so table could be flushed safely.
         let mut table_consistent_view_lsn: Option<u64> = None;
 
         // Whether current table receives any update events.
         let mut table_updated = false;
+
+        // Whether to force create a snapshot.
+        let need_force_snapshot = |lsn: u64| {
+            force_snapshot_lsns.is_empty() 
+                && lsn >= *force_snapshot_lsns.iter().next().unwrap() 
+                && mooncake_snapshot_handle.is_none()
+        };
 
         // Process events until the receiver is closed or a Shutdown event is received
         loop {
@@ -154,14 +162,14 @@ impl TableHandler {
                             // 1. force snapshot is requested
                             // and 2. LSN which meets force snapshot requirement has appeared, before that we still allow buffering
                             // and 3. there's no snapshot creation operation ongoing
-                            let need_force_snapshot = force_snapshot_lsn.is_some() && lsn >= force_snapshot_lsn.unwrap() && mooncake_snapshot_handle.is_none();
+                            let force_snapshot = need_force_snapshot(lsn);
 
-                            if table.should_flush() || need_force_snapshot {
+                            if table.should_flush() || force_snapshot {
                                 if let Err(e) = table.flush(lsn).await {
                                     println!("Flush failed in Commit: {}", e);
                                 }
                             }
-                            if need_force_snapshot {
+                            if force_snapshot {
                                 mooncake_snapshot_handle = table.force_create_snapshot();
                             }
                         }
@@ -170,12 +178,12 @@ impl TableHandler {
                             // 1. force snapshot is requested
                             // and 2. LSN which meets force snapshot requirement has appeared, before that we still allow buffering
                             // and 3. there's no snapshot creation operation ongoing
-                            let need_force_snapshot = force_snapshot_lsn.is_some() && lsn >= force_snapshot_lsn.unwrap() && mooncake_snapshot_handle.is_none();
+                            let force_snapshot = need_force_snapshot(lsn);
 
                             if let Err(e) = table.commit_transaction_stream(xact_id, lsn).await {
                                 println!("Stream commit flush failed: {}", e);
                             }
-                            if need_force_snapshot {
+                            if force_snapshot {
                                 mooncake_snapshot_handle = table.force_create_snapshot();
                             }
                         }
@@ -197,9 +205,6 @@ impl TableHandler {
                             break;
                         }
                         TableEvent::ForceSnapshot { lsn } => {
-                            // TODO(hjiang): Currently we only support one ongoing force snapshot operation.
-                            assert!(force_snapshot_lsn.is_none());
-
                             // A workaround to avoid create snapshot call gets stuck, when there's no write operations to the table.
                             if !table_updated {
                                 iceberg_event_sync_sender.iceberg_snapshot_completion_tx.send(Ok(())).await.unwrap();
@@ -213,7 +218,7 @@ impl TableHandler {
                             }
                             // Iceberg snapshot LSN requirement is not met, record the required LSN, so later commit will pick up.
                             else {
-                                force_snapshot_lsn = Some(lsn);
+                                force_snapshot_lsns.insert(lsn);
                             }
                         }
                         // Branch to drop the iceberg table, only used when the whole table requested to drop.
