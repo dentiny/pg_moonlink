@@ -92,6 +92,7 @@ impl TableHandler {
         let mut periodic_snapshot_interval = time::interval(Duration::from_millis(500));
 
         // Join handle for mooncake snapshot.
+        #[allow(clippy::type_complexity)]
         let mut mooncake_snapshot_handle: Option<
             JoinHandle<(
                 u64,

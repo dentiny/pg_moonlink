@@ -821,14 +821,15 @@ async fn test_file_indices_merge() {
     // File indices merge is triggered as long as there's not only one file indice.
     let file_index_config = FileIndexMergeConfig {
         file_indices_to_merge: 2,
-        index_block_final_size: 1,
+        index_block_final_size: 1000,
     };
 
     // Set mooncake and iceberg flush and snapshot threshold to huge value, to verify force flush and force snapshot works as expected.
     let mooncake_table_config = MooncakeTableConfig {
         batch_size: MooncakeTableConfig::DEFAULT_BATCH_SIZE,
         disk_slice_parquet_file_size: MooncakeTableConfig::DEFAULT_DISK_SLICE_PARQUET_FILE_SIZE,
-        mem_slice_size: 1000,
+        // Flush on every commit.
+        mem_slice_size: 1,
         snapshot_deletion_record_count: 1000,
         iceberg_snapshot_new_data_file_count: 1000,
         iceberg_snapshot_new_committed_deletion_log: 1000,
@@ -844,7 +845,6 @@ async fn test_file_indices_merge() {
     )
     .await;
     env.commit(/*lsn=*/ 1).await;
-    env.flush_table(/*lsn=*/ 1).await;
 
     // Append the second row to the mooncake table.
     env.append_row(
@@ -852,10 +852,12 @@ async fn test_file_indices_merge() {
     )
     .await;
     env.commit(/*lsn=*/ 2).await;
-    env.flush_table(/*lsn=*/ 2).await;
 
     // Force to create an iceberg snapshot.
     env.initiate_snapshot(/*lsn=*/ 2).await;
+
+    println!("\n\n======\n\n");
+
     env.sync_snapshot_completion().await.unwrap();
 
     // Load mooncake snapshot from iceberg table and check file indices.
