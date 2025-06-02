@@ -341,19 +341,6 @@ impl SnapshotTableState {
         updated_file_indices.extend(new_merged_file_indices);
     }
 
-    /// Buffer unpersisted data files and file indices.
-    fn update_new_data_file_and_indices(&mut self, task: &SnapshotTask) {
-        let new_data_files = task.get_new_data_files();
-        let new_file_indices = task.get_new_file_indices();
-
-        self.unpersisted_iceberg_records
-            .unpersisted_data_files
-            .extend(new_data_files);
-        self.unpersisted_iceberg_records
-            .unpersisted_file_indices
-            .extend(new_file_indices);
-    }
-
     pub(super) async fn update_snapshot(
         &mut self,
         mut task: SnapshotTask,
@@ -383,6 +370,12 @@ impl SnapshotTableState {
             std::mem::take(&mut task.new_merged_file_indices),
         );
 
+        // Sync buffer snapshot states into current mooncake snapshot.
+        //
+        // To reduce iceberg write frequency, only create new iceberg snapshot when there're new data files.
+        let new_data_files = task.get_new_data_files();
+        let new_file_indices = task.get_new_file_indices();
+
         self.apply_transaction_stream(&mut task);
         self.merge_mem_indices(&mut task);
         self.finalize_batches(&mut task);
@@ -390,7 +383,6 @@ impl SnapshotTableState {
 
         self.rows = take(&mut task.new_rows);
         self.process_deletion_log(&mut task).await;
-        self.update_new_data_file_and_indices(&task);
 
         if let Some(flush_lsn) = task.new_flush_lsn {
             self.current_snapshot.data_file_flush_lsn = Some(flush_lsn);
@@ -401,6 +393,14 @@ impl SnapshotTableState {
         if let Some(cp) = task.new_commit_point {
             self.last_commit = cp;
         }
+
+        // Batch new data files, whether we decide to create an iceberg snapshot.
+        self.unpersisted_iceberg_records
+            .unpersisted_data_files
+            .extend(new_data_files);
+        self.unpersisted_iceberg_records
+            .unpersisted_file_indices
+            .extend(new_file_indices);
 
         // TODO(hjiang): for both iceberg snapshot and index merge operation, we don't need to check if there's already an ongoing operation.
         //

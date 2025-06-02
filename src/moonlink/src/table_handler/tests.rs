@@ -851,9 +851,6 @@ async fn test_file_indices_merge() {
 
     // Force to create an iceberg snapshot.
     env.initiate_snapshot(/*lsn=*/ 2).await;
-
-    println!("\n\n======\n\n");
-
     env.sync_snapshot_completion().await.unwrap();
 
     // Load mooncake snapshot from iceberg table and check file indices.
