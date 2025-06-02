@@ -17,6 +17,7 @@ use crate::storage::iceberg::iceberg_table_manager::{
     IcebergTableConfig, IcebergTableManager, TableManager,
 };
 use crate::storage::index::persisted_bucket_hash_map::GlobalIndex;
+use crate::storage::index::persisted_bucket_hash_map::GlobalIndexBuilder;
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 pub(crate) use crate::storage::mooncake_table::table_snapshot::{
     FileIndiceMergePayload, FileIndiceMergeResult, IcebergSnapshotImportPayload,
@@ -730,7 +731,7 @@ impl MooncakeTable {
     // Test util function, which updates mooncake table snapshot and create iceberg snapshot in a serial fashion.
     #[cfg(test)]
     pub(crate) async fn create_mooncake_and_iceberg_snapshot_for_test(&mut self) -> Result<()> {
-        if let Some(mooncake_join_handle) = self.create_snapshot() {
+        if let Some(mooncake_join_handle) = self.force_create_snapshot() {
             // Wait for the snapshot async task to complete.
             match mooncake_join_handle.await {
                 Ok((lsn, payload, _)) => {
@@ -748,6 +749,59 @@ impl MooncakeTable {
                                 panic!("Iceberg snapshot task gets cancelled: {:?}", e);
                             }
                         }
+                    }
+                }
+                Err(e) => {
+                    panic!("failed to join snapshot handle: {:?}", e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // Test util function, which does the following things in serial fashion.
+    // (1) updates mooncake table snapshot, (2) create iceberg snapshot, (3) trigger index merge, (4) perform index merge, (5) another iceberg snapshot.
+    #[cfg(test)]
+    pub(crate) async fn create_mooncake_and_iceberg_snapshot_for_index_merge_for_test(
+        &mut self,
+    ) -> Result<()> {
+        if let Some(mooncake_join_handle) = self.force_create_snapshot() {
+            // Wait for the snapshot async task to complete.
+            match mooncake_join_handle.await {
+                Ok((lsn, snapshot_payload, index_merge_payload)) => {
+                    // Notify readers that the mooncake snapshot has been created.
+                    self.notify_snapshot_reader(lsn);
+
+                    // Create index merge operation if possible.
+                    let mut file_indices_merge_result: Option<FileIndiceMergeResult> = None;
+                    if let Some(index_merge_payload) = index_merge_payload {
+                        let builder = GlobalIndexBuilder::new();
+                        let merged = builder
+                            .build_from_merge(index_merge_payload.file_indices.clone())
+                            .await;
+                        file_indices_merge_result = Some(FileIndiceMergeResult {
+                            old_file_indices: index_merge_payload.file_indices,
+                            merged_file_indices: merged,
+                        });
+                    }
+
+                    // Create iceberg snapshot if possible
+                    if let Some(snapshot_payload) = snapshot_payload {
+                        let iceberg_join_handle = self.persist_iceberg_snapshot(snapshot_payload);
+                        match iceberg_join_handle.await {
+                            Ok(iceberg_snapshot_res) => {
+                                self.set_iceberg_snapshot_res(iceberg_snapshot_res?);
+                            }
+                            Err(e) => {
+                                panic!("Iceberg snapshot task gets cancelled: {:?}", e);
+                            }
+                        }
+                    }
+
+                    // Set index merge result and trigger another iceberg snapshot.
+                    if let Some(file_indices_merge_result) = file_indices_merge_result {
+                        self.set_file_indices_merge_res(file_indices_merge_result);
+                        return self.create_mooncake_and_iceberg_snapshot_for_test().await;
                     }
                 }
                 Err(e) => {

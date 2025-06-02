@@ -48,7 +48,7 @@ pub struct TableHandler {
     /// Handle to the event processing task
     _event_handle: Option<JoinHandle<()>>,
 
-    /// Sender for the event queue
+    /// Sender for the table event queue
     event_sender: Sender<TableEvent>,
 }
 
@@ -61,7 +61,7 @@ pub struct IcebergEventSyncSender {
 impl TableHandler {
     /// Create a new TableHandler for the given schema and table name
     pub fn new(table: MooncakeTable, iceberg_event_sync_sender: IcebergEventSyncSender) -> Self {
-        // Create channel for events
+        // Create channel for table events
         let (event_sender, event_receiver) = mpsc::channel(100);
 
         // Spawn the task with the oneshot receiver
@@ -271,7 +271,7 @@ impl TableHandler {
                         if let Some(file_indices_merge_payload) = file_indices_merge_payload {
                             let handle = tokio::task::spawn(async move {
                                 let builder = GlobalIndexBuilder::new();
-                                let merged = builder._build_from_merge(file_indices_merge_payload.file_indices.clone()).await;
+                                let merged = builder.build_from_merge(file_indices_merge_payload.file_indices.clone()).await;
                                 FileIndiceMergeResult {
                                     old_file_indices: file_indices_merge_payload.file_indices,
                                     merged_file_indices: merged,
@@ -304,9 +304,15 @@ impl TableHandler {
                     match iceberg_snapshot_res {
                         Ok(snapshot_res) => {
                             let iceberg_flush_lsn = snapshot_res.flush_lsn;
+                            let index_merge_completed = !snapshot_res.index_merge_result.new_file_indices_to_import.is_empty();
                             table.set_iceberg_snapshot_res(snapshot_res);
 
-                            // Notify all waiters with LSN satisfied.
+                            // Notify index merge waiters.
+                            if index_merge_completed {
+
+                            }
+
+                            // Notify all iceberg snapshot waiters with LSN satisfied.
                             let new_map = force_snapshot_lsns.split_off(&(iceberg_flush_lsn + 1));
                             for (requested_lsn, tx) in force_snapshot_lsns.iter() {
                                 assert!(*requested_lsn <= iceberg_flush_lsn);

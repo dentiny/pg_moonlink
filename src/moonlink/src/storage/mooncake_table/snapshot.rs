@@ -263,6 +263,16 @@ impl SnapshotTableState {
         };
         self.committed_deletion_log.len() >= deletion_record_snapshot_threshold
     }
+    /// TODO(hjiang): Decide when to create iceberg snapshot by index merge.
+    /// Util function to decide whether to create iceberg snapshot by file indices.
+    fn create_iceberg_snapshot_by_index_merge(&self, force_create: bool) -> bool {
+        return force_create
+            && self
+                .unpersisted_iceberg_records
+                .merged_file_indices_to_add
+                .len()
+                > 0;
+    }
 
     /// Util function to decide whether to merge index.
     /// To simplify states (aka, avoid merging file indices already in iceberg with those not), only merge those already persisted.
@@ -413,6 +423,7 @@ impl SnapshotTableState {
             force_create,
         );
         let flush_by_deletion_logs = self.create_iceberg_snapshot_by_committed_logs(force_create);
+        let flush_by_merge_file_indices = self.create_iceberg_snapshot_by_index_merge(force_create);
 
         // Decide whether to merge an index merge.
         let mut file_indices_merge_payload: Option<FileIndiceMergePayload> = None;
@@ -427,7 +438,7 @@ impl SnapshotTableState {
 
         // TODO(hjiang): Add whether to flush based on merged file indices.
         if self.current_snapshot.data_file_flush_lsn.is_some()
-            && (flush_by_data_files || flush_by_deletion_logs)
+            && (flush_by_data_files || flush_by_deletion_logs || flush_by_merge_file_indices)
         {
             let flush_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
             let aggregated_committed_deletion_logs =
