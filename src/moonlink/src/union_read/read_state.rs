@@ -35,10 +35,13 @@ impl ReadState {
     pub(super) fn new(
         data_files: Vec<String>,
         puffin_files: Vec<String>,
-        deletion_vectors_at_read: Vec<PuffinDeletionBlobAtRead>,
-        position_deletes: Vec<(u32 /*file_index*/, u32 /*row_index*/)>,
+        mut deletion_vectors_at_read: Vec<PuffinDeletionBlobAtRead>,
+        mut position_deletes: Vec<(u32 /*file_index*/, u32 /*row_index*/)>,
         associated_files: Vec<String>,
     ) -> Self {
+        deletion_vectors_at_read.sort_by_key(|dv| dv.data_file_index);
+        position_deletes.sort();
+
         let metadata = TableMetadata {
             data_files,
             puffin_files,
