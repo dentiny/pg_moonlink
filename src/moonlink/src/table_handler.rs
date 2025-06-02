@@ -248,9 +248,6 @@ impl TableHandler {
                     // An optimization is skip generating iceberg snapshot payload at mooncake snapshot if we know it's already taking place, but the risk is missing iceberg snapshot.
                     if iceberg_snapshot_handle.is_none() {
                         if let Some(iceberg_snapshot_payload) = iceberg_snapshot_payload {
-
-                            println!("create iceberg snaphhost");
-
                             iceberg_snapshot_handle = Some(table.persist_iceberg_snapshot(iceberg_snapshot_payload));
                         }
                     }
@@ -282,7 +279,8 @@ impl TableHandler {
 
                             // Notify all waiters with LSN satisfied.
                             let new_map = force_snapshot_lsns.split_off(&(iceberg_flush_lsn + 1));
-                            for (_, tx) in force_snapshot_lsns.iter() {
+                            for (requested_lsn, tx) in force_snapshot_lsns.iter() {
+                                assert!(*requested_lsn <= iceberg_flush_lsn);
                                 tx.send(Ok(())).await.unwrap()
                             }
                             force_snapshot_lsns = new_map;
@@ -307,9 +305,6 @@ impl TableHandler {
                     if !force_snapshot_lsns.is_empty() {
                         if let Some(commit_lsn) = table_consistent_view_lsn {
                             if *force_snapshot_lsns.iter().next().as_ref().unwrap().0 <= commit_lsn {
-
-                                println!("force snapshot at {}, commit lsn {}", force_snapshot_lsns.iter().next().as_ref().unwrap().0, commit_lsn);
-
                                 table.flush(/*lsn=*/ commit_lsn).await.unwrap();
                                 mooncake_snapshot_handle = table.force_create_snapshot();
                                 continue;

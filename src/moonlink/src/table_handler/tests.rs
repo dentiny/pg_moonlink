@@ -886,6 +886,9 @@ async fn test_multiple_snapshot_requests() {
     )
     .unwrap();
 
+    // Make a commit request at the very beginning, so iceberg snapshot request won't return immediately.
+    env.commit(/*lsn=*/ 0).await;
+
     // Create multiple iceberg snapshot requests in advance.
     let mut rx_vec = Vec::new();
     // First flush and commit LSN.

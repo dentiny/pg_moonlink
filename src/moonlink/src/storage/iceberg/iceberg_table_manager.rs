@@ -550,6 +550,8 @@ impl TableManager for IcebergTableManager {
         // Initialize iceberg table on access.
         self.initialize_iceberg_table_for_once().await?;
 
+        println!("sync data file count {}", snapshot_payload.data_files.len());
+
         // Persist data files.
         let (new_iceberg_data_files, local_data_file_to_remote) = self
             .sync_data_files(std::mem::take(&mut snapshot_payload.data_files))
