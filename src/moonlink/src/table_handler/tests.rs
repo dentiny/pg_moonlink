@@ -845,8 +845,8 @@ async fn test_empty_table_snapshot_creation() {
             .await;
         rx_vec.push(rx);
     }
-    for idx in 0..=9 {
-        rx_vec[idx].recv().await.unwrap().unwrap();
+    for mut cur_rx in rx_vec {
+        cur_rx.recv().await.unwrap().unwrap();
     }
 }
 
