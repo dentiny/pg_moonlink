@@ -95,7 +95,7 @@ impl TableHandler {
         let mut iceberg_snapshot_handle: Option<JoinHandle<Result<IcebergSnapshotResult>>> = None;
 
         // Requested minimum LSN for a force snapshot request.
-        let mut force_snapshot_lsns: BTreeMap<u64, Sender<Result<()>>> = BTreeMap::new();
+        let mut force_snapshot_lsns: BTreeMap<u64, Vec<Sender<Result<()>>>> = BTreeMap::new();
 
         // Record LSN if the last handled table event is committed, which indicates mooncake table stays at a consistent view, so table could be flushed safely.
         let mut table_consistent_view_lsn: Option<u64> = None;
@@ -212,7 +212,7 @@ impl TableHandler {
                             }
                             // Iceberg snapshot LSN requirement is not met, record the required LSN, so later commit will pick up.
                             else {
-                                force_snapshot_lsns.insert(lsn, tx);
+                                force_snapshot_lsns.entry(lsn).or_default().push(tx);
                             }
                         }
                         // Branch to drop the iceberg table, only used when the whole table requested to drop.
@@ -281,14 +281,18 @@ impl TableHandler {
                             let new_map = force_snapshot_lsns.split_off(&(iceberg_flush_lsn + 1));
                             for (requested_lsn, tx) in force_snapshot_lsns.iter() {
                                 assert!(*requested_lsn <= iceberg_flush_lsn);
-                                tx.send(Ok(())).await.unwrap()
+                                for cur_tx in tx {
+                                    cur_tx.send(Ok(())).await.unwrap();
+                                }
                             }
                             force_snapshot_lsns = new_map;
                         }
                         Err(e) => {
                             for (_, tx) in force_snapshot_lsns.iter() {
-                                let err = Error::IcebergMessage(format!("Iceberg failure: {}", e));
-                                tx.send(Err(err)).await.unwrap()
+                                for cur_tx in tx {
+                                    let err = Error::IcebergMessage(format!("Iceberg failure: {}", e));
+                                    cur_tx.send(Err(err)).await.unwrap();
+                                }
                             }
                             force_snapshot_lsns.clear();
                         }

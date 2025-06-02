@@ -903,6 +903,12 @@ async fn test_multiple_snapshot_requests() {
             .initiate_snapshot(/*lsn=*/ 2)
             .await,
     );
+    // The same requested LSN as previous.
+    rx_vec.push(
+        env.iceberg_table_event_manager
+            .initiate_snapshot(/*lsn=*/ 2)
+            .await,
+    );
     // A LSN already satisfied.
     rx_vec.push(
         env.iceberg_table_event_manager

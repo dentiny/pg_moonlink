@@ -29,7 +29,7 @@ impl IcebergTableEventManager {
         }
     }
 
-    /// Initiate an iceberg snapshot event.
+    /// Initiate an iceberg snapshot event, return the channel for synchronization.
     pub async fn initiate_snapshot(&mut self, lsn: u64) -> mpsc::Receiver<Result<()>> {
         let (tx, rx) = mpsc::channel(1);
         self.table_event_tx
