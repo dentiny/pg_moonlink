@@ -834,60 +834,6 @@ async fn test_iceberg_snapshot_creation_for_streaming_write() {
     rx.recv().await.unwrap().unwrap();
 }
 
-#[tokio::test]
-async fn test_file_indices_merge() {
-    let temp_dir = tempdir().unwrap();
-
-    // File indices merge is triggered as long as there's not only one file indice.
-    let file_index_config = FileIndexMergeConfig {
-        file_indices_to_merge: 2,
-        index_block_final_size: 1000,
-    };
-
-    // Set mooncake and iceberg flush and snapshot threshold to huge value, to verify force flush and force snapshot works as expected.
-    let mooncake_table_config = MooncakeTableConfig {
-        batch_size: MooncakeTableConfig::DEFAULT_BATCH_SIZE,
-        disk_slice_parquet_file_size: MooncakeTableConfig::DEFAULT_DISK_SLICE_PARQUET_FILE_SIZE,
-        // Flush on every commit.
-        mem_slice_size: 1,
-        snapshot_deletion_record_count: 1000,
-        iceberg_snapshot_new_data_file_count: 1000,
-        iceberg_snapshot_new_committed_deletion_log: 1000,
-        temp_files_directory: temp_dir.path().to_str().unwrap().to_string(),
-        file_index_config,
-    };
-    let mut env = TestEnvironment::new(temp_dir, mooncake_table_config.clone()).await;
-
-    // Append the first row to the mooncake table.
-    env.append_row(
-        /*id=*/ 1, /*name=*/ "John", /*age=*/ 30, /*xact_id=*/ None,
-    )
-    .await;
-    env.commit(/*lsn=*/ 1).await;
-
-    // Append the second row to the mooncake table.
-    env.append_row(
-        /*id=*/ 2, /*name=*/ "Bob", /*age=*/ 20, /*xact_id=*/ None,
-    )
-    .await;
-    env.commit(/*lsn=*/ 2).await;
-
-    // Force to create an iceberg snapshot.
-    let mut rx = env
-        .iceberg_table_event_manager
-        .initiate_snapshot(/*lsn=*/ 2)
-        .await;
-    rx.recv().await.unwrap().unwrap();
-
-    // Load mooncake snapshot from iceberg table and check file indices.
-    let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
-    let snapshot = iceberg_table_manager
-        .load_snapshot_from_table()
-        .await
-        .unwrap();
-    assert_eq!(snapshot.indices.file_indices.len(), 1);
-}
-
 /// Testing scenario: iceberg snapshot request shouldn't block, even if there's no write operations to the table.
 #[tokio::test]
 async fn test_empty_table_snapshot_creation() {

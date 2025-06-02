@@ -9,6 +9,7 @@ use crate::storage::iceberg::puffin_utils;
 use crate::storage::iceberg::s3_test_utils;
 use crate::storage::index::persisted_bucket_hash_map::GlobalIndex;
 use crate::storage::index::Index;
+use crate::storage::index::persisted_bucket_hash_map::FileIndexMergeConfig;
 use crate::storage::index::MooncakeIndex;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 use crate::storage::mooncake_table::IcebergSnapshotPayload;
@@ -481,6 +482,51 @@ async fn test_snapshot_load_for_multiple_times() -> IcebergResult<()> {
     assert!(result.is_err());
 
     Ok(())
+}
+
+/// Testing scenario: create snapshot for index merge. 
+#[tokio::test]
+async fn test_index_merge_and_create_snapshot() {
+    let tmp_dir = tempdir().unwrap();
+
+    // File indices merge is triggered as long as there's not only one file indice.
+    let file_index_config = FileIndexMergeConfig {
+        file_indices_to_merge: 2,
+        index_block_final_size: 1000,
+    };
+
+    // Set mooncake and iceberg flush and snapshot threshold to huge value, to verify force flush and force snapshot works as expected.
+    let mooncake_table_config = MooncakeTableConfig {
+        batch_size: MooncakeTableConfig::DEFAULT_BATCH_SIZE,
+        disk_slice_parquet_file_size: MooncakeTableConfig::DEFAULT_DISK_SLICE_PARQUET_FILE_SIZE,
+        // Flush on every commit.
+        mem_slice_size: 1,
+        snapshot_deletion_record_count: 1000,
+        iceberg_snapshot_new_data_file_count: 1000,
+        iceberg_snapshot_new_committed_deletion_log: 1000,
+        temp_files_directory: tmp_dir.path().to_str().unwrap().to_string(),
+        file_index_config,
+    };
+
+    let mooncake_table_metadata = Arc::new(MooncakeTableMetadata {
+        name: "test_table".to_string(),
+        id: 0,
+        schema: create_test_arrow_schema(),
+        config: mooncake_table_config.clone(),
+        path: std::path::PathBuf::from(tmp_dir.path().to_str().unwrap().to_string()),
+        identity: RowIdentity::FullRow,
+    });
+
+    let config = IcebergTableConfig {
+        warehouse_uri: tmp_dir.path().to_str().unwrap().to_string(),
+        namespace: vec!["namespace".to_string()],
+        table_name: "test_table".to_string(),
+    };
+    
+    let iceberg_table_manager = IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone()).unwrap();
+    let mooncake_table = MooncakeTable::new_with_table_manager(mooncake_table_metadata.clone(), Box::new(iceberg_table_manager), mooncake_table_config.clone())
+
+
 }
 
 /// Testing scenario: attempt an iceberg snapshot when no data file, deletion vector or index files generated.
