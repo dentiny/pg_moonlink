@@ -9,7 +9,6 @@ use crate::storage::mooncake_table::TableMetadata as MooncakeTableMetadata;
 use crate::storage::MockTableManager;
 use crate::storage::MooncakeTable;
 use crate::storage::TableManager;
-use crate::MooncakeSnapshot;
 use crate::TableConfig;
 
 use std::sync::Arc;
@@ -476,8 +475,11 @@ async fn test_iceberg_snapshot_creation_for_batch_write() {
     env.commit(/*lsn=*/ 1).await;
 
     // Attempt an iceberg snapshot, with requested LSN already committed.
-    env.initiate_snapshot(/*lsn=*/ 1).await;
-    env.sync_snapshot_completion().await.unwrap();
+    let mut rx = env
+        .iceberg_table_event_manager
+        .initiate_snapshot(/*lsn=*/ 1)
+        .await;
+    rx.recv().await.unwrap().unwrap();
 
     // Load from iceberg table manager to check snapshot status.
     let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
@@ -503,7 +505,10 @@ async fn test_iceberg_snapshot_creation_for_batch_write() {
     // ---- Create snapshot after new records appended and old records deleted ----
     //
     // Attempt an iceberg snapshot, which is a future flush LSN, and contains both new records and deletion records.
-    env.initiate_snapshot(/*lsn=*/ 5).await;
+    let mut rx = env
+        .iceberg_table_event_manager
+        .initiate_snapshot(/*lsn=*/ 5)
+        .await;
     env.append_row(
         /*id=*/ 2, /*name=*/ "Bob", /*age=*/ 20, /*xact_id=*/ None,
     )
@@ -517,7 +522,7 @@ async fn test_iceberg_snapshot_creation_for_batch_write() {
     env.commit(/*lsn=*/ 5).await;
 
     // Block wait until iceberg snapshot created.
-    env.sync_snapshot_completion().await.unwrap();
+    rx.recv().await.unwrap().unwrap();
 
     // Load from iceberg table manager to check snapshot status.
     let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
@@ -560,7 +565,10 @@ async fn test_iceberg_snapshot_creation_for_batch_write() {
     }
 
     // ---- Create snapshot only with old records deleted ----
-    env.initiate_snapshot(/*lsn=*/ 7).await;
+    let mut rx = env
+        .iceberg_table_event_manager
+        .initiate_snapshot(/*lsn=*/ 7)
+        .await;
     env.delete_row(
         /*id=*/ 2, /*name=*/ "Bob", /*age=*/ 20, /*lsn=*/ 6,
         /*xact_id=*/ None,
@@ -569,7 +577,7 @@ async fn test_iceberg_snapshot_creation_for_batch_write() {
     env.commit(/*lsn=*/ 7).await;
 
     // Block wait until iceberg snapshot created.
-    env.sync_snapshot_completion().await.unwrap();
+    rx.recv().await.unwrap().unwrap();
 
     // Load from iceberg table manager to check snapshot status.
     let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
@@ -611,8 +619,11 @@ async fn test_iceberg_snapshot_creation_for_batch_write() {
     }
 
     // Requested LSN is no later than current iceberg snapshot LSN.
-    env.initiate_snapshot(/*lsn=*/ 1).await;
-    env.sync_snapshot_completion().await.unwrap();
+    let mut rx = env
+        .iceberg_table_event_manager
+        .initiate_snapshot(/*lsn=*/ 1)
+        .await;
+    rx.recv().await.unwrap().unwrap();
 }
 
 #[tokio::test]
@@ -663,8 +674,11 @@ async fn test_iceberg_snapshot_creation_for_streaming_write() {
     env.stream_commit(/*lsn=*/ 1, /*xact_id=*/ 0).await;
 
     // Attempt an iceberg snapshot, with requested LSN already committed.
-    env.initiate_snapshot(/*lsn=*/ 1).await;
-    env.sync_snapshot_completion().await.unwrap();
+    let mut rx = env
+        .iceberg_table_event_manager
+        .initiate_snapshot(/*lsn=*/ 1)
+        .await;
+    rx.recv().await.unwrap().unwrap();
 
     // Load from iceberg table manager to check snapshot status.
     let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
@@ -690,7 +704,10 @@ async fn test_iceberg_snapshot_creation_for_streaming_write() {
     // ---- Create snapshot after new records appended and old records deleted ----
     //
     // Attempt an iceberg snapshot, which is a future flush LSN, and contains both new records and deletion records.
-    env.initiate_snapshot(/*lsn=*/ 5).await;
+    let mut rx = env
+        .iceberg_table_event_manager
+        .initiate_snapshot(/*lsn=*/ 5)
+        .await;
     env.append_row(
         /*id=*/ 2,
         /*name=*/ "Bob",
@@ -710,7 +727,7 @@ async fn test_iceberg_snapshot_creation_for_streaming_write() {
     env.stream_commit(/*lsn=*/ 5, /*xact_id=*/ 4).await;
 
     // Block wait until iceberg snapshot created.
-    env.sync_snapshot_completion().await.unwrap();
+    rx.recv().await.unwrap().unwrap();
 
     // Load from iceberg table manager to check snapshot status.
     let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
@@ -753,7 +770,10 @@ async fn test_iceberg_snapshot_creation_for_streaming_write() {
     }
 
     // ---- Create snapshot only with old records deleted ----
-    env.initiate_snapshot(/*lsn=*/ 7).await;
+    let mut rx = env
+        .iceberg_table_event_manager
+        .initiate_snapshot(/*lsn=*/ 7)
+        .await;
     env.delete_row(
         /*id=*/ 2,
         /*name=*/ "Bob",
@@ -765,7 +785,7 @@ async fn test_iceberg_snapshot_creation_for_streaming_write() {
     env.stream_commit(/*lsn=*/ 7, /*xact_id*/ 5).await;
 
     // Block wait until iceberg snapshot created.
-    env.sync_snapshot_completion().await.unwrap();
+    rx.recv().await.unwrap().unwrap();
 
     // Load from iceberg table manager to check snapshot status.
     let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
@@ -807,8 +827,11 @@ async fn test_iceberg_snapshot_creation_for_streaming_write() {
     }
 
     // Requested LSN is no later than current iceberg snapshot LSN.
-    env.initiate_snapshot(/*lsn=*/ 1).await;
-    env.sync_snapshot_completion().await.unwrap();
+    let mut rx = env
+        .iceberg_table_event_manager
+        .initiate_snapshot(/*lsn=*/ 1)
+        .await;
+    rx.recv().await.unwrap().unwrap();
 }
 
 #[tokio::test]
@@ -867,8 +890,131 @@ async fn test_file_indices_merge() {
 async fn test_empty_table_snapshot_creation() {
     let temp_dir = tempdir().unwrap();
     let mut env = TestEnvironment::new(temp_dir, MooncakeTableConfig::default()).await;
-    env.initiate_snapshot(/*lsn=*/ 0).await;
-    env.sync_snapshot_completion().await.unwrap();
+
+    let mut rx_vec = Vec::with_capacity(10);
+    for _ in 1..=10 {
+        let rx = env
+            .iceberg_table_event_manager
+            .initiate_snapshot(/*lsn=*/ 0)
+            .await;
+        rx_vec.push(rx);
+    }
+    for mut cur_rx in rx_vec {
+        cur_rx.recv().await.unwrap().unwrap();
+    }
+}
+
+/// Testing senario: request iceberg snapshot with multiple LSNs.
+#[tokio::test]
+async fn test_multiple_snapshot_requests() {
+    // Set mooncake and iceberg flush and snapshot threshold to huge value, to verify force flush and force snapshot works as expected.
+    let temp_dir = tempdir().unwrap();
+    let mooncake_table_config = MooncakeTableConfig {
+        batch_size: MooncakeTableConfig::DEFAULT_BATCH_SIZE,
+        disk_slice_parquet_file_size: MooncakeTableConfig::DEFAULT_DISK_SLICE_PARQUET_FILE_SIZE,
+        mem_slice_size: 1000,
+        snapshot_deletion_record_count: 1000,
+        iceberg_snapshot_new_data_file_count: 1000,
+        iceberg_snapshot_new_committed_deletion_log: 1000,
+        temp_files_directory: temp_dir.path().to_str().unwrap().to_string(),
+    };
+    let mut env = TestEnvironment::new(temp_dir, mooncake_table_config.clone()).await;
+
+    // Arrow batches used in test.
+    let arrow_batch_1 = RecordBatch::try_new(
+        Arc::new(default_schema()),
+        vec![
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(StringArray::from(vec!["John".to_string()])),
+            Arc::new(Int32Array::from(vec![30])),
+        ],
+    )
+    .unwrap();
+    let arrow_batch_2 = RecordBatch::try_new(
+        Arc::new(default_schema()),
+        vec![
+            Arc::new(Int32Array::from(vec![2])),
+            Arc::new(StringArray::from(vec!["Bob".to_string()])),
+            Arc::new(Int32Array::from(vec![20])),
+        ],
+    )
+    .unwrap();
+
+    // Make a commit request at the very beginning, so iceberg snapshot request won't return immediately.
+    env.commit(/*lsn=*/ 0).await;
+
+    // Create multiple iceberg snapshot requests in advance.
+    let mut rx_vec = Vec::new();
+    // First flush and commit LSN.
+    rx_vec.push(
+        env.iceberg_table_event_manager
+            .initiate_snapshot(/*lsn=*/ 1)
+            .await,
+    );
+    // Second flush and commit LSN.
+    rx_vec.push(
+        env.iceberg_table_event_manager
+            .initiate_snapshot(/*lsn=*/ 2)
+            .await,
+    );
+    // The same requested LSN as previous.
+    rx_vec.push(
+        env.iceberg_table_event_manager
+            .initiate_snapshot(/*lsn=*/ 2)
+            .await,
+    );
+    // A LSN already satisfied.
+    rx_vec.push(
+        env.iceberg_table_event_manager
+            .initiate_snapshot(/*lsn=*/ 0)
+            .await,
+    );
+
+    // Append a new row to the mooncake table.
+    env.append_row(
+        /*id=*/ 1, /*name=*/ "John", /*age=*/ 30, /*xact_id=*/ None,
+    )
+    .await;
+    env.commit(/*lsn=*/ 1).await;
+
+    // Append a new row to the mooncake table.
+    env.append_row(
+        /*id=*/ 2, /*name=*/ "Bob", /*age=*/ 20, /*xact_id=*/ None,
+    )
+    .await;
+    env.commit(/*lsn=*/ 2).await;
+
+    for mut rx in rx_vec.into_iter() {
+        rx.recv().await.unwrap().unwrap();
+    }
+
+    // Check iceberg snapshot content.
+    let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
+    let snapshot = iceberg_table_manager
+        .load_snapshot_from_table()
+        .await
+        .unwrap();
+    assert_eq!(snapshot.disk_files.len(), 2);
+
+    let mut visited = [false, false]; // Check both row flushed.
+    for (cur_data_file, cur_deletion_vector) in snapshot.disk_files.into_iter() {
+        // Check the data file.
+        let actual_arrow_batch = load_arrow_batch(cur_data_file.file_path()).await;
+        if actual_arrow_batch == arrow_batch_1 {
+            visited[0] = true;
+        }
+        if actual_arrow_batch == arrow_batch_2 {
+            visited[1] = true;
+        }
+
+        // Check the deletion vector.
+        assert!(cur_deletion_vector
+            .batch_deletion_vector
+            .collect_deleted_rows()
+            .is_empty(),);
+        check_deletion_vector_consistency(&cur_deletion_vector).await;
+    }
+    assert_eq!(visited, [true, true]);
 }
 
 /// ---- Mock unit test ----
@@ -885,15 +1031,7 @@ async fn test_iceberg_snapshot_failure_mock_test() {
         identity: crate::row::IdentityProp::Keys(vec![0]),
     });
 
-    let mooncake_table_metadata_copy = mooncake_table_metadata.clone();
     let mut mock_table_manager = MockTableManager::new();
-    mock_table_manager
-        .expect_load_snapshot_from_table()
-        .times(1)
-        .returning(move || {
-            let table_metadata_copy = mooncake_table_metadata_copy.clone();
-            Box::pin(async move { Ok(MooncakeSnapshot::new(table_metadata_copy)) })
-        });
     mock_table_manager
         .expect_sync_snapshot()
         .times(1)
@@ -923,8 +1061,11 @@ async fn test_iceberg_snapshot_failure_mock_test() {
     env.commit(/*lsn=*/ 10).await;
 
     // Initiate snapshot and block wait its completion, check whether error status is correctly propagated.
-    env.initiate_snapshot(/*lsn=*/ 10).await;
-    let res = env.sync_snapshot_completion().await;
+    let mut rx = env
+        .iceberg_table_event_manager
+        .initiate_snapshot(/*lsn=*/ 10)
+        .await;
+    let res = rx.recv().await.unwrap();
     assert!(res.is_err());
 }
 
@@ -941,15 +1082,7 @@ async fn test_iceberg_drop_table_failure_mock_test() {
         identity: crate::row::IdentityProp::Keys(vec![0]),
     });
 
-    let mooncake_table_metadata_copy = mooncake_table_metadata.clone();
     let mut mock_table_manager = MockTableManager::new();
-    mock_table_manager
-        .expect_load_snapshot_from_table()
-        .times(1)
-        .returning(move || {
-            let table_metadata_copy = mooncake_table_metadata_copy.clone();
-            Box::pin(async move { Ok(MooncakeSnapshot::new(table_metadata_copy)) })
-        });
     mock_table_manager
         .expect_drop_table()
         .times(1)

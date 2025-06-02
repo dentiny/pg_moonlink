@@ -3,10 +3,12 @@ mod error;
 
 pub use error::Error;
 use error::Result;
+use moonlink::Result as MoonlinkResult;
 use moonlink_connectors::ReplicationManager;
 use std::hash::Hash;
 use std::io::ErrorKind;
 use std::sync::Arc;
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::RwLock;
 
 // Default local filesystem directory where all tables data will be stored under.
@@ -74,11 +76,14 @@ impl<T: Eq + Hash + Clone> MoonlinkBackend<T> {
 
     /// Create an iceberg snapshot with the given LSN, return when the a snapshot is successfully created.
     pub async fn create_iceberg_snapshot(&self, table_id: &T, lsn: u64) -> Result<()> {
-        let mut manager = self.replication_manager.write().await;
-
-        let writer = manager.get_iceberg_table_event_manager(table_id);
-        writer.initiate_snapshot(lsn).await;
-        writer.sync_snapshot_completion().await?;
+        #[allow(unused_assignments)]
+        let mut rx: Option<Receiver<MoonlinkResult<()>>> = None;
+        {
+            let mut manager = self.replication_manager.write().await;
+            let writer = manager.get_iceberg_table_event_manager(table_id);
+            rx = Some(writer.initiate_snapshot(lsn).await);
+        }
+        rx.unwrap().recv().await.unwrap()?;
         Ok(())
     }
 }

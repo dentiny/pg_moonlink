@@ -82,8 +82,8 @@ fn postgres_primitive_to_arrow_type(
 
     let mut field = Field::new(name, data_type, nullable);
     let mut metadata = HashMap::new();
-    *field_id += 1;
     metadata.insert("PARQUET:field_id".to_string(), field_id.to_string());
+    *field_id += 1;
     field = field.with_metadata(metadata);
 
     // Apply extension type if specified
@@ -117,8 +117,8 @@ fn postgres_type_to_arrow_type(
             );
             let field = Field::new_list(name, Arc::new(item_type), nullable);
             let mut metadata = HashMap::new();
-            *field_id += 1;
             metadata.insert("PARQUET:field_id".to_string(), field_id.to_string());
+            *field_id += 1;
             field.with_metadata(metadata)
         }
         Kind::Composite(fields) => {
@@ -638,7 +638,7 @@ mod tests {
         assert_eq!(arrow_schema.field(21).name(), "bool_array_field");
         let mut expected_field = Field::new("item", DataType::Boolean, /*nullable=*/ true);
         let mut field_metadata = HashMap::new();
-        field_metadata.insert("PARQUET:field_id".to_string(), "22".to_string());
+        field_metadata.insert("PARQUET:field_id".to_string(), "21".to_string());
         expected_field.set_metadata(field_metadata);
         assert_eq!(
             arrow_schema.field(21).data_type(),
@@ -651,36 +651,36 @@ mod tests {
         // Convert Arrow schema to Iceberg schema and check field id/name mapping.
         let iceberg_arrow = IcebergArrow::arrow_schema_to_schema(&arrow_schema).unwrap();
         for (field_id, expected_name) in [
-            (1, "bool_field"),
-            (2, "int2_field"),
-            (3, "int4_field"),
-            (4, "int8_field"),
-            (5, "float4_field"),
-            (6, "float8_field"),
-            (7, "numeric_field"),
-            (8, "varchar_field"),
-            (9, "text_field"),
-            (10, "bpchar_field"),
-            (11, "char_field"),
-            (12, "name_field"),
-            (13, "date_field"),
-            (14, "timestamp_field"),
-            (15, "timestamptz_field"),
-            (16, "time_field"),
-            (17, "timetz_field"),
-            (18, "uuid_field"),
-            (19, "json_field"),
-            (20, "jsonb_field"),
-            (21, "bytea_field"),
-            (22, "bool_array_field.element"),
-            (23, "bool_array_field"),
+            (0, "bool_field"),
+            (1, "int2_field"),
+            (2, "int4_field"),
+            (3, "int8_field"),
+            (4, "float4_field"),
+            (5, "float8_field"),
+            (6, "numeric_field"),
+            (7, "varchar_field"),
+            (8, "text_field"),
+            (9, "bpchar_field"),
+            (10, "char_field"),
+            (11, "name_field"),
+            (12, "date_field"),
+            (13, "timestamp_field"),
+            (14, "timestamptz_field"),
+            (15, "time_field"),
+            (16, "timetz_field"),
+            (17, "uuid_field"),
+            (18, "json_field"),
+            (19, "jsonb_field"),
+            (20, "bytea_field"),
+            (21, "bool_array_field.element"),
+            (22, "bool_array_field"),
         ] {
             assert_eq!(
                 iceberg_arrow.name_by_field_id(field_id).unwrap(),
                 expected_name
             );
         }
-        assert!(iceberg_arrow.name_by_field_id(24).is_none());
+        assert!(iceberg_arrow.name_by_field_id(23).is_none());
     }
 
     #[test]

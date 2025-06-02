@@ -67,7 +67,6 @@ pub async fn test_table(
         warehouse_uri: context.path().to_str().unwrap().to_string(),
         namespace: vec!["default".to_string()],
         table_name: table_name.to_string(),
-        drop_table_if_exists: false,
     };
     let table_config = TableConfig::new(context.temp_dir.path().to_str().unwrap().to_string());
     MooncakeTable::new(

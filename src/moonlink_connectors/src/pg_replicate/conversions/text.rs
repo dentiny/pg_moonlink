@@ -59,6 +59,54 @@ pub enum ArrayParseError {
 }
 
 impl TextFormatConverter {
+    pub fn is_supported_type(typ: &Type) -> bool {
+        matches!(
+            *typ,
+            Type::BOOL
+                | Type::BOOL_ARRAY
+                | Type::CHAR
+                | Type::BPCHAR
+                | Type::VARCHAR
+                | Type::NAME
+                | Type::TEXT
+                | Type::CHAR_ARRAY
+                | Type::BPCHAR_ARRAY
+                | Type::VARCHAR_ARRAY
+                | Type::NAME_ARRAY
+                | Type::TEXT_ARRAY
+                | Type::INT2
+                | Type::INT2_ARRAY
+                | Type::INT4
+                | Type::INT4_ARRAY
+                | Type::INT8
+                | Type::INT8_ARRAY
+                | Type::FLOAT4
+                | Type::FLOAT4_ARRAY
+                | Type::FLOAT8
+                | Type::FLOAT8_ARRAY
+                | Type::NUMERIC
+                | Type::NUMERIC_ARRAY
+                | Type::BYTEA
+                | Type::BYTEA_ARRAY
+                | Type::DATE
+                | Type::DATE_ARRAY
+                | Type::TIME
+                | Type::TIME_ARRAY
+                | Type::TIMESTAMP
+                | Type::TIMESTAMP_ARRAY
+                | Type::TIMESTAMPTZ
+                | Type::TIMESTAMPTZ_ARRAY
+                | Type::UUID
+                | Type::UUID_ARRAY
+                | Type::JSON
+                | Type::JSON_ARRAY
+                | Type::JSONB
+                | Type::JSONB_ARRAY
+                | Type::OID
+                | Type::OID_ARRAY
+        )
+    }
+
     pub fn default_value(typ: &Type) -> Cell {
         match *typ {
             Type::BOOL => Cell::Bool(bool::default()),

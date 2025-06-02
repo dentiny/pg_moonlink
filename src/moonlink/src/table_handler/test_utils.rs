@@ -56,7 +56,6 @@ pub fn get_iceberg_manager_config(table_name: String, warehouse_uri: String) -> 
         warehouse_uri,
         namespace: vec!["default".to_string()],
         table_name,
-        drop_table_if_exists: false,
     }
 }
 
@@ -67,7 +66,7 @@ pub struct TestEnvironment {
     read_state_manager: Arc<ReadStateManager>,
     replication_tx: watch::Sender<u64>,
     last_commit_tx: watch::Sender<u64>,
-    iceberg_table_event_manager: IcebergTableEventManager,
+    pub(crate) iceberg_table_event_manager: IcebergTableEventManager,
     pub(crate) temp_dir: TempDir,
 }
 
@@ -93,15 +92,12 @@ impl TestEnvironment {
             last_commit_rx,
         ));
 
-        let (iceberg_snapshot_completion_tx, iceberg_snapshot_completion_rx) = mpsc::channel(1);
         let (iceberg_drop_table_completion_tx, iceberg_drop_table_completion_rx) = mpsc::channel(1);
         let iceberg_event_sync_sender = IcebergEventSyncSender {
             iceberg_drop_table_completion_tx,
-            iceberg_snapshot_completion_tx,
         };
         let iceberg_event_sync_receiver = IcebergEventSyncReceiver {
             iceberg_drop_table_completion_rx,
-            iceberg_snapshot_completion_rx,
         };
         let handler = TableHandler::new(mooncake_table, iceberg_event_sync_sender);
         let iceberg_table_event_manager =
@@ -166,22 +162,6 @@ impl TestEnvironment {
             .send(event)
             .await
             .expect("Failed to send event");
-    }
-
-    // --- Util functions for iceberg snapshot creation ---
-
-    /// Initiate an iceberg snapshot event at best effort.
-    pub async fn initiate_snapshot(&mut self, lsn: u64) {
-        self.iceberg_table_event_manager
-            .initiate_snapshot(lsn)
-            .await
-    }
-
-    /// Wait iceberg snapshot creation completion.
-    pub async fn sync_snapshot_completion(&mut self) -> Result<()> {
-        self.iceberg_table_event_manager
-            .sync_snapshot_completion()
-            .await
     }
 
     // --- Util functions for iceberg drop table ---

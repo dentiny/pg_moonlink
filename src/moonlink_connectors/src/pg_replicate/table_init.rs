@@ -27,15 +27,12 @@ pub struct TableResources {
 
 /// Create iceberg table event manager sender and receiver.
 fn create_iceberg_event_syncer() -> (IcebergEventSyncSender, IcebergEventSyncReceiver) {
-    let (iceberg_snapshot_completion_tx, iceberg_snapshot_completion_rx) = mpsc::channel(1);
     let (iceberg_drop_table_completion_tx, iceberg_drop_table_completion_rx) = mpsc::channel(1);
     let iceberg_event_sync_sender = IcebergEventSyncSender {
         iceberg_drop_table_completion_tx,
-        iceberg_snapshot_completion_tx,
     };
     let iceberg_event_sync_receiver = IcebergEventSyncReceiver {
         iceberg_drop_table_completion_rx,
-        iceberg_snapshot_completion_rx,
     };
     (iceberg_event_sync_sender, iceberg_event_sync_receiver)
 }
@@ -54,8 +51,6 @@ pub async fn build_table_components(
         warehouse_uri: base_path.to_str().unwrap().to_string(),
         namespace: vec!["default".to_string()],
         table_name: table_schema.table_name.to_string(),
-        // TODO(hjiang): Disable recovery in production, at the moment we only support create new table from scratch.
-        drop_table_if_exists: true,
     };
     let mooncake_table_config = TableConfig::new(table_temp_files_directory);
     let table = MooncakeTable::new(

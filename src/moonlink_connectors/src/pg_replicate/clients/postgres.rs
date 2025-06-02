@@ -10,6 +10,7 @@ use tokio_postgres::{
 };
 use tracing::{info, warn};
 
+use crate::pg_replicate::conversions::text::TextFormatConverter;
 use crate::pg_replicate::table::{ColumnSchema, LookupKey, TableId, TableName, TableSchema};
 
 pub struct SlotInfo {
@@ -205,8 +206,7 @@ impl ReplicationClient {
                     .parse()
                     .map_err(|_| ReplicationClientError::OidColumnNotU32)?;
 
-                // TODO: For now we assume all types are simple. Fail fast on
-                // unsupported types until complex types are implemented.
+                // Fail fast on any type that we are not able to parse in try_from_str.
                 let typ = Type::from_oid(type_oid).ok_or_else(|| {
                     ReplicationClientError::UnsupportedType(
                         name.clone(),
@@ -214,6 +214,14 @@ impl ReplicationClient {
                         table_name.to_string(),
                     )
                 })?;
+
+                if !TextFormatConverter::is_supported_type(&typ) {
+                    return Err(ReplicationClientError::UnsupportedType(
+                        name.clone(),
+                        type_oid,
+                        table_name.to_string(),
+                    ));
+                }
 
                 let modifier = row
                     .try_get("atttypmod")?

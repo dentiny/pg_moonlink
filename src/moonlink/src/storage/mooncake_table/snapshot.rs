@@ -106,16 +106,15 @@ pub struct ReadOutput {
 impl SnapshotTableState {
     pub(super) async fn new(
         metadata: Arc<TableMetadata>,
-        iceberg_table_manager: &mut dyn TableManager,
+        // TODO(hjiang): Used when recovery enabled.
+        _iceberg_table_manager: &mut dyn TableManager,
     ) -> Result<Self> {
         let mut batches = BTreeMap::new();
         batches.insert(0, InMemoryBatch::new(metadata.config.batch_size));
 
-        let snapshot = iceberg_table_manager.load_snapshot_from_table().await?;
-
         Ok(Self {
             mooncake_table_config: metadata.config.clone(),
-            current_snapshot: snapshot,
+            current_snapshot: Snapshot::new(metadata.clone()),
             batches,
             rows: None,
             last_commit: RecordLocation::MemoryBatch(0, 0),
