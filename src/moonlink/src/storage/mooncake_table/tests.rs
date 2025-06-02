@@ -2,7 +2,6 @@ use super::test_utils::*;
 use super::*;
 use crate::storage::iceberg::iceberg_table_manager::MockTableManager;
 use crate::storage::mooncake_table::snapshot::ReadOutput;
-use crate::storage::mooncake_table::Snapshot as MooncakeSnapshot;
 use crate::storage::mooncake_table::TableConfig as MooncakeTableConfig;
 use iceberg::{Error as IcebergError, ErrorKind};
 use rstest::*;
@@ -394,33 +393,6 @@ async fn test_duplicate_deletion() -> Result<()> {
 
 /// ---- Mock unit test ----
 #[tokio::test]
-async fn test_snapshot_load_failure() {
-    let mut mock_manager = MockTableManager::new();
-    mock_manager
-        .expect_load_snapshot_from_table()
-        .times(1)
-        .returning(|| {
-            Box::pin(async move {
-                Err(IcebergError::new(
-                    ErrorKind::Unexpected,
-                    "Intended error for unit test",
-                ))
-            })
-        });
-
-    let metadata = Arc::new(TableMetadata {
-        name: "test_table".to_string(),
-        id: 1,
-        schema: Arc::new(test_schema()),
-        config: TableConfig::default(), // No temp files generated.
-        path: PathBuf::new(),
-        identity: IdentityProp::Keys(vec![0]),
-    });
-    let snapshot_table_state = SnapshotTableState::new(metadata, &mut mock_manager).await;
-    assert!(snapshot_table_state.is_err());
-}
-
-#[tokio::test]
 async fn test_snapshot_store_failure() {
     let temp_dir = TempDir::new().unwrap();
     let table_metadata = Arc::new(TableMetadata {
@@ -431,16 +403,8 @@ async fn test_snapshot_store_failure() {
         path: PathBuf::from(temp_dir.path()),
         identity: IdentityProp::Keys(vec![0]),
     });
-    let table_metadata_copy = table_metadata.clone();
 
     let mut mock_table_manager = MockTableManager::new();
-    mock_table_manager
-        .expect_load_snapshot_from_table()
-        .times(1)
-        .returning(move || {
-            let table_metadata_copy = table_metadata_copy.clone();
-            Box::pin(async move { Ok(MooncakeSnapshot::new(table_metadata_copy)) })
-        });
     mock_table_manager
         .expect_sync_snapshot()
         .times(1)

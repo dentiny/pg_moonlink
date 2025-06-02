@@ -56,7 +56,6 @@ pub fn get_iceberg_manager_config(table_name: String, warehouse_uri: String) -> 
         warehouse_uri,
         namespace: vec!["default".to_string()],
         table_name,
-        drop_table_if_exists: false,
     }
 }
 

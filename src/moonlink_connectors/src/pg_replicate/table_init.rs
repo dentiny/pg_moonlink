@@ -51,8 +51,6 @@ pub async fn build_table_components(
         warehouse_uri: base_path.to_str().unwrap().to_string(),
         namespace: vec!["default".to_string()],
         table_name: table_schema.table_name.to_string(),
-        // TODO(hjiang): Disable recovery in production, at the moment we only support create new table from scratch.
-        drop_table_if_exists: true,
     };
     let mooncake_table_config = TableConfig::new(table_temp_files_directory);
     let table = MooncakeTable::new(

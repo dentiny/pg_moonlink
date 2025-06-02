@@ -161,18 +161,12 @@ pub(crate) async fn get_or_create_iceberg_table<C: MoonlinkCatalog + ?Sized>(
     namespace: &Vec<String>,
     table_name: &str,
     arrow_schema: &ArrowSchema,
-    drop_if_exists: bool,
 ) -> IcebergResult<IcebergTable> {
     let namespace_ident = NamespaceIdent::from_strs(namespace).unwrap();
     let table_ident = TableIdent::new(namespace_ident.clone(), table_name.to_string());
     let should_create = match catalog.load_table(&table_ident).await {
         Ok(existing_table) => {
-            if drop_if_exists {
-                catalog.drop_table(&table_ident).await?;
-                true
-            } else {
-                return Ok(existing_table);
-            }
+            return Ok(existing_table);
         }
         Err(_) => true,
     };

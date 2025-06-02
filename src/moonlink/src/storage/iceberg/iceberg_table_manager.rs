@@ -50,11 +50,6 @@ pub struct IcebergTableConfig {
     /// Iceberg table name.
     #[builder(default = "table".to_string())]
     pub table_name: String,
-    /// Whether to drop the old table at creation.
-    ///
-    /// TODO(hjiang): After confirming `drop_table` implementation no problem, discard the feature flag.
-    #[builder(default = false)]
-    pub drop_table_if_exists: bool,
 }
 
 #[async_trait]
@@ -168,7 +163,6 @@ impl IcebergTableManager {
                 &self.config.namespace,
                 &self.config.table_name,
                 self.mooncake_table_metadata.schema.as_ref(),
-                self.config.drop_table_if_exists,
             )
             .await?;
             self.iceberg_table = Some(table);
