@@ -873,8 +873,11 @@ async fn test_file_indices_merge() {
     env.commit(/*lsn=*/ 2).await;
 
     // Force to create an iceberg snapshot.
-    env.initiate_snapshot(/*lsn=*/ 2).await;
-    env.sync_snapshot_completion().await.unwrap();
+    let mut rx = env
+        .iceberg_table_event_manager
+        .initiate_snapshot(/*lsn=*/ 2)
+        .await;
+    rx.recv().await.unwrap().unwrap();
 
     // Load mooncake snapshot from iceberg table and check file indices.
     let mut iceberg_table_manager = env.create_iceberg_table_manager(mooncake_table_config.clone());
@@ -917,6 +920,7 @@ async fn test_multiple_snapshot_requests() {
         iceberg_snapshot_new_data_file_count: 1000,
         iceberg_snapshot_new_committed_deletion_log: 1000,
         temp_files_directory: temp_dir.path().to_str().unwrap().to_string(),
+        file_index_config: FileIndexMergeConfig::default(),
     };
     let mut env = TestEnvironment::new(temp_dir, mooncake_table_config.clone()).await;
 
