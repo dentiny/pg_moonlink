@@ -27,15 +27,12 @@ pub struct TableResources {
 
 /// Create iceberg table event manager sender and receiver.
 fn create_iceberg_event_syncer() -> (IcebergEventSyncSender, IcebergEventSyncReceiver) {
-    let (iceberg_snapshot_completion_tx, iceberg_snapshot_completion_rx) = mpsc::channel(1);
     let (iceberg_drop_table_completion_tx, iceberg_drop_table_completion_rx) = mpsc::channel(1);
     let iceberg_event_sync_sender = IcebergEventSyncSender {
         iceberg_drop_table_completion_tx,
-        iceberg_snapshot_completion_tx,
     };
     let iceberg_event_sync_receiver = IcebergEventSyncReceiver {
         iceberg_drop_table_completion_rx,
-        iceberg_snapshot_completion_rx,
     };
     (iceberg_event_sync_sender, iceberg_event_sync_receiver)
 }
