@@ -25,7 +25,7 @@ pub(crate) struct SnapshotTableState {
     mooncake_table_config: TableConfig,
 
     /// Current snapshot
-    pub(super) current_snapshot: Snapshot,
+    pub(crate) current_snapshot: Snapshot,
 
     /// In memory RecordBatches, maps from batch id to in-memory batch.
     batches: BTreeMap<u64, InMemoryBatch>,

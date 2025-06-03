@@ -5,9 +5,11 @@ use crate::storage::iceberg::deletion_vector::DeletionVector;
 use crate::storage::iceberg::iceberg_table_manager::IcebergTableManager;
 use crate::storage::iceberg::iceberg_table_manager::*;
 use crate::storage::iceberg::puffin_utils;
+use crate::storage::storage_utils::{MooncakeDataFileRef, RawDeletionRecord, RecordLocation};
 #[cfg(feature = "storage-s3")]
 use crate::storage::iceberg::s3_test_utils;
 use crate::storage::index::persisted_bucket_hash_map::GlobalIndex;
+use crate::storage::index::persisted_bucket_hash_map::GlobalIndexBuilder;
 use crate::storage::index::Index;
 use crate::storage::index::MooncakeIndex;
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
@@ -19,9 +21,6 @@ use crate::storage::mooncake_table::{
 };
 use crate::storage::storage_utils::create_data_file;
 use crate::storage::storage_utils::FileId;
-use crate::storage::storage_utils::MooncakeDataFileRef;
-use crate::storage::storage_utils::RawDeletionRecord;
-use crate::storage::storage_utils::RecordLocation;
 use crate::storage::MooncakeTable;
 
 use std::collections::HashMap;
@@ -3606,4 +3605,58 @@ async fn test_state_7_6() -> IcebergResult<()> {
     check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     Ok(())
+}
+
+#[tokio::test]
+async fn test_index_merge() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
+    let row_1 = MoonlinkRow::new(vec![
+        RowValue::Int32(1),
+        RowValue::ByteArray("John".as_bytes().to_vec()),
+        RowValue::Int32(10),
+    ]);
+    table.append(row_1.clone()).unwrap();
+    table.commit(/*lsn=*/ 1);
+    table.flush(/*lsn=*/ 1).await.unwrap();
+
+    let row_2 = MoonlinkRow::new(vec![
+        RowValue::Int32(2),
+        RowValue::ByteArray("Box".as_bytes().to_vec()),
+        RowValue::Int32(10),
+    ]);
+    table.append(row_2.clone()).unwrap();
+    table.commit(/*lsn=*/ 2);
+    table.flush(/*lsn=*/ 2).await.unwrap();
+    table.create_mooncake_and_iceberg_snapshot_for_test().await.unwrap();
+
+    let record_1 = RawDeletionRecord {
+        lookup_key: table.metadata.identity.get_lookup_key(&row_1),
+        lsn: 3,
+        pos: None,
+        row_identity: table.metadata.identity.extract_identity_columns(row_1.clone()),
+    };
+    let record_2 = RawDeletionRecord {
+        lookup_key: table.metadata.identity.get_lookup_key(&row_2),
+        lsn: 3,
+        pos: None,
+        row_identity: table.metadata.identity.extract_identity_columns(row_2.clone()),
+    };
+
+    let file_indices = table.snapshot.write().await.current_snapshot.indices.file_indices.clone();
+    assert!(file_indices.len() == 2);
+
+    let mut mooncake_index = MooncakeIndex::new();
+    mooncake_index.insert_file_index(file_indices[0].clone());
+    mooncake_index.insert_file_index(file_indices[1].clone());
+    assert!(!mooncake_index.find_record(&record_1).await.is_empty());
+    assert!(!mooncake_index.find_record(&record_2).await.is_empty());
+
+    let mut builder = GlobalIndexBuilder::new();
+    builder.set_directory(tempfile::tempdir().unwrap().keep());
+    let merged = builder._build_from_merge(file_indices).await;
+    let mut mooncake_index = MooncakeIndex::new();
+    mooncake_index.insert_file_index(merged.clone());
+    assert!(!mooncake_index.find_record(&record_1).await.is_empty());
+    assert!(!mooncake_index.find_record(&record_2).await.is_empty());
 }
