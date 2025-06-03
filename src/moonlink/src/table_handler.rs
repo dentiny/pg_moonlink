@@ -89,6 +89,9 @@ impl TableHandler {
     ) {
         let mut periodic_snapshot_interval = time::interval(Duration::from_millis(500));
 
+        // Mooncake table directory.
+        let table_directory = std::path::PathBuf::from(table.get_table_directory());
+
         // Join handle for mooncake snapshot.
         #[allow(clippy::type_complexity)]
         let mut mooncake_snapshot_handle: Option<
@@ -269,8 +272,10 @@ impl TableHandler {
                     // Process file indices merge.
                     if file_indices_merge_handle.is_none() {
                         if let Some(file_indices_merge_payload) = file_indices_merge_payload {
+                            let table_directory_copy = table_directory.clone();
                             let handle = tokio::task::spawn(async move {
-                                let builder = GlobalIndexBuilder::new();
+                                let mut builder = GlobalIndexBuilder::new();
+                                builder.set_directory(table_directory_copy);
                                 let merged = builder.build_from_merge(file_indices_merge_payload.file_indices.clone()).await;
                                 FileIndiceMergeResult {
                                     old_file_indices: file_indices_merge_payload.file_indices,
@@ -304,13 +309,7 @@ impl TableHandler {
                     match iceberg_snapshot_res {
                         Ok(snapshot_res) => {
                             let iceberg_flush_lsn = snapshot_res.flush_lsn;
-                            let index_merge_completed = !snapshot_res.index_merge_result.new_file_indices_to_import.is_empty();
                             table.set_iceberg_snapshot_res(snapshot_res);
-
-                            // Notify index merge waiters.
-                            if index_merge_completed {
-
-                            }
 
                             // Notify all iceberg snapshot waiters with LSN satisfied.
                             let new_map = force_snapshot_lsns.split_off(&(iceberg_flush_lsn + 1));

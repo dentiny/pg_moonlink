@@ -81,11 +81,13 @@ pub(crate) struct IcebergSnapshotResult {
 ////////////////////////////
 /// Index merge
 ////////////////////////////
+#[derive(Clone, Debug)]
 pub struct FileIndiceMergePayload {
     /// File indices to merge.
     pub(crate) file_indices: Vec<GlobalIndex>,
 }
 
+#[derive(Clone, Debug)]
 pub struct FileIndiceMergeResult {
     /// File indices merged.
     pub(crate) old_file_indices: Vec<GlobalIndex>,

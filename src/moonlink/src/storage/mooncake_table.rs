@@ -17,7 +17,6 @@ use crate::storage::iceberg::iceberg_table_manager::{
     IcebergTableConfig, IcebergTableManager, TableManager,
 };
 use crate::storage::index::persisted_bucket_hash_map::GlobalIndex;
-use crate::storage::index::persisted_bucket_hash_map::GlobalIndexBuilder;
 use crate::storage::mooncake_table::shared_array::SharedRowBufferSnapshot;
 pub(crate) use crate::storage::mooncake_table::table_snapshot::{
     FileIndiceMergePayload, FileIndiceMergeResult, IcebergSnapshotImportPayload,
@@ -407,14 +406,32 @@ impl MooncakeTable {
         })
     }
 
+    // Get mooncake table directory.
+    pub(crate) fn get_table_directory(&self) -> String {
+        self.metadata.path.to_str().unwrap().to_string()
+    }
+
     /// Set iceberg snapshot flush LSN, called after a snapshot operation.
     pub(crate) fn set_iceberg_snapshot_res(&mut self, iceberg_snapshot_res: IcebergSnapshotResult) {
         // ---- Update mooncake table fields ----
         let iceberg_flush_lsn = iceberg_snapshot_res.flush_lsn;
-        assert!(
-            self.last_iceberg_snapshot_lsn.is_none()
-                || self.last_iceberg_snapshot_lsn.unwrap() < iceberg_flush_lsn
-        );
+
+        // If only index merge files contained in the iceberg snapshot, we don't have flush LSN advanced.
+        if !iceberg_snapshot_res
+            .index_merge_result
+            .new_file_indices_to_import
+            .is_empty()
+        {
+            assert!(
+                self.last_iceberg_snapshot_lsn.is_none()
+                    || self.last_iceberg_snapshot_lsn.unwrap() <= iceberg_flush_lsn
+            );
+        } else {
+            assert!(
+                self.last_iceberg_snapshot_lsn.is_none()
+                    || self.last_iceberg_snapshot_lsn.unwrap() < iceberg_flush_lsn
+            );
+        }
         self.last_iceberg_snapshot_lsn = Some(iceberg_flush_lsn);
 
         assert!(self.iceberg_table_manager.is_none());
@@ -765,51 +782,33 @@ impl MooncakeTable {
     pub(crate) async fn create_mooncake_and_iceberg_snapshot_for_index_merge_for_test(
         &mut self,
     ) -> Result<()> {
-        if let Some(mooncake_join_handle) = self.force_create_snapshot() {
-            // Wait for the snapshot async task to complete.
-            match mooncake_join_handle.await {
-                Ok((lsn, snapshot_payload, index_merge_payload)) => {
-                    // Notify readers that the mooncake snapshot has been created.
-                    self.notify_snapshot_reader(lsn);
+        let (_, snapshot_payload, _) = self.force_create_snapshot().unwrap().await.unwrap();
 
-                    // Create index merge operation if possible.
-                    let mut file_indices_merge_result: Option<FileIndiceMergeResult> = None;
-                    if let Some(index_merge_payload) = index_merge_payload {
-                        let builder = GlobalIndexBuilder::new();
-                        let merged = builder
-                            .build_from_merge(index_merge_payload.file_indices.clone())
-                            .await;
-                        file_indices_merge_result = Some(FileIndiceMergeResult {
-                            old_file_indices: index_merge_payload.file_indices,
-                            merged_file_indices: merged,
-                        });
-                    }
-
-                    // Create iceberg snapshot if possible
-                    if let Some(snapshot_payload) = snapshot_payload {
-                        let iceberg_join_handle = self.persist_iceberg_snapshot(snapshot_payload);
-                        match iceberg_join_handle.await {
-                            Ok(iceberg_snapshot_res) => {
-                                self.set_iceberg_snapshot_res(iceberg_snapshot_res?);
-                            }
-                            Err(e) => {
-                                panic!("Iceberg snapshot task gets cancelled: {:?}", e);
-                            }
-                        }
-                    }
-
-                    // Set index merge result and trigger another iceberg snapshot.
-                    if let Some(file_indices_merge_result) = file_indices_merge_result {
-                        self.set_file_indices_merge_res(file_indices_merge_result);
-                        return self.create_mooncake_and_iceberg_snapshot_for_test().await;
-                    }
-                }
-                Err(e) => {
-                    panic!("failed to join snapshot handle: {:?}", e);
-                }
-            }
+        // Create mooncake snapshot and iceberg snapshot.
+        if let Some(snapshot_payload) = snapshot_payload {
+            let iceberg_join_handle = self.persist_iceberg_snapshot(snapshot_payload);
+            let iceberg_snapshot_res = iceberg_join_handle.await.unwrap().unwrap();
+            self.set_iceberg_snapshot_res(iceberg_snapshot_res);
         }
-        Ok(())
+
+        // Perform index merge.
+        let (_, snapshot_payload, index_merge_payload) =
+            self.force_create_snapshot().unwrap().await.unwrap();
+        assert!(snapshot_payload.is_none());
+        let index_merge_payload = index_merge_payload.unwrap();
+        let mut builder = GlobalIndexBuilder::new();
+        builder.set_directory(std::path::PathBuf::from(self.get_table_directory()));
+        let merged = builder
+            .build_from_merge(index_merge_payload.file_indices.clone())
+            .await;
+        let file_indices_merge_result = FileIndiceMergeResult {
+            old_file_indices: index_merge_payload.file_indices,
+            merged_file_indices: merged,
+        };
+
+        // Set index merge result and trigger another iceberg snapshot.
+        self.set_file_indices_merge_res(file_indices_merge_result);
+        return self.create_mooncake_and_iceberg_snapshot_for_test().await;
     }
 }
 

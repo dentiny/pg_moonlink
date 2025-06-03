@@ -284,7 +284,7 @@ impl SnapshotTableState {
             < self
                 .mooncake_table_config
                 .file_index_config
-                .index_block_final_size as usize
+                .file_indices_to_merge as usize
         {
             return file_indices_to_merge;
         }
@@ -368,8 +368,6 @@ impl SnapshotTableState {
         ));
 
         // Reflect file indices merge result to mooncake snapshot.
-        assert!(task.old_merged_file_indices.is_empty());
-        assert!(task.new_merged_file_indices.is_empty());
         self.queue_file_indices_merge_to_iceberg_snapshot(
             &task.old_merged_file_indices,
             &task.new_merged_file_indices,
@@ -428,8 +426,6 @@ impl SnapshotTableState {
         // Decide whether to merge an index merge.
         let mut file_indices_merge_payload: Option<FileIndiceMergePayload> = None;
         let file_indices_to_merge = self.get_file_indices_to_merge();
-        assert!(file_indices_to_merge.is_empty());
-
         if !file_indices_to_merge.is_empty() {
             file_indices_merge_payload = Some(FileIndiceMergePayload {
                 file_indices: file_indices_to_merge,
