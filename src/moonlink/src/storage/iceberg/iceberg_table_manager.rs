@@ -544,6 +544,16 @@ impl TableManager for IcebergTableManager {
         // Initialize iceberg table on access.
         self.initialize_iceberg_table_for_once().await?;
 
+
+        /// Check data files duplication.
+        let mut data_files_set = HashSet::new();
+        for f in snapshot_payload.data_files.iter() {
+            if data_files_set.contains(f.file_path()) {
+                println!("iceberg given data files have duplication! {:?}", snapshot_payload.data_files);
+            }
+            data_files_set.insert(f.file_path().clone());
+        }
+
         // Persist data files.
         let (new_iceberg_data_files, local_data_file_to_remote) = self
             .sync_data_files(std::mem::take(&mut snapshot_payload.data_files))
