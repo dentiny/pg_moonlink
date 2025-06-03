@@ -782,6 +782,8 @@ impl MooncakeTable {
     pub(crate) async fn create_mooncake_and_iceberg_snapshot_for_index_merge_for_test(
         &mut self,
     ) -> Result<()> {
+        use crate::storage::index::persisted_bucket_hash_map::GlobalIndexBuilder;
+
         let (_, snapshot_payload, _) = self.force_create_snapshot().unwrap().await.unwrap();
 
         // Create mooncake snapshot and iceberg snapshot.

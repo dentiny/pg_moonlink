@@ -484,7 +484,7 @@ async fn test_snapshot_load_for_multiple_times() -> IcebergResult<()> {
     Ok(())
 }
 
-/// Testing scenario: create snapshot for index merge.
+/// Testing scenario: create iceberg snapshot for index merge.
 #[tokio::test]
 async fn test_index_merge_and_create_snapshot() {
     let tmp_dir = tempdir().unwrap();
@@ -569,6 +569,8 @@ async fn test_index_merge_and_create_snapshot() {
     assert_eq!(snapshot.disk_files.len(), 2);
     assert_eq!(snapshot.indices.file_indices.len(), 1);
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 2);
+    validate_recovered_snapshot(&snapshot, tmp_dir.path().to_str().unwrap()).await;
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 }
 
 /// Testing scenario: attempt an iceberg snapshot when no data file, deletion vector or index files generated.

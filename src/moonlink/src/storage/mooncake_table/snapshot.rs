@@ -266,12 +266,11 @@ impl SnapshotTableState {
     /// TODO(hjiang): Decide when to create iceberg snapshot by index merge.
     /// Util function to decide whether to create iceberg snapshot by file indices.
     fn create_iceberg_snapshot_by_index_merge(&self, force_create: bool) -> bool {
-        return force_create
-            && self
+        force_create
+            && !self
                 .unpersisted_iceberg_records
                 .merged_file_indices_to_add
-                .len()
-                > 0;
+                .is_empty()
     }
 
     /// Util function to decide whether to merge index.
