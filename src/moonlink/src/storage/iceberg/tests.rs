@@ -550,6 +550,96 @@ async fn test_create_snapshot_when_no_committed_deletion_log_to_flush() {
     assert!(iceberg_snapshot_payload.is_none());
 }
 
+/// Test scenario: small batch size and large parquet file, which means:
+/// 1. all rows live within their own record batch, and potentially their own batch deletion vector.
+/// 2. when flushed to on-disk parquet files, they're grouped into one file but different arrow batch records.
+/// Fixed issue: https://github.com/Mooncake-Labs/moonlink/issues/343
+#[tokio::test]
+async fn test_small_batch_size_and_large_parquet_size() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = temp_dir.path().to_path_buf();
+    let warehouse_uri = path.clone().to_str().unwrap().to_string();
+    let mooncake_table_metadata =
+        create_test_table_metadata(temp_dir.path().to_str().unwrap().to_string());
+    let identity_property = mooncake_table_metadata.identity.clone();
+
+    let iceberg_table_config = IcebergTableConfig {
+        warehouse_uri: warehouse_uri.clone(),
+        namespace: vec!["namespace".to_string()],
+        table_name: "test_table".to_string(),
+    };
+    let schema = create_test_arrow_schema();
+    let mooncake_table_config = MooncakeTableConfig {
+        batch_size: 1,
+        disk_slice_parquet_file_size: 1000,
+        // Trigger iceberg snapshot as long as there're any commit deletion log.
+        iceberg_snapshot_new_committed_deletion_log: 1,
+        ..Default::default()
+    };
+    let mut table = MooncakeTable::new(
+        schema.as_ref().clone(),
+        "test_table".to_string(),
+        /*version=*/ 1,
+        path,
+        identity_property,
+        iceberg_table_config.clone(),
+        mooncake_table_config,
+    )
+    .await
+    .unwrap();
+
+    // Append first row.
+    let row_1 = MoonlinkRow::new(vec![
+        RowValue::Int32(1),
+        RowValue::ByteArray("John".as_bytes().to_vec()),
+        RowValue::Int32(10),
+    ]);
+    table.append(row_1.clone()).unwrap();
+
+    // Append second row.
+    let row_2 = MoonlinkRow::new(vec![
+        RowValue::Int32(2),
+        RowValue::ByteArray("Box".as_bytes().to_vec()),
+        RowValue::Int32(20),
+    ]);
+    table.append(row_2.clone()).unwrap();
+
+    // Commit, flush and create snapshots.
+    table.commit(/*lsn=*/ 1);
+    table.flush(/*lsn=*/ 1).await.unwrap();
+    table
+        .create_mooncake_and_iceberg_snapshot_for_test()
+        .await
+        .unwrap();
+
+    // Delete the second record.
+    table.delete(/*row=*/ row_2.clone(), /*lsn=*/ 2).await;
+    table.commit(/*lsn=*/ 3);
+    table.flush(/*lsn=*/ 3).await.unwrap();
+    table
+        .create_mooncake_and_iceberg_snapshot_for_test()
+        .await
+        .unwrap();
+
+    let mut iceberg_table_manager = IcebergTableManager::new(
+        mooncake_table_metadata.clone(),
+        iceberg_table_config.clone(),
+    )
+    .unwrap();
+    let snapshot = iceberg_table_manager
+        .load_snapshot_from_table()
+        .await
+        .unwrap();
+    assert_eq!(snapshot.disk_files.len(), 1);
+    let deletion_vector = snapshot.disk_files.iter().next().unwrap().1.clone();
+    assert_eq!(
+        deletion_vector.batch_deletion_vector.collect_deleted_rows(),
+        vec![1]
+    );
+    check_deletion_vector_consistency_for_snapshot(&snapshot).await;
+    validate_recovered_snapshot(&snapshot, &warehouse_uri).await;
+}
+
 /// Testing scenario: mooncake snapshot and iceberg snapshot doesn't correspond to each other 1-1.
 /// In the test case we perform one iceberg snapshot after three mooncake snapshots.
 #[tokio::test]
