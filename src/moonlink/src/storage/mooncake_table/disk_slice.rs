@@ -40,7 +40,7 @@ pub(crate) struct DiskSliceWriter {
     new_index: Option<FileIndex>,
 
     /// Records already flushed data files.
-    pub(crate) files: Vec<(MooncakeDataFileRef, usize /* row count */)>,
+    files: Vec<(MooncakeDataFileRef, usize /* row count */)>,
 }
 
 impl DiskSliceWriter {

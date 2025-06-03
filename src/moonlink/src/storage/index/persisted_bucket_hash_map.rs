@@ -676,7 +676,7 @@ mod tests {
     use crate::storage::storage_utils::{create_data_file, FileId};
 
     #[tokio::test]
-    async fn testnew() {
+    async fn test_new() {
         let data_file = create_data_file(/*file_id=*/ 0, "a.parquet".to_string());
         let files = vec![data_file.clone()];
         let hash_entries = vec![

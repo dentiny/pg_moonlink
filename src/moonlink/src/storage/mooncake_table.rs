@@ -416,12 +416,26 @@ impl MooncakeTable {
         // ---- Update mooncake table fields ----
         let iceberg_flush_lsn = iceberg_snapshot_res.flush_lsn;
 
+        // Whether the iceberg snapshot result only contains index merge.
+        let only_index_merge = |res: &IcebergSnapshotResult| {
+            // Return false if any of the data files, puffin blobs or file indices are imported into iceberg.
+            if !res.import_result.new_data_files.is_empty() {
+                return false;
+            }
+            if !res.import_result.puffin_blob_ref.is_empty() {
+                return false;
+            }
+            if !res.import_result.imported_file_indices.is_empty() {
+                return false;
+            }
+
+            assert!(!res.index_merge_result.new_file_indices_to_import.is_empty());
+            assert!(!res.index_merge_result.old_file_indices_to_remove.is_empty());
+            true
+        };
+
         // If only index merge files contained in the iceberg snapshot, we don't have flush LSN advanced.
-        if !iceberg_snapshot_res
-            .index_merge_result
-            .new_file_indices_to_import
-            .is_empty()
-        {
+        if only_index_merge(&iceberg_snapshot_res) {
             assert!(
                 self.last_iceberg_snapshot_lsn.is_none()
                     || self.last_iceberg_snapshot_lsn.unwrap() <= iceberg_flush_lsn
@@ -777,7 +791,7 @@ impl MooncakeTable {
     }
 
     // Test util function, which does the following things in serial fashion.
-    // (1) updates mooncake table snapshot, (2) create iceberg snapshot, (3) trigger index merge, (4) perform index merge, (5) another iceberg snapshot.
+    // (1) updates mooncake table snapshot, (2) create iceberg snapshot, (3) trigger index merge, (4) perform index merge, (5) another mooncake and iceberg snapshot.
     #[cfg(test)]
     pub(crate) async fn create_mooncake_and_iceberg_snapshot_for_index_merge_for_test(
         &mut self,
