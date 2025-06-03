@@ -50,7 +50,6 @@ fn test_committed_deletion_log_1(
         deletion_vector,
     )])
 }
-/// Test deletion vector 2 includes deletion vector 1, used to mimic new data file rows deletion situation.
 fn test_committed_deletion_log_2(
     data_filepath: MooncakeDataFileRef,
 ) -> HashMap<MooncakeDataFileRef, BatchDeletionVector> {
@@ -77,30 +76,6 @@ fn test_global_index(data_files: Vec<MooncakeDataFileRef>) -> GlobalIndex {
         bucket_bits: 0,
         index_blocks: vec![],
     }
-}
-
-/// Test util function to create arrow record batch.
-fn test_batch_1(arrow_schema: Arc<ArrowSchema>) -> RecordBatch {
-    RecordBatch::try_new(
-        arrow_schema.clone(),
-        vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3])), // id column
-            Arc::new(StringArray::from(vec!["a", "b", "c"])), // name column
-            Arc::new(Int32Array::from(vec![10, 20, 30])), // age column
-        ],
-    )
-    .unwrap()
-}
-fn test_batch_2(arrow_schema: Arc<ArrowSchema>) -> RecordBatch {
-    RecordBatch::try_new(
-        arrow_schema.clone(),
-        vec![
-            Arc::new(Int32Array::from(vec![4, 5, 6])), // id column
-            Arc::new(StringArray::from(vec!["d", "e", "f"])), // name column
-            Arc::new(Int32Array::from(vec![40, 50, 60])), // age column
-        ],
-    )
-    .unwrap()
 }
 
 /// Test util functions to create moonlink rows.
@@ -197,10 +172,19 @@ async fn test_store_and_load_snapshot_impl(
 
     // Write first snapshot to iceberg table (with deletion vector).
     let data_filename_1 = "data-1.parquet";
-    let batch = test_batch_1(arrow_schema.clone());
+    let batch_1 = RecordBatch::try_new(
+        arrow_schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])), // id column
+            Arc::new(StringArray::from(vec!["a", "b", "c"])), // name column
+            Arc::new(Int32Array::from(vec![10, 20, 30])), // age column
+        ],
+    )
+    .unwrap();
     let parquet_path = tmp_dir.path().join(data_filename_1);
     let data_file_1 = create_data_file(0, parquet_path.to_str().unwrap().to_string());
-    write_arrow_record_batch_to_local(parquet_path.as_path(), arrow_schema.clone(), &batch).await?;
+    write_arrow_record_batch_to_local(parquet_path.as_path(), arrow_schema.clone(), &batch_1)
+        .await?;
     let file_indice_1 = test_global_index(vec![data_file_1.clone()]);
 
     let iceberg_snapshot_payload = IcebergSnapshotPayload {
@@ -216,10 +200,19 @@ async fn test_store_and_load_snapshot_impl(
 
     // Write second snapshot to iceberg table, with updated deletion vector and new data file.
     let data_filename_2 = "data-2.parquet";
-    let batch = test_batch_2(arrow_schema.clone());
+    let batch_2 = RecordBatch::try_new(
+        arrow_schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![4, 5, 6])), // id column
+            Arc::new(StringArray::from(vec!["d", "e", "f"])), // name column
+            Arc::new(Int32Array::from(vec![40, 50, 60])), // age column
+        ],
+    )
+    .unwrap();
     let parquet_path = tmp_dir.path().join(data_filename_2);
     let data_file_2 = create_data_file(1, parquet_path.to_str().unwrap().to_string());
-    write_arrow_record_batch_to_local(parquet_path.as_path(), arrow_schema.clone(), &batch).await?;
+    write_arrow_record_batch_to_local(parquet_path.as_path(), arrow_schema.clone(), &batch_2)
+        .await?;
     let file_indice_2 = test_global_index(vec![data_file_2.clone()]);
 
     let iceberg_snapshot_payload = IcebergSnapshotPayload {
@@ -253,42 +246,25 @@ async fn test_store_and_load_snapshot_impl(
         let deleted_rows = data_entry.deletion_vector.collect_deleted_rows();
         assert_eq!(
             *loaded_arrow_batch.schema_ref(),
-            arrow_schema,
-            "Expect arrow schema {:?}, actual arrow schema {:?}",
-            arrow_schema,
-            loaded_arrow_batch.schema_ref()
+            arrow_schema
         );
 
         // Check second data file and its deletion vector.
         if loaded_path.ends_with(data_filename_2) {
-            assert_eq!(
-                loaded_arrow_batch,
-                test_batch_2(arrow_schema.clone()),
-                "Expect arrow record batch {:?}, actual arrow record batch {:?}",
-                loaded_arrow_batch,
-                test_batch_2(arrow_schema.clone())
-            );
+            assert_eq!(loaded_arrow_batch, batch_2,);
             assert_eq!(
                 deleted_rows,
                 vec![1, 2],
-                "Loaded deletion vector is not the same as the one gets stored."
             );
             continue;
         }
 
         // Check first data file and its deletion vector.
         assert!(loaded_path.ends_with(data_filename_1));
-        assert_eq!(
-            loaded_arrow_batch,
-            test_batch_1(arrow_schema.clone()),
-            "Expect arrow record batch {:?}, actual arrow record batch {:?}",
-            loaded_arrow_batch,
-            test_batch_1(arrow_schema.clone())
-        );
+        assert_eq!(loaded_arrow_batch, batch_1,);
         assert_eq!(
             deleted_rows,
             vec![0],
-            "Loaded deletion vector is not the same as the one gets stored."
         );
     }
 
@@ -391,7 +367,7 @@ async fn test_empty_snapshot_load() -> IcebergResult<()> {
     Ok(())
 }
 
-/// Testing scenario: iceberg snapshot should be loaded only once at recovery.
+/// Testing scenario: iceberg snapshot should be loaded only once at recovery, otherwise it panics.
 #[tokio::test]
 async fn test_snapshot_load_for_multiple_times() -> IcebergResult<()> {
     let tmp_dir = tempdir()?;

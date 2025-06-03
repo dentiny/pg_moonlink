@@ -16,6 +16,7 @@
 // (5) Committed and flushed deletion record
 // (6) Uncommitted deletion record and committed/flushed deletion record
 //
+// State-based tests are used to guarantee persisted iceberg snapshots are at a consistent view.
 // For states, refer to https://docs.google.com/document/d/1hZ0H66_eefjFezFQf1Pdr-A63eJ94OH9TsInNS-6xao/edit?usp=sharing
 //
 // A few testing assumptions / preparations:
