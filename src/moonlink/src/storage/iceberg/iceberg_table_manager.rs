@@ -38,6 +38,9 @@ use mockall::*;
 
 /// Key for iceberg table property, to record flush lsn.
 const MOONCAKE_TABLE_FLUSH_LSN: &str = "mooncake-table-flush-lsn";
+/// Used to represent uninitialized deletion vector.
+/// TODO(hjiang): Consider using `Option<>` to represent uninitialized, which is more rust-idiometic.
+const UNINITIALIZED_BATCH_DELETION_VECTOR_MAX_ROW: usize = 0;
 
 #[derive(Clone, Debug, TypedBuilder)]
 pub struct IcebergTableConfig {
@@ -227,7 +230,7 @@ impl IcebergTableManager {
         assert_eq!(data_file.file_format(), DataFileFormat::Parquet);
         let new_data_file_entry = DataFileEntry {
             data_file: data_file.clone(),
-            deletion_vector: BatchDeletionVector::new(/*max_rows=*/ 0),
+            deletion_vector: BatchDeletionVector::new(UNINITIALIZED_BATCH_DELETION_VECTOR_MAX_ROW),
             persisted_deletion_vector: None,
         };
         let old_entry = self
@@ -400,7 +403,9 @@ impl IcebergTableManager {
                 local_data_file.file_path().to_string(),
                 DataFileEntry {
                     data_file: iceberg_data_file.clone(),
-                    deletion_vector: BatchDeletionVector::new(max_rows.unwrap_or(/*max_rows=*/ 0)),
+                    deletion_vector: BatchDeletionVector::new(
+                        max_rows.unwrap_or(UNINITIALIZED_BATCH_DELETION_VECTOR_MAX_ROW),
+                    ),
                     persisted_deletion_vector: None,
                 },
             );
@@ -423,9 +428,9 @@ impl IcebergTableManager {
                 .unwrap()
                 .clone();
 
-            if entry.deletion_vector.get_max_rows() == 0 {
+            if entry.deletion_vector.get_max_rows() == UNINITIALIZED_BATCH_DELETION_VECTOR_MAX_ROW {
                 entry.deletion_vector =
-                    BatchDeletionVector::new(/*new_rows=*/ new_deletion_vector.get_max_rows());
+                    BatchDeletionVector::new(new_deletion_vector.get_max_rows());
             }
             entry.deletion_vector.merge_with(&new_deletion_vector);
 
