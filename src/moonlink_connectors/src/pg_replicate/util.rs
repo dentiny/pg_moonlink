@@ -80,6 +80,8 @@ fn postgres_primitive_to_arrow_type(
         ),
         Type::JSON | Type::JSONB => (DataType::Utf8, Some(ArrowExtensionType::Json)),
         Type::BYTEA => (DataType::Binary, None),
+        // The type alias for postgres OID is uint32, but iceberg-rust doesn't support unsigned type, so use int64 instead.
+        Type::OID => (DataType::Int64, None),
         _ => (DataType::Utf8, None), // Default to string for unknown types
     };
 
@@ -535,6 +537,12 @@ mod tests {
                     modifier: 0,
                     nullable: true,
                 },
+                ColumnSchema {
+                    name: "oid_field".to_string(),
+                    typ: Type::OID,
+                    modifier: 0,
+                    nullable: true,
+                },
                 // Array type.
                 ColumnSchema {
                     name: "bool_array_field".to_string(),
@@ -551,7 +559,7 @@ mod tests {
         };
 
         let (arrow_schema, identity) = postgres_schema_to_moonlink_schema(&table_schema);
-        assert_eq!(arrow_schema.fields().len(), 22);
+        assert_eq!(arrow_schema.fields().len(), 23);
 
         assert_eq!(arrow_schema.field(0).name(), "bool_field");
         assert_eq!(arrow_schema.field(0).data_type(), &DataType::Boolean);
@@ -638,13 +646,16 @@ mod tests {
         assert_eq!(arrow_schema.field(20).name(), "bytea_field");
         assert_eq!(arrow_schema.field(20).data_type(), &DataType::Binary);
 
-        assert_eq!(arrow_schema.field(21).name(), "bool_array_field");
+        assert_eq!(arrow_schema.field(21).name(), "oid_field");
+        assert_eq!(arrow_schema.field(21).data_type(), &DataType::Int64);
+
+        assert_eq!(arrow_schema.field(22).name(), "bool_array_field");
         let mut expected_field = Field::new("item", DataType::Boolean, /*nullable=*/ true);
         let mut field_metadata = HashMap::new();
-        field_metadata.insert("PARQUET:field_id".to_string(), "21".to_string());
+        field_metadata.insert("PARQUET:field_id".to_string(), "22".to_string());
         expected_field.set_metadata(field_metadata);
         assert_eq!(
-            arrow_schema.field(21).data_type(),
+            arrow_schema.field(22).data_type(),
             &DataType::List(expected_field.into()),
         );
 
@@ -675,15 +686,16 @@ mod tests {
             (18, "json_field"),
             (19, "jsonb_field"),
             (20, "bytea_field"),
-            (21, "bool_array_field.element"),
-            (22, "bool_array_field"),
+            (21, "oid_field"),
+            (22, "bool_array_field.element"),
+            (23, "bool_array_field"),
         ] {
             assert_eq!(
                 iceberg_arrow.name_by_field_id(field_id).unwrap(),
                 expected_name
             );
         }
-        assert!(iceberg_arrow.name_by_field_id(23).is_none());
+        assert!(iceberg_arrow.name_by_field_id(24).is_none());
     }
 
     #[test]
