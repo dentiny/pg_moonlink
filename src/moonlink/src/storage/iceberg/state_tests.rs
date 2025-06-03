@@ -25,6 +25,7 @@
 use std::sync::Arc;
 
 use arrow_array::{Int32Array, RecordBatch, StringArray};
+use iceberg::Result as IcebergResult;
 
 use crate::row::MoonlinkRow;
 use crate::row::RowValue;
@@ -37,7 +38,6 @@ use crate::storage::iceberg::test_utils::{
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 use crate::storage::mooncake_table::Snapshot;
 use crate::storage::MooncakeTable;
-use iceberg::Result as IcebergResult;
 
 // Test util function to prepare for committed and persisted data file,
 // here we write two rows and assume they'll be included in one arrow record batch and one data file.

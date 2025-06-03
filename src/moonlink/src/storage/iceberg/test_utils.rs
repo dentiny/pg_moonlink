@@ -131,7 +131,8 @@ pub(crate) fn create_test_table_metadata(
     })
 }
 
-/// Test util function to load all arrow batch from the given parquet file.
+/// Test util function to load the first arrow batch from the given parquet file.
+/// Precondition: caller unit tests persist rows in one arrow record batch and one parquet file.
 pub(crate) async fn load_arrow_batch(
     file_io: &FileIO,
     filepath: &str,
@@ -147,6 +148,8 @@ pub(crate) async fn load_arrow_batch(
 }
 
 /// Util function to create mooncake table and iceberg table manager.
+/// 
+/// Iceberg snapshot will be created whenever `create_snapshot` is called.
 pub(crate) async fn create_table_and_iceberg_manager(
     temp_dir: &TempDir,
 ) -> (MooncakeTable, IcebergTableManager) {
