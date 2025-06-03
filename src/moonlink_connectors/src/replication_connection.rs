@@ -1,4 +1,4 @@
-use crate::pg_replicate::conversions::cdc_event::{CdcEvent, CdcEventConversionError};
+use crate::pg_replicate::conversions::cdc_event::CdcEventConversionError;
 use crate::pg_replicate::moonlink_sink::Sink;
 use crate::pg_replicate::postgres_source::CdcStream;
 use crate::pg_replicate::postgres_source::{CdcStreamError, PostgresSource, TableNamesFrom};
@@ -7,6 +7,8 @@ use crate::Result;
 use moonlink::{IcebergTableEventManager, ReadStateManager};
 use std::sync::Arc;
 use tokio::pin;
+use tokio::time::Duration;
+use tokio_postgres::types::PgLsn;
 
 use crate::pg_replicate::replication_state::ReplicationState;
 use crate::pg_replicate::table::{TableId, TableSchema};
@@ -268,8 +270,14 @@ async fn run_event_loop(
 ) -> Result<()> {
     pin!(stream);
 
+    let mut status_interval = tokio::time::interval(Duration::from_secs(10));
+    let mut last_lsn = PgLsn::from(0);
+
     loop {
         tokio::select! {
+             _ = status_interval.tick() => {
+                let _ = stream.as_mut().send_status_update(last_lsn).await;
+            },
             Some(cmd) = cmd_rx.recv() => match cmd {
                 Command::AddTable { table_id, schema, event_sender, commit_lsn_tx } => {
                     sink.add_table(table_id, event_sender, commit_lsn_tx);
@@ -281,18 +289,11 @@ async fn run_event_loop(
             },
             event = StreamExt::next(&mut stream) => {
                 let Some(event) = event else { break; };
-                let mut send_status_update = false;
                 if let Err(CdcStreamError::CdcEventConversion(CdcEventConversionError::MissingSchema(_))) = &event {
                     continue;
                 }
-                if let Ok(CdcEvent::PrimaryKeepAlive(body)) = &event {
-                    send_status_update = body.reply() == 1;
-                }
                 let event = event?;
-                let last_lsn = sink.process_cdc_event(event).await.unwrap();
-                if send_status_update {
-                    let _ = stream.as_mut().send_status_update(last_lsn).await;
-                }
+                last_lsn = sink.process_cdc_event(event).await.unwrap();
             }
         }
     }

@@ -83,7 +83,7 @@ impl MooncakeTable {
             .unwrap()
             .mem_slice
             .get_num_rows()
-            >= self.metadata.config.batch_size
+            >= self.metadata.config.mem_slice_size
     }
 
     pub fn append_in_stream_batch(&mut self, row: MoonlinkRow, xact_id: u32) -> Result<()> {

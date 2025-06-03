@@ -18,8 +18,10 @@ pub struct ReadState {
 
 impl Drop for ReadState {
     fn drop(&mut self) {
+        if self.associated_files.is_empty() {
+            return;
+        }
         let associated_files = std::mem::take(&mut self.associated_files);
-        println!("Dropping files: {:?}", associated_files);
         // Perform best-effort deletion by spawning detached task.
         tokio::spawn(async move {
             for file in associated_files.into_iter() {
