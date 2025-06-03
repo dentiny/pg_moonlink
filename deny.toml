@@ -21,14 +21,12 @@ allow-git = [
 # TODO(hjiang): Cleanup these unmaintained crates.
 [advisories]
 ignore = [
-    "RUSTSEC-2024-0384", # instant - unmaintained
     "RUSTSEC-2024-0436", # paste - unmaintained
 ]
 
 # TODO(hjiang): Resolve all duplicate dependencies.
 [bans]
 skip = [
-    { name = "fastrand" },
     { name = "getrandom" },
     { name = "hashbrown" },
     { name = "itertools" },
