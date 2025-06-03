@@ -311,17 +311,30 @@ impl SnapshotTableState {
         vec![]
     }
 
-    fn queue_file_indices_merge_to_iceberg_snapshot(
+    fn prune_persisted_merged_indices(
         &mut self,
         old_merged_file_indices: &HashSet<FileIndex>,
         new_merged_file_indices: &[FileIndex],
     ) {
+        assert!(
+            self.unpersisted_iceberg_records
+                .merged_file_indices_to_remove
+                .len()
+                >= old_merged_file_indices.len()
+        );
         self.unpersisted_iceberg_records
             .merged_file_indices_to_remove
-            .extend(old_merged_file_indices.to_owned());
+            .drain(0..old_merged_file_indices.len());
+
+        assert!(
+            self.unpersisted_iceberg_records
+                .merged_file_indices_to_add
+                .len()
+                >= new_merged_file_indices.len()
+        );
         self.unpersisted_iceberg_records
             .merged_file_indices_to_add
-            .extend(new_merged_file_indices.to_owned());
+            .drain(0..new_merged_file_indices.len());
     }
 
     fn update_file_indices_merge_to_mooncake_snapshot(
@@ -347,6 +360,7 @@ impl SnapshotTableState {
             updated_file_indices.push(cur_file_indice.clone());
         }
         updated_file_indices.extend(new_merged_file_indices);
+        self.current_snapshot.indices.file_indices = updated_file_indices;
     }
 
     pub(super) async fn update_snapshot(
@@ -367,13 +381,13 @@ impl SnapshotTableState {
         ));
 
         // Reflect file indices merge result to mooncake snapshot.
-        self.queue_file_indices_merge_to_iceberg_snapshot(
-            &task.old_merged_file_indices,
-            &task.new_merged_file_indices,
-        );
-        self.update_file_indices_merge_to_mooncake_snapshot(
-            std::mem::take(&mut task.old_merged_file_indices),
-            std::mem::take(&mut task.new_merged_file_indices),
+        self.prune_persisted_merged_indices(
+            &task
+                .iceberg_persisted_old_merged_file_indices
+                .iter()
+                .cloned()
+                .collect::<HashSet<_>>(),
+            &task.iceberg_persisted_new_merged_file_indices,
         );
 
         // Sync buffer snapshot states into current mooncake snapshot.
@@ -386,6 +400,10 @@ impl SnapshotTableState {
         self.merge_mem_indices(&mut task);
         self.finalize_batches(&mut task);
         self.integrate_disk_slices(&mut task);
+        self.update_file_indices_merge_to_mooncake_snapshot(
+            task.old_merged_file_indices.clone(),
+            task.new_merged_file_indices.clone(),
+        );
 
         self.rows = take(&mut task.new_rows);
         self.process_deletion_log(&mut task).await;
@@ -400,6 +418,8 @@ impl SnapshotTableState {
             self.last_commit = cp;
         }
 
+        // TODO(hjiang): Extract into a separate util function.
+        //
         // Batch new data files, whether we decide to create an iceberg snapshot.
         self.unpersisted_iceberg_records
             .unpersisted_data_files
@@ -407,6 +427,12 @@ impl SnapshotTableState {
         self.unpersisted_iceberg_records
             .unpersisted_file_indices
             .extend(new_file_indices);
+        self.unpersisted_iceberg_records
+            .merged_file_indices_to_add
+            .extend(task.new_merged_file_indices.to_owned());
+        self.unpersisted_iceberg_records
+            .merged_file_indices_to_remove
+            .extend(task.old_merged_file_indices.to_owned());
 
         // TODO(hjiang): for both iceberg snapshot and index merge operation, we don't need to check if there's already an ongoing operation.
         //

@@ -571,6 +571,16 @@ async fn test_index_merge_and_create_snapshot() {
     assert_eq!(snapshot.data_file_flush_lsn.unwrap(), 2);
     validate_recovered_snapshot(&snapshot, tmp_dir.path().to_str().unwrap()).await;
     check_deletion_vector_consistency_for_snapshot(&snapshot).await;
+
+    // Delete rows after merge, to make sure file indices are serving correctly.
+    mooncake_table.delete(row_1.clone(), /*lsn=*/ 3).await;
+    mooncake_table.delete(row_2.clone(), /*lsn=*/ 4).await;
+    mooncake_table.commit(/*lsn=*/ 5);
+    mooncake_table.flush(/*lsn=*/ 5).await.unwrap();
+    mooncake_table
+        .create_mooncake_and_iceberg_snapshot_for_test()
+        .await
+        .unwrap();
 }
 
 /// Testing scenario: attempt an iceberg snapshot when no data file, deletion vector or index files generated.
