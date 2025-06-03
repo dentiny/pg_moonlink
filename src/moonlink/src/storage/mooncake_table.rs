@@ -306,14 +306,14 @@ impl SnapshotTask {
 pub struct MooncakeTable {
     /// Current metadata of the table.
     ///
-    metadata: Arc<TableMetadata>,
+    pub(crate) metadata: Arc<TableMetadata>,
 
     /// The mem slice
     ///
     mem_slice: MemSlice,
 
     /// Current snapshot of the table
-    snapshot: Arc<RwLock<SnapshotTableState>>,
+    pub(crate) snapshot: Arc<RwLock<SnapshotTableState>>,
 
     table_snapshot_watch_sender: watch::Sender<u64>,
     table_snapshot_watch_receiver: watch::Receiver<u64>,
