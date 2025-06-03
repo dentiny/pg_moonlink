@@ -21,4 +21,7 @@ mod s3_test_utils;
 mod tests;
 
 #[cfg(test)]
+mod state_tests;
+
+#[cfg(test)]
 mod test_utils;

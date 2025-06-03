@@ -41,12 +41,29 @@ pub(crate) mod catalog_test_utils {
     }
 }
 
+use crate::row::IdentityProp as RowIdentity;
 use crate::storage::iceberg::deletion_vector::DeletionVector;
+use crate::storage::iceberg::iceberg_table_manager::IcebergTableConfig;
+use crate::storage::iceberg::iceberg_table_manager::IcebergTableManager;
 use crate::storage::iceberg::puffin_utils;
 use crate::storage::mooncake_table::Snapshot;
-use crate::storage::mooncake_table::{DiskFileDeletionVector, TableConfig as MooncakeTableConfig};
+use crate::storage::mooncake_table::{
+    DiskFileDeletionVector, TableConfig as MooncakeTableConfig,
+    TableMetadata as MooncakeTableMetadata,
+};
+use crate::storage::MooncakeTable;
+use arrow::datatypes::Schema as ArrowSchema;
+use arrow::datatypes::{DataType, Field};
+use arrow_array::{Int32Array, RecordBatch, StringArray};
+use iceberg::io::FileIO;
 use iceberg::io::FileIOBuilder;
+use iceberg::io::FileRead;
+use iceberg::Result as IcebergResult;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
+use tempfile::TempDir;
 
 /// Test util function to check consistency for snapshot batch deletion vector and deletion puffin blob.
 async fn check_deletion_vector_consistency(disk_dv_entry: &DiskFileDeletionVector) {
@@ -122,4 +139,94 @@ pub(crate) async fn validate_recovered_snapshot(snapshot: &Snapshot, warehouse_u
     }
 
     assert_eq!(index_referenced_data_filepaths, data_filepaths);
+}
+
+/// Test util function to create arrow schema.
+pub(crate) fn create_test_arrow_schema() -> Arc<ArrowSchema> {
+    Arc::new(ArrowSchema::new(vec![
+        Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "1".to_string(),
+        )])),
+        Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "2".to_string(),
+        )])),
+        Field::new("age", DataType::Int32, false).with_metadata(HashMap::from([(
+            "PARQUET:field_id".to_string(),
+            "3".to_string(),
+        )])),
+    ]))
+}
+
+/// Test util function to create mooncake table metadata.
+pub(crate) fn create_test_table_metadata(
+    local_table_directory: String,
+) -> Arc<MooncakeTableMetadata> {
+    Arc::new(MooncakeTableMetadata {
+        name: "test_table".to_string(),
+        id: 0,
+        schema: create_test_arrow_schema(),
+        config: MooncakeTableConfig::new(local_table_directory.clone()),
+        path: std::path::PathBuf::from(local_table_directory),
+        identity: RowIdentity::FullRow,
+    })
+}
+
+/// Test util function to load all arrow batch from the given parquet file.
+pub(crate) async fn load_arrow_batch(
+    file_io: &FileIO,
+    filepath: &str,
+) -> IcebergResult<RecordBatch> {
+    let input_file = file_io.new_input(filepath)?;
+    let input_file_metadata = input_file.metadata().await?;
+    let reader = input_file.reader().await?;
+    let bytes = reader.read(0..input_file_metadata.size).await?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
+    let mut reader = builder.build()?;
+    let batch = reader.next().transpose()?.expect("Should have one batch");
+    Ok(batch)
+}
+
+/// Util function to create mooncake table and iceberg table manager.
+pub(crate) async fn create_table_and_iceberg_manager(
+    temp_dir: &TempDir,
+) -> (MooncakeTable, IcebergTableManager) {
+    let path = temp_dir.path().to_path_buf();
+    let warehouse_uri = path.clone().to_str().unwrap().to_string();
+    let mooncake_table_metadata =
+        create_test_table_metadata(temp_dir.path().to_str().unwrap().to_string());
+    let identity_property = mooncake_table_metadata.identity.clone();
+
+    let iceberg_table_config = IcebergTableConfig {
+        warehouse_uri,
+        namespace: vec!["namespace".to_string()],
+        table_name: "test_table".to_string(),
+    };
+    let schema = create_test_arrow_schema();
+
+    // Create iceberg snapshot whenever `create_snapshot` is called.
+    let mooncake_table_config = MooncakeTableConfig {
+        iceberg_snapshot_new_data_file_count: 0,
+        ..Default::default()
+    };
+    let table = MooncakeTable::new(
+        schema.as_ref().clone(),
+        "test_table".to_string(),
+        /*version=*/ 1,
+        path,
+        identity_property,
+        iceberg_table_config.clone(),
+        mooncake_table_config,
+    )
+    .await
+    .unwrap();
+
+    let iceberg_table_manager = IcebergTableManager::new(
+        mooncake_table_metadata.clone(),
+        iceberg_table_config.clone(),
+    )
+    .unwrap();
+
+    (table, iceberg_table_manager)
 }
