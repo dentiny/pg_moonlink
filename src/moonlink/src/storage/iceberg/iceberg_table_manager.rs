@@ -372,7 +372,7 @@ impl IcebergTableManager {
     async fn sync_data_files(
         &mut self,
         new_data_files: Vec<MooncakeDataFileRef>,
-        new_deletion_vector: &Vec<(MooncakeDataFileRef, BatchDeletionVector)>,
+        new_deletion_vector: &[(MooncakeDataFileRef, BatchDeletionVector)],
     ) -> IcebergResult<(
         Vec<DataFile>,
         HashMap<String, String>, /*local to remote datafile mapping*/
