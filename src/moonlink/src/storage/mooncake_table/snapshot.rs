@@ -115,6 +115,8 @@ impl SnapshotTableState {
 
     /// Aggregate committed deletion logs, which could be persisted into iceberg snapshot.
     /// Return a mapping from local data filepath to its batch deletion vector.
+    ///
+    /// Precondition: all disk files have been integrated into snapshot.
     fn aggregate_committed_deletion_logs(
         &self,
         flush_lsn: u64,
@@ -131,10 +133,12 @@ impl SnapshotTableState {
                 continue;
             }
             if let RecordLocation::DiskFile(file_id, row_idx) = &cur_deletion_log.pos {
-                let deletion_vector =
-                    aggregated_deletion_logs.entry(*file_id).or_insert_with(|| {
-                        BatchDeletionVector::new(self.mooncake_table_config.batch_size())
-                    });
+                let batch_deletion_vector = self.current_snapshot.disk_files.get(file_id).unwrap();
+                let max_rows = batch_deletion_vector.batch_deletion_vector.get_max_rows();
+
+                let deletion_vector = aggregated_deletion_logs
+                    .entry(*file_id)
+                    .or_insert_with(|| BatchDeletionVector::new(max_rows));
                 assert!(deletion_vector.delete_row(*row_idx));
             }
         }
