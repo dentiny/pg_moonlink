@@ -3,6 +3,7 @@ use iceberg::{Error as IcebergError, ErrorKind};
 use tempfile::tempdir;
 
 use super::test_utils::*;
+use crate::storage::index::persisted_bucket_hash_map::FileIndexMergeConfig;
 use crate::storage::mooncake_table::TableConfig as MooncakeTableConfig;
 use crate::storage::mooncake_table::TableMetadata as MooncakeTableMetadata;
 use crate::storage::MockTableManager;
@@ -58,6 +59,7 @@ async fn test_append_with_small_disk_slice() {
         iceberg_snapshot_new_data_file_count: 1000,
         iceberg_snapshot_new_committed_deletion_log: 1000,
         temp_files_directory: temp_dir.path().to_str().unwrap().to_string(),
+        file_index_config: FileIndexMergeConfig::default(),
     };
     let env = TestEnvironment::new(temp_dir, mooncake_table_config.clone()).await;
 
@@ -440,6 +442,7 @@ async fn test_iceberg_snapshot_creation_for_batch_write() {
         iceberg_snapshot_new_data_file_count: 1000,
         iceberg_snapshot_new_committed_deletion_log: 1000,
         temp_files_directory: temp_dir.path().to_str().unwrap().to_string(),
+        file_index_config: FileIndexMergeConfig::default(),
     };
     let mut env = TestEnvironment::new(temp_dir, mooncake_table_config.clone()).await;
 
@@ -635,6 +638,7 @@ async fn test_iceberg_snapshot_creation_for_streaming_write() {
         iceberg_snapshot_new_data_file_count: 1000,
         iceberg_snapshot_new_committed_deletion_log: 1000,
         temp_files_directory: temp_dir.path().to_str().unwrap().to_string(),
+        file_index_config: FileIndexMergeConfig::default(),
     };
     let mut env = TestEnvironment::new(temp_dir, mooncake_table_config.clone()).await;
 
@@ -862,6 +866,7 @@ async fn test_multiple_snapshot_requests() {
         iceberg_snapshot_new_data_file_count: 1000,
         iceberg_snapshot_new_committed_deletion_log: 1000,
         temp_files_directory: temp_dir.path().to_str().unwrap().to_string(),
+        file_index_config: FileIndexMergeConfig::default(),
     };
     let mut env = TestEnvironment::new(temp_dir, mooncake_table_config.clone()).await;
 

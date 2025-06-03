@@ -430,7 +430,7 @@ async fn test_snapshot_store_failure() {
     table.commit(/*lsn=*/ 100);
     table.flush(/*lsn=*/ 100).await.unwrap();
     let mooncake_snapshot_handle = table.create_snapshot().unwrap();
-    let (_, iceberg_snapshot_payload) = mooncake_snapshot_handle.await.unwrap();
+    let (_, iceberg_snapshot_payload, _) = mooncake_snapshot_handle.await.unwrap();
     let iceberg_snapshot_handle = table.persist_iceberg_snapshot(iceberg_snapshot_payload.unwrap());
     assert!(iceberg_snapshot_handle.await.unwrap().is_err());
 }

@@ -15,12 +15,13 @@ use tokio_bitstream_io::{
     BigEndian as AsyncBigEndian, BitRead as AsyncBitRead, BitReader as AsyncBitReader,
     BitWrite as AsyncBitWrite, BitWriter as AsyncBitWriter,
 };
+use typed_builder::TypedBuilder;
 
 // Constants
 const HASH_BITS: u32 = 64;
 const _MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024 * 1024; // 2GB
 const _TARGET_NUM_FILES_PER_INDEX: u32 = 4000;
-const _INVALID_FILE_ID: u32 = 0xFFFFFFFF;
+const INVALID_FILE_ID: u32 = 0xFFFFFFFF;
 
 fn splitmix64(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9E3779B97F4A7C15);
@@ -29,6 +30,29 @@ fn splitmix64(mut x: u64) -> u64 {
     z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
     z ^ (z >> 31)
 }
+
+/// Configurations for merging file indices.
+///
+/// TODO(hjiang): To reduce code change before preview release, disable index merge by default until we do further testing to make sure moonlink fine.
+#[derive(Clone, Default, Debug, TypedBuilder)]
+pub struct FileIndexMergeConfig {
+    /// Number of existing index blocks under final size to trigger a merge operation.
+    #[cfg(debug_assertions)]
+    #[builder(default = u32::MAX)]
+    pub file_indices_to_merge: u32,
+    /// Number of bytes for a block index to consider it finalized and won't be merged again.
+    #[cfg(debug_assertions)]
+    #[builder(default = u64::MAX)]
+    pub index_block_final_size: u64,
+
+    #[cfg(not(debug_assertions))]
+    #[builder(default = u32::MAX)]
+    pub file_indices_to_merge: u32,
+    #[cfg(not(debug_assertions))]
+    #[builder(default = u64::MAX)]
+    pub index_block_final_size: u64,
+}
+
 /// Hash index
 /// that maps a u64 to [seg_idx, row_idx]
 ///
@@ -73,6 +97,8 @@ pub(crate) struct IndexBlock {
     pub(crate) bucket_end_idx: u32,
     pub(crate) bucket_start_offset: u64,
     pub(crate) file_path: String,
+    /// File size for the index block file, used to decide whether to continue merge index blocks.
+    pub(crate) file_size: u64,
     data: Arc<Option<Mmap>>,
 }
 
@@ -84,12 +110,14 @@ impl IndexBlock {
         file_path: String,
     ) -> Self {
         let file = tokio::fs::File::open(file_path.clone()).await.unwrap();
+        let file_metadata = file.metadata().await.unwrap();
         let data = unsafe { Mmap::map(&file).unwrap() };
         Self {
             bucket_start_idx,
             bucket_end_idx,
             bucket_start_offset,
             file_path,
+            file_size: file_metadata.len(),
             data: Arc::new(Some(data)),
         }
     }
@@ -99,7 +127,7 @@ impl IndexBlock {
         metadata: &'a GlobalIndex,
         file_id_remap: &'a Vec<u32>,
     ) -> IndexBlockIterator<'a> {
-        IndexBlockIterator::_new(self, metadata, file_id_remap).await
+        IndexBlockIterator::new(self, metadata, file_id_remap).await
     }
 
     #[inline]
@@ -182,11 +210,19 @@ impl GlobalIndex {
         vec![]
     }
 
+    /// Get total index block files size.
+    pub fn get_index_blocks_size(&self) -> u64 {
+        self.index_blocks
+            .iter()
+            .map(|cur_index_block| cur_index_block.file_size)
+            .sum()
+    }
+
     pub async fn _create_iterator<'a>(
         &'a self,
         file_id_remap: &'a Vec<u32>,
     ) -> GlobalIndexIterator<'a> {
-        GlobalIndexIterator::_new(self, file_id_remap).await
+        GlobalIndexIterator::new(self, file_id_remap).await
     }
 }
 
@@ -336,6 +372,9 @@ impl GlobalIndexBuilder {
     // Build from flush
     // ================================
     pub async fn build_from_flush(mut self, mut entries: Vec<(u64, usize, usize)>) -> GlobalIndex {
+
+        println!("build from flush: {:?}", entries);
+
         self.num_rows = entries.len() as u32;
         for entry in &mut entries {
             entry.0 = splitmix64(entry.0);
@@ -362,7 +401,7 @@ impl GlobalIndexBuilder {
     // ================================
     // Build from merge
     // ================================
-    pub async fn _build_from_merge(mut self, indices: Vec<GlobalIndex>) -> GlobalIndex {
+    pub async fn build_from_merge(mut self, indices: Vec<GlobalIndex>) -> GlobalIndex {
         self.num_rows = indices.iter().map(|index| index.num_rows).sum();
         self.files = indices
             .iter()
@@ -371,7 +410,7 @@ impl GlobalIndexBuilder {
         let mut file_id_remaps = vec![];
         let mut file_id_after_remap = 0;
         for index in &indices {
-            let mut file_id_remap = vec![_INVALID_FILE_ID; index.files.len()];
+            let mut file_id_remap = vec![INVALID_FILE_ID; index.files.len()];
             for (_, item) in file_id_remap.iter_mut().enumerate().take(index.files.len()) {
                 *item = file_id_after_remap;
                 file_id_after_remap += 1;
@@ -382,11 +421,11 @@ impl GlobalIndexBuilder {
         for (idx, index) in indices.iter().enumerate() {
             iters.push(index._create_iterator(&file_id_remaps[idx]).await);
         }
-        let merge_iter = GlobalIndexMergingIterator::_new(iters).await;
-        self._build_from_merging_iterator(merge_iter).await
+        let merge_iter = GlobalIndexMergingIterator::new(iters).await;
+        self.build_from_merging_iterator(merge_iter).await
     }
 
-    async fn _build_from_merging_iterator(
+    async fn build_from_merging_iterator(
         mut self,
         mut iter: GlobalIndexMergingIterator<'_>,
     ) -> GlobalIndex {
@@ -394,7 +433,7 @@ impl GlobalIndexBuilder {
         let mut index_blocks = Vec::new();
         let mut index_block_builder =
             IndexBlockBuilder::new(0, num_buckets + 1, self.directory.clone()).await;
-        while let Some(entry) = iter._next().await {
+        while let Some(entry) = iter.next().await {
             index_block_builder
                 .write_entry(entry.0, entry.1, entry.2, &global_index)
                 .await;
@@ -422,7 +461,7 @@ struct IndexBlockIterator<'a> {
 }
 
 impl<'a> IndexBlockIterator<'a> {
-    async fn _new(
+    async fn new(
         collection: &'a IndexBlock,
         metadata: &'a GlobalIndex,
         file_id_remap: &'a Vec<u32>,
@@ -457,7 +496,7 @@ impl<'a> IndexBlockIterator<'a> {
         }
     }
 
-    async fn _next(&mut self) -> Option<(u64, usize, usize)> {
+    async fn next(&mut self) -> Option<(u64, usize, usize)> {
         loop {
             if self.current_bucket == self.collection.bucket_end_idx - 1 {
                 return None;
@@ -479,7 +518,7 @@ impl<'a> IndexBlockIterator<'a> {
                 .read_entry(&mut self.entry_reader, self.metadata)
                 .await;
             self.current_entry += 1;
-            if *self.file_id_remap.get(seg_idx).unwrap() != _INVALID_FILE_ID {
+            if *self.file_id_remap.get(seg_idx).unwrap() != INVALID_FILE_ID {
                 return Some((lower_hash + self.current_upper_hash, seg_idx, row_idx));
             }
         }
@@ -495,7 +534,7 @@ pub struct GlobalIndexIterator<'a> {
 }
 
 impl<'a> GlobalIndexIterator<'a> {
-    pub async fn _new(index: &'a GlobalIndex, file_id_remap: &'a Vec<u32>) -> Self {
+    pub async fn new(index: &'a GlobalIndex, file_id_remap: &'a Vec<u32>) -> Self {
         let mut block_iter = None;
         let block_idx = 0;
         if !index.index_blocks.is_empty() {
@@ -513,10 +552,10 @@ impl<'a> GlobalIndexIterator<'a> {
         }
     }
 
-    pub async fn _next(&mut self) -> Option<(u64, usize, usize)> {
+    pub async fn next(&mut self) -> Option<(u64, usize, usize)> {
         loop {
             if let Some(ref mut iter) = self.block_iter {
-                if let Some(item) = iter._next().await {
+                if let Some(item) = iter.next().await {
                     return Some(item);
                 }
             }
@@ -564,20 +603,20 @@ impl Ord for HeapItem<'_> {
 }
 
 impl<'a> GlobalIndexMergingIterator<'a> {
-    pub async fn _new(iterators: Vec<GlobalIndexIterator<'a>>) -> Self {
+    pub async fn new(iterators: Vec<GlobalIndexIterator<'a>>) -> Self {
         let mut heap = BinaryHeap::new();
         for mut it in iterators {
-            if let Some(value) = it._next().await {
+            if let Some(value) = it.next().await {
                 heap.push(HeapItem { value, iter: it });
             }
         }
         Self { heap }
     }
 
-    pub async fn _next(&mut self) -> Option<(u64, usize, usize)> {
+    pub async fn next(&mut self) -> Option<(u64, usize, usize)> {
         if let Some(mut heap_item) = self.heap.pop() {
             let result = heap_item.value;
-            if let Some(next_value) = heap_item.iter._next().await {
+            if let Some(next_value) = heap_item.iter.next().await {
                 self.heap.push(HeapItem {
                     value: next_value,
                     iter: heap_item.iter,
@@ -677,7 +716,7 @@ mod tests {
         let file_id_remap = vec![0; index.files.len()];
         for block in index.index_blocks.iter() {
             let mut index_block_iter = block._create_iterator(&index, &file_id_remap).await;
-            while let Some((hash, seg_idx, row_idx)) = index_block_iter._next().await {
+            while let Some((hash, seg_idx, row_idx)) = index_block_iter.next().await {
                 println!("{} {} {}", hash, seg_idx, row_idx);
                 hash_entry_num += 1;
             }
@@ -699,6 +738,7 @@ mod tests {
             .set_files(files)
             .set_directory(tempfile::tempdir().unwrap().keep());
         let index1 = builder.build_from_flush(vec).await;
+
         let files = vec![
             create_data_file(/*file_id=*/ 4, "4.parquet".to_string()),
             create_data_file(/*file_id=*/ 5, "5.parquet".to_string()),
@@ -709,9 +749,10 @@ mod tests {
             .set_files(files)
             .set_directory(tempfile::tempdir().unwrap().keep());
         let index2 = builder.build_from_flush(vec).await;
+
         let mut builder = GlobalIndexBuilder::new();
         builder.set_directory(tempfile::tempdir().unwrap().keep());
-        let merged = builder._build_from_merge(vec![index1, index2]).await;
+        let merged = builder.build_from_merge(vec![index1, index2]).await;
 
         for i in 0u64..100u64 {
             let ret = merged.search(&i).await;
