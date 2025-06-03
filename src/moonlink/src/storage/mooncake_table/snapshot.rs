@@ -313,7 +313,7 @@ impl SnapshotTableState {
 
     fn prune_persisted_merged_indices(
         &mut self,
-        old_merged_file_indices: &HashSet<FileIndex>,
+        old_merged_file_indices: &[FileIndex],
         new_merged_file_indices: &[FileIndex],
     ) {
         assert!(
@@ -379,14 +379,8 @@ impl SnapshotTableState {
         self.update_current_snapshot_with_iceberg_snapshot(std::mem::take(
             &mut task.iceberg_persisted_puffin_blob,
         ));
-
-        // Reflect file indices merge result to mooncake snapshot.
         self.prune_persisted_merged_indices(
-            &task
-                .iceberg_persisted_old_merged_file_indices
-                .iter()
-                .cloned()
-                .collect::<HashSet<_>>(),
+            &task.iceberg_persisted_old_merged_file_indices,
             &task.iceberg_persisted_new_merged_file_indices,
         );
 
