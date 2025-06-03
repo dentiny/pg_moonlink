@@ -193,14 +193,14 @@ impl TableHandler {
                                 }
                                 None => {
                                     table.commit(lsn);
+                                    if table.should_flush() || force_snapshot {
+                                        if let Err(e) = table.flush(lsn).await {
+                                            println!("Flush failed in Commit: {}", e);
+                                        }
+                                    }
                                 }
                             }
 
-                            if table.should_flush() || force_snapshot {
-                                if let Err(e) = table.flush(lsn).await {
-                                    println!("Flush failed in Commit: {}", e);
-                                }
-                            }
                             if force_snapshot {
                                 check_and_reset_iceberg_snapshot_state(&mut iceberg_snapshot_result_consumed, &mut iceberg_snapshot_handle);
                                 mooncake_snapshot_handle = table.force_create_snapshot();
