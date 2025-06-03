@@ -244,28 +244,19 @@ async fn test_store_and_load_snapshot_impl(
     for (loaded_path, data_entry) in iceberg_table_manager.persisted_data_files.iter() {
         let loaded_arrow_batch = load_arrow_batch(file_io, loaded_path.as_str()).await?;
         let deleted_rows = data_entry.deletion_vector.collect_deleted_rows();
-        assert_eq!(
-            *loaded_arrow_batch.schema_ref(),
-            arrow_schema
-        );
+        assert_eq!(*loaded_arrow_batch.schema_ref(), arrow_schema);
 
         // Check second data file and its deletion vector.
         if loaded_path.ends_with(data_filename_2) {
             assert_eq!(loaded_arrow_batch, batch_2,);
-            assert_eq!(
-                deleted_rows,
-                vec![1, 2],
-            );
+            assert_eq!(deleted_rows, vec![1, 2],);
             continue;
         }
 
         // Check first data file and its deletion vector.
         assert!(loaded_path.ends_with(data_filename_1));
         assert_eq!(loaded_arrow_batch, batch_1,);
-        assert_eq!(
-            deleted_rows,
-            vec![0],
-        );
+        assert_eq!(deleted_rows, vec![0],);
     }
 
     // Write third snapshot to iceberg table, with file indices to add and remove.
