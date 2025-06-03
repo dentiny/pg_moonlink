@@ -309,7 +309,7 @@ impl SnapshotTableState {
         if self.current_snapshot.data_file_flush_lsn.is_some()
             && (flush_by_data_files || flush_by_deletion_logs)
         {
-            // Getting persistable committed deeltion logs is not cheap, which requires iterating through all logs,
+            // Getting persistable committed deletion logs is not cheap, which requires iterating through all logs,
             // so we only aggregate when there's committed deletion.
             let flush_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
             let aggregated_committed_deletion_logs =

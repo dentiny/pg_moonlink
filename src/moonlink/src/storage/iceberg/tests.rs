@@ -542,7 +542,7 @@ async fn test_create_snapshot_when_no_committed_deletion_log_to_flush() {
         .await
         .unwrap();
 
-    // Second time only delete in-memory but not flush.
+    // Second time snapshot check, committed deletion logs haven't reached flush LSN.
     table.delete(row.clone(), /*lsn=*/ 20).await;
     table.commit(/*lsn=*/ 30);
     let handle = table.create_snapshot().unwrap();
