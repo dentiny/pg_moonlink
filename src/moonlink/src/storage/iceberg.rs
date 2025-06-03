@@ -25,3 +25,6 @@ mod state_tests;
 
 #[cfg(test)]
 mod test_utils;
+
+#[cfg(test)]
+mod catalog_test_utils;

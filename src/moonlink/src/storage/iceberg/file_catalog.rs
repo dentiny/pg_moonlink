@@ -762,9 +762,9 @@ impl Catalog for FileCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::iceberg::catalog_test_utils;
     #[cfg(feature = "storage-s3")]
     use crate::storage::iceberg::s3_test_utils;
-    use crate::storage::iceberg::test_utils;
 
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -961,18 +961,14 @@ mod tests {
             .await?;
 
         // Create two tables under default namespace.
-        let table_creation_1 = test_utils::catalog_test_utils::create_test_table_creation(
-            &default_namespace,
-            "child_table_1",
-        )?;
+        let table_creation_1 =
+            catalog_test_utils::create_test_table_creation(&default_namespace, "child_table_1")?;
         catalog
             .create_table(&default_namespace, table_creation_1)
             .await?;
 
-        let table_creation_2 = test_utils::catalog_test_utils::create_test_table_creation(
-            &default_namespace,
-            "child_table_2",
-        )?;
+        let table_creation_2 =
+            catalog_test_utils::create_test_table_creation(&default_namespace, "child_table_2")?;
         catalog
             .create_table(&default_namespace, table_creation_2)
             .await?;

@@ -1,4 +1,3 @@
-use crate::row::IdentityProp as RowIdentity;
 use crate::row::MoonlinkRow;
 use crate::row::RowValue;
 use crate::storage::iceberg::iceberg_table_manager::IcebergTableConfig;
@@ -32,17 +31,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema as ArrowSchema;
-use arrow::datatypes::{DataType, Field};
 use arrow_array::{Int32Array, RecordBatch, StringArray};
-use iceberg::io::FileIO;
 use iceberg::io::FileIOBuilder;
-use iceberg::io::FileRead;
 use iceberg::Error as IcebergError;
 use iceberg::Result as IcebergResult;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::AsyncArrowWriter;
 use tempfile::tempdir;
-use tempfile::TempDir;
 
 /// Create test batch deletion vector.
 fn test_committed_deletion_log_1(

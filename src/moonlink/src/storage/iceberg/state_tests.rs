@@ -25,24 +25,18 @@
 use std::sync::Arc;
 
 use arrow_array::{Int32Array, RecordBatch, StringArray};
-use tempfile::TempDir;
 
 use crate::row::MoonlinkRow;
 use crate::row::RowValue;
-use crate::storage::iceberg::iceberg_table_manager::IcebergTableConfig;
 use crate::storage::iceberg::iceberg_table_manager::IcebergTableManager;
 use crate::storage::iceberg::iceberg_table_manager::TableManager;
 use crate::storage::iceberg::test_utils::{
     check_deletion_vector_consistency_for_snapshot, create_table_and_iceberg_manager,
-    create_test_arrow_schema, create_test_table_metadata, load_arrow_batch,
+    load_arrow_batch,
 };
 use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 use crate::storage::mooncake_table::Snapshot;
-use crate::storage::mooncake_table::TableConfig as MooncakeTableConfig;
 use crate::storage::MooncakeTable;
-use iceberg::io::FileIOBuilder;
-use iceberg::io::FileRead;
-use iceberg::Error as IcebergError;
 use iceberg::Result as IcebergResult;
 
 // Test util function to prepare for committed and persisted data file,
