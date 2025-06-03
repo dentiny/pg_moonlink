@@ -22,7 +22,7 @@ pub enum TableEvent {
         lsn: u64,
         xact_id: Option<u32>,
     },
-    /// Commit all pending operations with a given LSN
+    /// Commit all pending operations with a given LSN and xact_id
     Commit { lsn: u64, xact_id: Option<u32> },
     /// Abort current stream with given xact_id
     StreamAbort { xact_id: u32 },
