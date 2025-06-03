@@ -45,21 +45,27 @@ use tempfile::TempDir;
 /// Create test batch deletion vector.
 fn test_committed_deletion_log_1(
     data_filepath: MooncakeDataFileRef,
-) -> Vec<(MooncakeDataFileRef, BatchDeletionVector)> {
+) -> HashMap<MooncakeDataFileRef, BatchDeletionVector> {
     let mut deletion_vector = BatchDeletionVector::new(MooncakeTableConfig::DEFAULT_BATCH_SIZE);
     deletion_vector.delete_row(0);
 
-    vec![(data_filepath.clone(), deletion_vector)]
+    HashMap::<MooncakeDataFileRef, BatchDeletionVector>::from([(
+        data_filepath.clone(),
+        deletion_vector,
+    )])
 }
 /// Test deletion vector 2 includes deletion vector 1, used to mimic new data file rows deletion situation.
 fn test_committed_deletion_log_2(
     data_filepath: MooncakeDataFileRef,
-) -> Vec<(MooncakeDataFileRef, BatchDeletionVector)> {
+) -> HashMap<MooncakeDataFileRef, BatchDeletionVector> {
     let mut deletion_vector = BatchDeletionVector::new(MooncakeTableConfig::DEFAULT_BATCH_SIZE);
     deletion_vector.delete_row(1);
     deletion_vector.delete_row(2);
 
-    vec![(data_filepath.clone(), deletion_vector)]
+    HashMap::<MooncakeDataFileRef, BatchDeletionVector>::from([(
+        data_filepath.clone(),
+        deletion_vector,
+    )])
 }
 
 /// Test util function to create file indices.
@@ -338,7 +344,7 @@ async fn test_store_and_load_snapshot_impl(
     let iceberg_snapshot_payload = IcebergSnapshotPayload {
         flush_lsn: 2,
         data_files: vec![],
-        new_deletion_vector: vec![],
+        new_deletion_vector: HashMap::new(),
         file_indices_to_import: vec![test_global_index(vec![
             data_file_1.clone(),
             data_file_2.clone(),
@@ -481,7 +487,7 @@ async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {
     let iceberg_snapshot_payload = IcebergSnapshotPayload {
         flush_lsn: 0,
         data_files: vec![],
-        new_deletion_vector: vec![],
+        new_deletion_vector: HashMap::new(),
         file_indices_to_import: vec![],
         file_indices_to_remove: vec![],
     };

@@ -367,12 +367,10 @@ impl IcebergTableManager {
 
     /// Dump local data files into iceberg table.
     /// Return new iceberg data files for append transaction, and local data filepath to remote data filepath for index block remapping.
-    ///
-    /// TODO(hjiang): `new_deletion_vector` should use hash map for deletion vector lookup.
     async fn sync_data_files(
         &mut self,
         new_data_files: Vec<MooncakeDataFileRef>,
-        new_deletion_vector: &[(MooncakeDataFileRef, BatchDeletionVector)],
+        new_deletion_vector: &HashMap<MooncakeDataFileRef, BatchDeletionVector>,
     ) -> IcebergResult<(
         Vec<DataFile>,
         HashMap<String, String>, /*local to remote datafile mapping*/
@@ -395,9 +393,8 @@ impl IcebergTableManager {
 
             // Try get deletion vector batch size.
             let max_rows = new_deletion_vector
-                .iter()
-                .find(|(f, _)| *f == local_data_file)
-                .map(|(_, dv)| dv.get_max_rows());
+                .get(&local_data_file)
+                .map(|dv| dv.get_max_rows());
 
             let old_entry = self.persisted_data_files.insert(
                 local_data_file.file_path().to_string(),
@@ -418,7 +415,7 @@ impl IcebergTableManager {
     /// Dump committed deletion logs into iceberg table, only the changed part will be persisted.
     async fn sync_deletion_vector(
         &mut self,
-        new_deletion_logs: Vec<(MooncakeDataFileRef, BatchDeletionVector)>,
+        new_deletion_logs: HashMap<MooncakeDataFileRef, BatchDeletionVector>,
     ) -> IcebergResult<HashMap<MooncakeDataFileRef, PuffinBlobRef>> {
         let mut puffin_deletion_blobs = HashMap::new();
         for (local_data_file, new_deletion_vector) in new_deletion_logs.into_iter() {

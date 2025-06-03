@@ -14,7 +14,7 @@ pub struct IcebergSnapshotPayload {
     /// New data files to introduce to the iceberg table.
     pub(crate) data_files: Vec<MooncakeDataFileRef>,
     /// Maps from data filepath to its latest deletion vector.
-    pub(crate) new_deletion_vector: Vec<(MooncakeDataFileRef, BatchDeletionVector)>,
+    pub(crate) new_deletion_vector: HashMap<MooncakeDataFileRef, BatchDeletionVector>,
     /// New file indices to import to the iceberg table.
     pub(crate) file_indices_to_import: Vec<MooncakeFileIndex>,
     /// Merged file indices to remove from the iceberg table.

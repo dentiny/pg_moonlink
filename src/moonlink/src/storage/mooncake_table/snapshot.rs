@@ -120,7 +120,7 @@ impl SnapshotTableState {
     fn aggregate_committed_deletion_logs(
         &self,
         flush_lsn: u64,
-    ) -> Vec<(MooncakeDataFileRef, BatchDeletionVector)> {
+    ) -> HashMap<MooncakeDataFileRef, BatchDeletionVector> {
         let mut aggregated_deletion_logs = HashMap::new();
         for cur_deletion_log in self.committed_deletion_log.iter() {
             assert!(
@@ -136,25 +136,21 @@ impl SnapshotTableState {
                 let batch_deletion_vector = self.current_snapshot.disk_files.get(file_id).unwrap();
                 let max_rows = batch_deletion_vector.batch_deletion_vector.get_max_rows();
 
+                let cur_data_file = self
+                    .current_snapshot
+                    .disk_files
+                    .get_key_value(file_id)
+                    .unwrap()
+                    .0
+                    .clone();
+
                 let deletion_vector = aggregated_deletion_logs
-                    .entry(*file_id)
+                    .entry(cur_data_file)
                     .or_insert_with(|| BatchDeletionVector::new(max_rows));
                 assert!(deletion_vector.delete_row(*row_idx));
             }
         }
-        let mut ret = Vec::with_capacity(aggregated_deletion_logs.len());
-        for (file_id, deletion_vector) in aggregated_deletion_logs.into_iter() {
-            ret.push((
-                self.current_snapshot
-                    .disk_files
-                    .get_key_value(&file_id)
-                    .unwrap()
-                    .0
-                    .clone(),
-                deletion_vector,
-            ));
-        }
-        ret
+        aggregated_deletion_logs
     }
 
     /// Prune committed deletion logs for the given persisted records.
