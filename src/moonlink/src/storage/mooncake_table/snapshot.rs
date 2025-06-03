@@ -309,23 +309,28 @@ impl SnapshotTableState {
         if self.current_snapshot.data_file_flush_lsn.is_some()
             && (flush_by_data_files || flush_by_deletion_logs)
         {
+            // Getting persistable committed deeltion logs is not cheap, which requires iterating through all logs,
+            // so we only aggregate when there's committed deletion.
             let flush_lsn = self.current_snapshot.data_file_flush_lsn.unwrap();
             let aggregated_committed_deletion_logs =
                 self.aggregate_committed_deletion_logs(flush_lsn);
 
-            iceberg_snapshot_payload = Some(IcebergSnapshotPayload {
-                flush_lsn,
-                data_files: self
-                    .unpersisted_iceberg_records
-                    .unpersisted_data_files
-                    .to_vec(),
-                new_deletion_vector: aggregated_committed_deletion_logs,
-                file_indices_to_import: self
-                    .unpersisted_iceberg_records
-                    .unpersisted_file_indices
-                    .to_vec(),
-                file_indices_to_remove: vec![],
-            });
+            // Only create iceberg snapshot when there's something to import.
+            if !aggregated_committed_deletion_logs.is_empty() || flush_by_data_files {
+                iceberg_snapshot_payload = Some(IcebergSnapshotPayload {
+                    flush_lsn,
+                    data_files: self
+                        .unpersisted_iceberg_records
+                        .unpersisted_data_files
+                        .to_vec(),
+                    new_deletion_vector: aggregated_committed_deletion_logs,
+                    file_indices_to_import: self
+                        .unpersisted_iceberg_records
+                        .unpersisted_file_indices
+                        .to_vec(),
+                    file_indices_to_remove: vec![],
+                });
+            }
         }
 
         (

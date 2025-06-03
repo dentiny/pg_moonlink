@@ -500,6 +500,56 @@ async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {
     Ok(())
 }
 
+/// Testing scenario: when mooncake snapshot is created periodically, there're no committed deletion logs later than flush LSN.
+/// In the test case we shouldn't create iceberg snapshot.
+#[tokio::test]
+async fn test_create_snapshot_when_no_committed_deletion_log_to_flush() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = temp_dir.path().to_path_buf();
+    let warehouse_uri = path.clone().to_str().unwrap().to_string();
+    let mooncake_table_metadata =
+        create_test_table_metadata(temp_dir.path().to_str().unwrap().to_string());
+    let identity_property = mooncake_table_metadata.identity.clone();
+
+    let iceberg_table_config = IcebergTableConfig {
+        warehouse_uri,
+        namespace: vec!["namespace".to_string()],
+        table_name: "test_table".to_string(),
+    };
+    let schema = create_test_arrow_schema();
+    let mut table = MooncakeTable::new(
+        schema.as_ref().clone(),
+        "test_table".to_string(),
+        /*version=*/ 1,
+        path,
+        identity_property,
+        iceberg_table_config.clone(),
+        MooncakeTableConfig::default(),
+    )
+    .await
+    .unwrap();
+
+    let row = MoonlinkRow::new(vec![
+        RowValue::Int32(1),
+        RowValue::ByteArray("John".as_bytes().to_vec()),
+        RowValue::Int32(10),
+    ]);
+    table.append(row.clone()).unwrap();
+    table.commit(/*lsn=*/ 10);
+    table.flush(/*lsn=*/ 10).await.unwrap();
+    table
+        .create_mooncake_and_iceberg_snapshot_for_test()
+        .await
+        .unwrap();
+
+    // Second time only delete in-memory but not flush.
+    table.delete(row.clone(), /*lsn=*/ 20).await;
+    table.commit(/*lsn=*/ 30);
+    let handle = table.create_snapshot().unwrap();
+    let (_, iceberg_snapshot_payload) = handle.await.unwrap();
+    assert!(iceberg_snapshot_payload.is_none());
+}
+
 /// Testing scenario: mooncake snapshot and iceberg snapshot doesn't correspond to each other 1-1.
 /// In the test case we perform one iceberg snapshot after three mooncake snapshots.
 #[tokio::test]
