@@ -166,8 +166,9 @@ impl SnapshotTableState {
         // All on-disk committed deletion logs, which are <= iceberg snapshot flush LSN could be pruned.
         let mut new_committed_deletion_log = vec![];
         let flush_point_lsn = task.iceberg_flush_lsn.unwrap();
-        // TODO(hjiang): deletion record is not cheap to copy, we should be able to consume the ownership for `committed_deletion_log`.
-        for cur_deletion_log in self.committed_deletion_log.iter() {
+
+        let old_committed_deletion_logs = std::mem::take(&mut self.committed_deletion_log);
+        for cur_deletion_log in old_committed_deletion_logs.into_iter() {
             assert!(
                 cur_deletion_log.lsn <= self.current_snapshot.snapshot_version,
                 "Committed deletion log {:?} is later than current snapshot LSN {}",
@@ -175,11 +176,11 @@ impl SnapshotTableState {
                 self.current_snapshot.snapshot_version
             );
             if cur_deletion_log.lsn > flush_point_lsn {
-                new_committed_deletion_log.push(cur_deletion_log.clone());
+                new_committed_deletion_log.push(cur_deletion_log);
                 continue;
             }
             if let RecordLocation::MemoryBatch(_, _) = &cur_deletion_log.pos {
-                new_committed_deletion_log.push(cur_deletion_log.clone());
+                new_committed_deletion_log.push(cur_deletion_log);
             }
         }
 
