@@ -103,6 +103,38 @@ fn test_batch_2(arrow_schema: Arc<ArrowSchema>) -> RecordBatch {
     .unwrap()
 }
 
+/// Test util functions to create moonlink rows.
+fn test_row_1() -> MoonlinkRow {
+    MoonlinkRow::new(vec![
+        RowValue::Int32(1),
+        RowValue::ByteArray("John".as_bytes().to_vec()),
+        RowValue::Int32(10),
+    ])
+}
+fn test_row_2() -> MoonlinkRow {
+    MoonlinkRow::new(vec![
+        RowValue::Int32(2),
+        RowValue::ByteArray("Bob".as_bytes().to_vec()),
+        RowValue::Int32(20),
+    ])
+}
+fn test_row_3() -> MoonlinkRow {
+    MoonlinkRow::new(vec![
+        RowValue::Int32(3),
+        RowValue::ByteArray("Cat".as_bytes().to_vec()),
+        RowValue::Int32(30),
+    ])
+}
+
+/// Test util function to create iceberg table config.
+fn create_iceberg_table_config(warehouse_uri: String) -> IcebergTableConfig {
+    IcebergTableConfig {
+        warehouse_uri,
+        namespace: vec!["namespace".to_string()],
+        table_name: "test_table".to_string(),
+    }
+}
+
 /// Test util function to write arrow record batch into local file.
 async fn write_arrow_record_batch_to_local<P: AsRef<std::path::Path>>(
     path: P,
@@ -346,11 +378,7 @@ async fn test_empty_snapshot_load() -> IcebergResult<()> {
     let tmp_dir = tempdir()?;
     let mooncake_table_metadata =
         create_test_table_metadata(tmp_dir.path().to_str().unwrap().to_string());
-    let config = IcebergTableConfig {
-        warehouse_uri: tmp_dir.path().to_str().unwrap().to_string(),
-        namespace: vec!["namespace".to_string()],
-        table_name: "test_table".to_string(),
-    };
+    let config = create_iceberg_table_config(tmp_dir.path().to_str().unwrap().to_string());
 
     // Recover from iceberg snapshot, and check mooncake table snapshot version.
     let mut iceberg_table_manager =
@@ -369,11 +397,7 @@ async fn test_snapshot_load_for_multiple_times() -> IcebergResult<()> {
     let tmp_dir = tempdir()?;
     let mooncake_table_metadata =
         create_test_table_metadata(tmp_dir.path().to_str().unwrap().to_string());
-    let config = IcebergTableConfig {
-        warehouse_uri: tmp_dir.path().to_str().unwrap().to_string(),
-        namespace: vec!["namespace".to_string()],
-        table_name: "test_table".to_string(),
-    };
+    let config = create_iceberg_table_config(tmp_dir.path().to_str().unwrap().to_string());
     let mut iceberg_table_manager =
         IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone())?;
 
@@ -397,11 +421,7 @@ async fn test_empty_content_snapshot_creation() -> IcebergResult<()> {
     let tmp_dir = tempdir()?;
     let mooncake_table_metadata =
         create_test_table_metadata(tmp_dir.path().to_str().unwrap().to_string());
-    let config = IcebergTableConfig {
-        warehouse_uri: tmp_dir.path().to_str().unwrap().to_string(),
-        namespace: vec!["namespace".to_string()],
-        table_name: "test_table".to_string(),
-    };
+    let config = create_iceberg_table_config(tmp_dir.path().to_str().unwrap().to_string());
     let mut iceberg_table_manager =
         IcebergTableManager::new(mooncake_table_metadata.clone(), config.clone())?;
     let iceberg_snapshot_payload = IcebergSnapshotPayload {
@@ -437,11 +457,7 @@ async fn test_create_snapshot_when_no_committed_deletion_log_to_flush() {
         create_test_table_metadata(temp_dir.path().to_str().unwrap().to_string());
     let identity_property = mooncake_table_metadata.identity.clone();
 
-    let iceberg_table_config = IcebergTableConfig {
-        warehouse_uri,
-        namespace: vec!["namespace".to_string()],
-        table_name: "test_table".to_string(),
-    };
+    let iceberg_table_config = create_iceberg_table_config(warehouse_uri);
     let schema = create_test_arrow_schema();
     let mut table = MooncakeTable::new(
         schema.as_ref().clone(),
@@ -455,11 +471,7 @@ async fn test_create_snapshot_when_no_committed_deletion_log_to_flush() {
     .await
     .unwrap();
 
-    let row = MoonlinkRow::new(vec![
-        RowValue::Int32(1),
-        RowValue::ByteArray("John".as_bytes().to_vec()),
-        RowValue::Int32(10),
-    ]);
+    let row = test_row_1();
     table.append(row.clone()).unwrap();
     table.commit(/*lsn=*/ 10);
     table.flush(/*lsn=*/ 10).await.unwrap();
@@ -489,11 +501,7 @@ async fn test_small_batch_size_and_large_parquet_size() {
         create_test_table_metadata(temp_dir.path().to_str().unwrap().to_string());
     let identity_property = mooncake_table_metadata.identity.clone();
 
-    let iceberg_table_config = IcebergTableConfig {
-        warehouse_uri: warehouse_uri.clone(),
-        namespace: vec!["namespace".to_string()],
-        table_name: "test_table".to_string(),
-    };
+    let iceberg_table_config = create_iceberg_table_config(warehouse_uri.clone());
     let schema = create_test_arrow_schema();
     let mooncake_table_config = MooncakeTableConfig {
         batch_size: 1,
@@ -515,19 +523,11 @@ async fn test_small_batch_size_and_large_parquet_size() {
     .unwrap();
 
     // Append first row.
-    let row_1 = MoonlinkRow::new(vec![
-        RowValue::Int32(1),
-        RowValue::ByteArray("John".as_bytes().to_vec()),
-        RowValue::Int32(10),
-    ]);
+    let row_1 = test_row_1();
     table.append(row_1.clone()).unwrap();
 
     // Append second row.
-    let row_2 = MoonlinkRow::new(vec![
-        RowValue::Int32(2),
-        RowValue::ByteArray("Box".as_bytes().to_vec()),
-        RowValue::Int32(20),
-    ]);
+    let row_2 = test_row_2();
     table.append(row_2.clone()).unwrap();
 
     // Commit, flush and create snapshots.
@@ -603,11 +603,7 @@ async fn test_async_iceberg_snapshot() {
     let (mut table, mut iceberg_table_manager) = create_table_and_iceberg_manager(&temp_dir).await;
 
     // Operation group 1: Append new rows and create mooncake snapshot.
-    let row_1 = MoonlinkRow::new(vec![
-        RowValue::Int32(1),
-        RowValue::ByteArray("John".as_bytes().to_vec()),
-        RowValue::Int32(10),
-    ]);
+    let row_1 = test_row_1();
     table.append(row_1.clone()).unwrap();
     table.commit(/*lsn=*/ 10);
     table.flush(/*lsn=*/ 10).await.unwrap();
@@ -615,11 +611,7 @@ async fn test_async_iceberg_snapshot() {
     let (_, iceberg_snapshot_payload) = mooncake_snapshot_handle.await.unwrap();
 
     // Operation group 2: Append new rows and create mooncake snapshot.
-    let row_2 = MoonlinkRow::new(vec![
-        RowValue::Int32(2),
-        RowValue::ByteArray("Bob".as_bytes().to_vec()),
-        RowValue::Int32(20),
-    ]);
+    let row_2 = test_row_2();
     table.append(row_2.clone()).unwrap();
     table.delete(row_1.clone(), /*lsn=*/ 20).await;
     table.commit(/*lsn=*/ 30);
@@ -655,11 +647,7 @@ async fn test_async_iceberg_snapshot() {
     check_deletion_vector_consistency_for_snapshot(&snapshot).await;
 
     // Operation group 3: Append new rows and create mooncake snapshot.
-    let row_3 = MoonlinkRow::new(vec![
-        RowValue::Int32(3),
-        RowValue::ByteArray("Cat".as_bytes().to_vec()),
-        RowValue::Int32(30),
-    ]);
+    let row_3 = test_row_3();
     table.append(row_3.clone()).unwrap();
     table.commit(/*lsn=*/ 40);
     table.flush(/*lsn=*/ 40).await.unwrap();
@@ -788,11 +776,7 @@ async fn mooncake_table_snapshot_persist_impl(warehouse_uri: String) -> IcebergR
         create_test_table_metadata(temp_dir.path().to_str().unwrap().to_string());
     let identity_property = mooncake_table_metadata.identity.clone();
 
-    let iceberg_table_config = IcebergTableConfig {
-        warehouse_uri: warehouse_uri.clone(),
-        namespace: vec!["namespace".to_string()],
-        table_name: "test_table".to_string(),
-    };
+    let iceberg_table_config = create_iceberg_table_config(warehouse_uri.clone());
     let schema = create_test_arrow_schema();
     // Create iceberg snapshot whenever `create_snapshot` is called.
     let mooncake_table_config = MooncakeTableConfig {
@@ -1189,11 +1173,7 @@ async fn test_drop_table_at_creation() -> IcebergResult<()> {
 
     let mooncake_table_metadata =
         create_test_table_metadata(temp_dir.path().to_str().unwrap().to_string());
-    let iceberg_table_config = IcebergTableConfig {
-        warehouse_uri: path.clone(),
-        namespace: vec!["namespace".to_string()],
-        table_name: "test_table".to_string(),
-    };
+    let iceberg_table_config = create_iceberg_table_config(path.clone());
 
     // Create iceberg snapshot whenever `create_snapshot` is called.
     let mooncake_table_config = MooncakeTableConfig {
@@ -1211,11 +1191,7 @@ async fn test_drop_table_at_creation() -> IcebergResult<()> {
     )
     .await
     .unwrap();
-    let row = MoonlinkRow::new(vec![
-        RowValue::Int32(1),
-        RowValue::ByteArray("John".as_bytes().to_vec()),
-        RowValue::Int32(30),
-    ]);
+    let row = test_row_1();
     table.append(row.clone()).unwrap();
     table.commit(/*lsn=*/ 100);
     table.flush(/*lsn=*/ 200).await.unwrap();

@@ -148,7 +148,7 @@ pub(crate) async fn load_arrow_batch(
 }
 
 /// Util function to create mooncake table and iceberg table manager.
-/// 
+///
 /// Iceberg snapshot will be created whenever `create_snapshot` is called.
 pub(crate) async fn create_table_and_iceberg_manager(
     temp_dir: &TempDir,
