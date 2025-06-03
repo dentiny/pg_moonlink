@@ -130,6 +130,8 @@ impl TableHandler {
             };
 
         // Used to decide whether we could create an iceberg snapshot.
+        // The completion of an iceberg snapshot is **NOT** marked as the finish of snapshot thread, but the handling of its results.
+        // We can only create a new iceberg snapshot when (1) there's no ongoing iceberg snapshot; and (2) previous snapshot results have been acknowledged.
         let can_initiate_iceberg_snapshot =
             |iceberg_consumed: bool, iceberg_handle: &IcebergSnapshotHandle| {
                 iceberg_consumed && iceberg_handle.is_none()
