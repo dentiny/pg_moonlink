@@ -7,15 +7,9 @@ use crate::storage::mooncake_table::IcebergSnapshotResult;
 use crate::storage::MooncakeTable;
 use crate::{Error, Result};
 use std::collections::BTreeMap;
-use crate::storage::index::{FileIndex, MemIndex, MooncakeIndex};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
-use crate::storage::index::Index;
 use tokio::time::{self, Duration};
-use futures::executor::block_on;
-use crate::row::RowValue;
-use crate::storage::storage_utils::{MooncakeDataFileRef, RawDeletionRecord, RecordLocation};
-
 
 /// Event types that can be processed by the TableHandler
 #[derive(Debug)]
@@ -92,7 +86,13 @@ impl TableHandler {
         mut table: MooncakeTable,
     ) {
         type IcebergSnapshotHandle = Option<JoinHandle<Result<IcebergSnapshotResult>>>;
-        type MooncakeSnapshotHandle = Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>>;
+        type MooncakeSnapshotHandle = Option<
+            JoinHandle<(
+                u64,
+                Option<IcebergSnapshotPayload>,
+                Option<FileIndiceMergePayload>,
+            )>,
+        >;
 
         let mut periodic_snapshot_interval = time::interval(Duration::from_millis(500));
 
@@ -101,13 +101,7 @@ impl TableHandler {
 
         // Join handle for mooncake snapshot.
         #[allow(clippy::type_complexity)]
-        let mut mooncake_snapshot_handle: Option<
-            JoinHandle<(
-                u64,
-                Option<IcebergSnapshotPayload>,
-                Option<FileIndiceMergePayload>,
-            )>,
-        > = None;
+        let mut mooncake_snapshot_handle: MooncakeSnapshotHandle = None;
 
         // TODO: refactor join handles and use channel instead for IO related async operations.
         //

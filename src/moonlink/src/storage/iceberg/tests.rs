@@ -1,3 +1,4 @@
+use crate::row::IdentityProp as RowIdentity;
 use crate::row::MoonlinkRow;
 use crate::row::RowValue;
 use crate::storage::iceberg::iceberg_table_manager::IcebergTableConfig;
@@ -5,12 +6,12 @@ use crate::storage::iceberg::iceberg_table_manager::IcebergTableManager;
 use crate::storage::iceberg::iceberg_table_manager::TableManager;
 #[cfg(feature = "storage-s3")]
 use crate::storage::iceberg::s3_test_utils;
-use crate::storage::index::persisted_bucket_hash_map::FileIndexMergeConfig;
 use crate::storage::iceberg::test_utils::{
     check_deletion_vector_consistency_for_snapshot, create_table_and_iceberg_manager,
     create_test_arrow_schema, create_test_table_metadata, load_arrow_batch,
     validate_recovered_snapshot,
 };
+use crate::storage::index::persisted_bucket_hash_map::FileIndexMergeConfig;
 use crate::storage::index::persisted_bucket_hash_map::GlobalIndex;
 use crate::storage::index::Index;
 use crate::storage::index::MooncakeIndex;
@@ -18,10 +19,10 @@ use crate::storage::mooncake_table::delete_vector::BatchDeletionVector;
 use crate::storage::mooncake_table::IcebergSnapshotPayload;
 use crate::storage::mooncake_table::Snapshot;
 use crate::storage::mooncake_table::{
-    TableConfig as MooncakeTableConfig, TableMetadata as MooncakeTableMetadata,
+    IcebergSnapshotImportPayload, IcebergSnapshotIndexMergePayload,
 };
 use crate::storage::mooncake_table::{
-    IcebergSnapshotImportPayload, IcebergSnapshotIndexMergePayload,
+    TableConfig as MooncakeTableConfig, TableMetadata as MooncakeTableMetadata,
 };
 use crate::storage::storage_utils::create_data_file;
 use crate::storage::storage_utils::FileId;
@@ -574,7 +575,7 @@ async fn test_create_snapshot_when_no_committed_deletion_log_to_flush() {
     table.delete(row.clone(), /*lsn=*/ 20).await;
     table.commit(/*lsn=*/ 30);
     let handle = table.create_snapshot().unwrap();
-    let (_, iceberg_snapshot_payload) = handle.await.unwrap();
+    let (_, iceberg_snapshot_payload, _) = handle.await.unwrap();
     assert!(iceberg_snapshot_payload.is_none());
 }
 

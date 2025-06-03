@@ -468,7 +468,7 @@ impl SnapshotTableState {
             if !aggregated_committed_deletion_logs.is_empty() || flush_by_data_files {
                 iceberg_snapshot_payload = Some(IcebergSnapshotPayload {
                     flush_lsn,
-                        import_payload: IcebergSnapshotImportPayload {
+                    import_payload: IcebergSnapshotImportPayload {
                         data_files: self
                             .unpersisted_iceberg_records
                             .unpersisted_data_files
@@ -490,6 +490,7 @@ impl SnapshotTableState {
                             .to_vec(),
                     },
                 });
+            }
         }
 
         (
@@ -607,7 +608,10 @@ impl SnapshotTableState {
             })
             .collect();
 
-        println!("when delete, file indices count = {}", self.current_snapshot.indices.file_indices.len());
+        println!(
+            "when delete, file indices count = {}",
+            self.current_snapshot.indices.file_indices.len()
+        );
 
         match candidates.len() {
             0 => panic!("can't find deletion record {:?}", deletion),

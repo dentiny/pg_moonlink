@@ -372,7 +372,6 @@ impl GlobalIndexBuilder {
     // Build from flush
     // ================================
     pub async fn build_from_flush(mut self, mut entries: Vec<(u64, usize, usize)>) -> GlobalIndex {
-
         println!("build from flush: {:?}", entries);
 
         self.num_rows = entries.len() as u32;

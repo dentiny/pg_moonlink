@@ -561,9 +561,10 @@ impl TableManager for IcebergTableManager {
 
         // Persist data files.
         let (new_iceberg_data_files, local_data_file_to_remote) = self
-            .sync_data_files(std::mem::take(
-                &mut snapshot_payload.import_payload.data_files,
-            ),  &snapshot_payload.new_deletion_vector)
+            .sync_data_files(
+                std::mem::take(&mut snapshot_payload.import_payload.data_files),
+                &snapshot_payload.import_payload.new_deletion_vector,
+            )
             .await?;
 
         // Update local data file to remote mapping.
