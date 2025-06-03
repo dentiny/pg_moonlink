@@ -372,6 +372,9 @@ impl GlobalIndexBuilder {
     // Build from flush
     // ================================
     pub async fn build_from_flush(mut self, mut entries: Vec<(u64, usize, usize)>) -> GlobalIndex {
+
+        println!("build from flush: {:?}", entries);
+
         self.num_rows = entries.len() as u32;
         for entry in &mut entries {
             entry.0 = splitmix64(entry.0);
@@ -735,6 +738,7 @@ mod tests {
             .set_files(files)
             .set_directory(tempfile::tempdir().unwrap().keep());
         let index1 = builder.build_from_flush(vec).await;
+
         let files = vec![
             create_data_file(/*file_id=*/ 4, "4.parquet".to_string()),
             create_data_file(/*file_id=*/ 5, "5.parquet".to_string()),
@@ -745,6 +749,7 @@ mod tests {
             .set_files(files)
             .set_directory(tempfile::tempdir().unwrap().keep());
         let index2 = builder.build_from_flush(vec).await;
+
         let mut builder = GlobalIndexBuilder::new();
         builder.set_directory(tempfile::tempdir().unwrap().keep());
         let merged = builder.build_from_merge(vec![index1, index2]).await;

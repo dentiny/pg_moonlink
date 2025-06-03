@@ -600,6 +600,8 @@ impl SnapshotTableState {
             })
             .collect();
 
+        println!("when delete, file indices count = {}", self.current_snapshot.indices.file_indices.len());
+
         match candidates.len() {
             0 => panic!("can't find deletion record {:?}", deletion),
             1 => Self::build_processed_deletion(deletion, candidates.pop().unwrap()),

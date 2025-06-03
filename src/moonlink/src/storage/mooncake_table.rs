@@ -7,6 +7,8 @@ mod snapshot;
 mod table_snapshot;
 mod transaction_stream;
 
+use crate::row::RowValue;
+use crate::storage::index::Index;
 use super::iceberg::puffin_utils::PuffinBlobRef;
 use super::index::persisted_bucket_hash_map::FileIndexMergeConfig;
 use super::index::{FileIndex, MemIndex, MooncakeIndex};
@@ -27,6 +29,7 @@ use std::collections::{HashMap, HashSet};
 use std::mem::take;
 use std::path::PathBuf;
 use std::sync::Arc;
+use arrow::compute::month_dyn;
 use table_snapshot::{IcebergSnapshotImportResult, IcebergSnapshotIndexMergeResult};
 use transaction_stream::{TransactionStreamOutput, TransactionStreamState};
 
@@ -503,6 +506,44 @@ impl MooncakeTable {
 
     /// Set file indices merge result, which will be sync-ed to mooncake and iceberg snapshot in the next periodic snapshot iteration.
     pub(crate) fn set_file_indices_merge_res(&mut self, file_indices_res: FileIndiceMergeResult) {
+        use futures::executor::block_on;
+
+        let row = MoonlinkRow::new(vec![
+            RowValue::Int32(1),
+            RowValue::ByteArray("Alice".as_bytes().to_vec()),
+            RowValue::Int32(10),
+        ]);
+        let lookup_key = self.metadata.identity.get_lookup_key(&row);
+        let record = RawDeletionRecord {
+            lookup_key,
+            lsn: 5,
+            pos: None,
+            row_identity: self.metadata.identity.extract_identity_columns(row),
+        };
+        println!("record = {:?}", record);
+        let mut mooncake_index = MooncakeIndex::new();
+        mooncake_index.insert_file_index(file_indices_res.merged_file_indices.clone());
+        let locs = block_on(mooncake_index.find_record(&record));
+        println!("locs for merged index = {:?}", locs);
+
+        let row = MoonlinkRow::new(vec![
+            RowValue::Int32(2),
+            RowValue::ByteArray("Bob".as_bytes().to_vec()),
+            RowValue::Int32(20),
+        ]);
+        let lookup_key = self.metadata.identity.get_lookup_key(&row);
+        let record = RawDeletionRecord {
+            lookup_key,
+            lsn: 5,
+            pos: None,
+            row_identity: self.metadata.identity.extract_identity_columns(row),
+        };
+        println!("record = {:?}", record);
+        let locs = block_on(mooncake_index.find_record(&record));
+        println!("locs for merged index = {:?}", locs);
+
+        
+
         // TODO(hjiang): Should be able to use HashSet at beginning so no need to convert.
         assert!(self.next_snapshot_task.old_merged_file_indices.is_empty());
         self.next_snapshot_task.old_merged_file_indices = file_indices_res
@@ -807,6 +848,7 @@ impl MooncakeTable {
         &mut self,
     ) -> Result<()> {
         use crate::storage::index::persisted_bucket_hash_map::GlobalIndexBuilder;
+        use futures::executor::block_on;
 
         let (_, snapshot_payload, _) = self.force_create_snapshot().unwrap().await.unwrap();
 
@@ -824,14 +866,73 @@ impl MooncakeTable {
         let index_merge_payload = index_merge_payload.unwrap();
         let mut builder = GlobalIndexBuilder::new();
         builder.set_directory(std::path::PathBuf::from(self.get_table_directory()));
+
+
+
+        let row = MoonlinkRow::new(vec![
+            RowValue::Int32(1),
+            RowValue::ByteArray("Alice".as_bytes().to_vec()),
+            RowValue::Int32(10),
+        ]);
+        let lookup_key = self.metadata.identity.get_lookup_key(&row);
+        let record1 = RawDeletionRecord {
+            lookup_key,
+            lsn: 5,
+            pos: None,
+            row_identity: self.metadata.identity.extract_identity_columns(row),
+        };
+        println!("file indice count = {}", index_merge_payload.file_indices.len());
+        let mut mooncake_index = MooncakeIndex::new();
+        mooncake_index.insert_file_index(index_merge_payload.file_indices[0].clone());
+        mooncake_index.insert_file_index(index_merge_payload.file_indices[1].clone());
+        let locs = block_on(mooncake_index.find_record(&record1));
+        println!("before merge, locs = {:?}", locs);
+
+
+
+        let row = MoonlinkRow::new(vec![
+            RowValue::Int32(2),
+            RowValue::ByteArray("Bob".as_bytes().to_vec()),
+            RowValue::Int32(20),
+        ]);
+        let lookup_key = self.metadata.identity.get_lookup_key(&row);
+        let record2 = RawDeletionRecord {
+            lookup_key,
+            lsn: 5,
+            pos: None,
+            row_identity: self.metadata.identity.extract_identity_columns(row),
+        };
+        let locs = block_on(mooncake_index.find_record(&record2));
+        println!("before merge, locs = {:?}", locs);
+
+
+
+
+
         let merged = builder
             .build_from_merge(index_merge_payload.file_indices.clone())
             .await;
+
+
+
+
+        let mut mooncake_index = MooncakeIndex::new();
+        mooncake_index.insert_file_index(merged.clone());
+        let locs = block_on(mooncake_index.find_record(&record1));
+        println!("right after merge, locs = {:?}", locs);
+        let locs = block_on(mooncake_index.find_record(&record2));
+        println!("right after merge, locs = {:?}", locs);
+
+
+
+
         let file_indices_merge_result = FileIndiceMergeResult {
             old_file_indices: index_merge_payload.file_indices,
             merged_file_indices: merged,
         };
 
+
+        
         // Set index merge result and trigger another iceberg snapshot.
         self.set_file_indices_merge_res(file_indices_merge_result);
         return self.create_mooncake_and_iceberg_snapshot_for_test().await;

@@ -7,9 +7,15 @@ use crate::storage::mooncake_table::IcebergSnapshotResult;
 use crate::storage::MooncakeTable;
 use crate::{Error, Result};
 use std::collections::BTreeMap;
+use crate::storage::index::{FileIndex, MemIndex, MooncakeIndex};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
+use crate::storage::index::Index;
 use tokio::time::{self, Duration};
+use futures::executor::block_on;
+use crate::row::RowValue;
+use crate::storage::storage_utils::{MooncakeDataFileRef, RawDeletionRecord, RecordLocation};
+
 
 /// Event types that can be processed by the TableHandler
 #[derive(Debug)]
@@ -270,6 +276,8 @@ impl TableHandler {
                     }
 
                     // Process file indices merge.
+                    //
+                    // TODO(hjiang): Unify with test code.
                     if file_indices_merge_handle.is_none() {
                         if let Some(file_indices_merge_payload) = file_indices_merge_payload {
                             let table_directory_copy = table_directory.clone();
