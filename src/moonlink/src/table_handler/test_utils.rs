@@ -185,12 +185,16 @@ impl TestEnvironment {
     }
 
     pub async fn commit(&self, lsn: u64) {
-        self.send_event(TableEvent::Commit { lsn }).await;
+        self.send_event(TableEvent::Commit { lsn, xact_id: None })
+            .await;
     }
 
     pub async fn stream_commit(&self, lsn: u64, xact_id: u32) {
-        self.send_event(TableEvent::StreamCommit { lsn, xact_id })
-            .await;
+        self.send_event(TableEvent::Commit {
+            lsn,
+            xact_id: Some(xact_id),
+        })
+        .await;
     }
 
     pub async fn stream_abort(&self, xact_id: u32) {

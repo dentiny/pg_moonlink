@@ -23,9 +23,7 @@ pub enum TableEvent {
         xact_id: Option<u32>,
     },
     /// Commit all pending operations with a given LSN
-    Commit { lsn: u64 },
-    /// Commit all pending operations with given LSN and xact_id
-    StreamCommit { lsn: u64, xact_id: u32 },
+    Commit { lsn: u64, xact_id: Option<u32> },
     /// Abort current stream with given xact_id
     StreamAbort { xact_id: u32 },
     /// Flush the table to disk
@@ -143,8 +141,7 @@ impl TableHandler {
                 // Process events from the queue
                 Some(event) = event_receiver.recv() => {
                     table_consistent_view_lsn = match event {
-                        TableEvent::Commit { lsn } => Some(lsn),
-                        TableEvent::StreamCommit { lsn, .. } => Some(lsn),
+                        TableEvent::Commit { lsn, .. } => Some(lsn),
                         // `ForceSnapshot` event doesn't affect whether mooncake is at a committed state.
                         TableEvent::ForceSnapshot { .. } => table_consistent_view_lsn,
                         _ => None,
@@ -179,9 +176,7 @@ impl TableHandler {
                                 None => table.delete(row, lsn).await,
                             };
                         }
-                        TableEvent::Commit { lsn } => {
-                            table.commit(lsn);
-
+                        TableEvent::Commit { lsn, xact_id } => {
                             // Force create snapshot if
                             // 1. force snapshot is requested
                             // and 2. LSN which meets force snapshot requirement has appeared, before that we still allow buffering
@@ -190,27 +185,21 @@ impl TableHandler {
                                 && lsn >= *force_snapshot_lsns.iter().next().as_ref().unwrap().0
                                 && mooncake_snapshot_handle.is_none();
 
+                            match xact_id {
+                                Some(xact_id) => {
+                                    if let Err(e) = table.commit_transaction_stream(xact_id, lsn).await {
+                                        println!("Stream commit flush failed: {}", e);
+                                    }
+                                }
+                                None => {
+                                    table.commit(lsn);
+                                }
+                            }
+
                             if table.should_flush() || force_snapshot {
                                 if let Err(e) = table.flush(lsn).await {
                                     println!("Flush failed in Commit: {}", e);
                                 }
-                            }
-                            if force_snapshot {
-                                check_and_reset_iceberg_snapshot_state(&mut iceberg_snapshot_result_consumed, &mut iceberg_snapshot_handle);
-                                mooncake_snapshot_handle = table.force_create_snapshot();
-                            }
-                        }
-                        TableEvent::StreamCommit { lsn, xact_id } => {
-                            // Force create snapshot if
-                            // 1. force snapshot is requested
-                            // and 2. LSN which meets force snapshot requirement has appeared, before that we still allow buffering
-                            // and 3. there's no snapshot creation operation ongoing
-                            let force_snapshot = !force_snapshot_lsns.is_empty()
-                            && lsn >= *force_snapshot_lsns.iter().next().as_ref().unwrap().0
-                            && mooncake_snapshot_handle.is_none();
-
-                            if let Err(e) = table.commit_transaction_stream(xact_id, lsn).await {
-                                println!("Stream commit flush failed: {}", e);
                             }
                             if force_snapshot {
                                 check_and_reset_iceberg_snapshot_state(&mut iceberg_snapshot_result_consumed, &mut iceberg_snapshot_handle);
