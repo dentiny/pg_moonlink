@@ -61,17 +61,17 @@ impl Default for TableConfig {
 
 impl TableConfig {
     #[cfg(debug_assertions)]
-    pub(crate) const DEFAULT_MEM_SLICE_SIZE: usize = TableConfig::DEFAULT_BATCH_SIZE * 8;
+    pub(crate) const DEFAULT_MEM_SLICE_SIZE: usize = TableConfig::DEFAULT_BATCH_SIZE * 32;
     #[cfg(debug_assertions)]
     pub(super) const DEFAULT_SNAPSHOT_DELETION_RECORD_COUNT: usize = 1000;
     #[cfg(debug_assertions)]
-    pub(crate) const DEFAULT_BATCH_SIZE: usize = 128;
+    pub(crate) const DEFAULT_BATCH_SIZE: usize = 4096;
     #[cfg(debug_assertions)]
     pub(crate) const DEFAULT_ICEBERG_NEW_DATA_FILE_COUNT: usize = 1;
     #[cfg(debug_assertions)]
     pub(crate) const DEFAULT_ICEBERG_SNAPSHOT_NEW_COMMITTED_DELETION_LOG: usize = 1000;
     #[cfg(debug_assertions)]
-    pub(crate) const DEFAULT_DISK_SLICE_PARQUET_FILE_SIZE: usize = 1024 * 1024 * 2; // 2MiB
+    pub(crate) const DEFAULT_DISK_SLICE_PARQUET_FILE_SIZE: usize = 1024 * 1024 * 128; // 2MiB
 
     #[cfg(not(debug_assertions))]
     pub(crate) const DEFAULT_MEM_SLICE_SIZE: usize = TableConfig::DEFAULT_BATCH_SIZE * 32;
