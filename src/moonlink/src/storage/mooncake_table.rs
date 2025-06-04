@@ -679,13 +679,16 @@ impl MooncakeTable {
     // Test util function, which updates mooncake table snapshot and create iceberg snapshot in a serial fashion.
     #[cfg(test)]
     pub(crate) async fn create_mooncake_and_iceberg_snapshot_for_test(&mut self) -> Result<()> {
-        if let Some(mooncake_join_handle) = self.create_snapshot() {
+        let mooncake_snapshot_created = self.create_snapshot();
+        if !mooncake_snapshot_created {
+            return Ok(());
+        }
+
+        
+
             // Wait for the snapshot async task to complete.
             match mooncake_join_handle.await {
                 Ok((lsn, payload)) => {
-                    // Notify readers that the mooncake snapshot has been created.
-                    self.notify_snapshot_reader(lsn);
-
                     // Create iceberg snapshot if possible
                     if let Some(payload) = payload {
                         let iceberg_join_handle = self.persist_iceberg_snapshot(payload);
