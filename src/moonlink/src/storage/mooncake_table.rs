@@ -10,6 +10,7 @@ mod transaction_stream;
 use super::iceberg::puffin_utils::PuffinBlobRef;
 use super::index::{FileIndex, MemIndex, MooncakeIndex};
 use super::storage_utils::{MooncakeDataFileRef, RawDeletionRecord, RecordLocation};
+use crate::completion_notification::TableCompletionNotification;
 use crate::error::{Error, Result};
 use crate::row::{IdentityProp, MoonlinkRow};
 use crate::storage::iceberg::iceberg_table_manager::{
@@ -24,6 +25,7 @@ use std::collections::HashMap;
 use std::mem::take;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::mpsc::Sender;
 use transaction_stream::{TransactionStreamOutput, TransactionStreamState};
 
 use arrow::record_batch::RecordBatch;
@@ -33,7 +35,6 @@ pub(crate) use disk_slice::DiskSliceWriter;
 use mem_slice::MemSlice;
 pub(crate) use snapshot::{PuffinDeletionBlobAtRead, SnapshotTableState};
 use tokio::sync::{watch, RwLock};
-use tokio::task::JoinHandle;
 
 #[derive(Clone, Debug)]
 pub struct TableConfig {
@@ -333,6 +334,9 @@ pub struct MooncakeTable {
 
     /// LSN of the latest iceberg snapshot.
     last_iceberg_snapshot_lsn: Option<u64>,
+
+    /// Table event completion notification.s
+    event_completion_notification: Option<Arc<Sender<TableCompletionNotification>>>,
 }
 
 impl MooncakeTable {
@@ -385,7 +389,18 @@ impl MooncakeTable {
             next_file_id: 0,
             iceberg_table_manager: Some(table_manager),
             last_iceberg_snapshot_lsn: None,
+            event_completion_notification: None,
         })
+    }
+
+    /// Register event completion notifier.
+    /// Notice it should be registered only once, which could be used to notify multiple events.
+    pub(crate) fn register_event_completion_notifier(
+        &mut self,
+        event_completion_notifier: Sender<TableCompletionNotification>,
+    ) {
+        assert!(self.event_completion_notification.is_none());
+        self.event_completion_notification = Some(Arc::new(event_completion_notifier));
     }
 
     /// Set iceberg snapshot flush LSN, called after a snapshot operation.
@@ -546,31 +561,30 @@ impl MooncakeTable {
     }
 
     // Create a snapshot of the last committed version, return current snapshot's version and payload to perform iceberg snapshot.
-    fn create_snapshot_impl(
-        &mut self,
-        force_create: bool,
-    ) -> Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> {
+    fn create_snapshot_impl(&mut self, force_create: bool) {
         self.next_snapshot_task.new_rows = Some(self.mem_slice.get_latest_rows());
         let next_snapshot_task = take(&mut self.next_snapshot_task);
         self.next_snapshot_task = SnapshotTask::new(self.metadata.config.clone());
         let cur_snapshot = self.snapshot.clone();
-        Some(tokio::task::spawn(Self::create_snapshot_async(
+        // Create a detached task, whose completion will be notified separately.
+        tokio::task::spawn(Self::create_snapshot_async(
             cur_snapshot,
             next_snapshot_task,
             force_create,
-        )))
+            self.event_completion_notification.as_ref().unwrap().clone(),
+        ));
     }
 
-    pub fn create_snapshot(&mut self) -> Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> {
+    /// If a mooncake snapshot is not going to be created, return false immediately.
+    pub fn create_snapshot(&mut self) -> bool {
         if !self.next_snapshot_task.should_create_snapshot() {
-            return None;
+            return false;
         }
-        self.create_snapshot_impl(/*force_create=*/ false)
+        self.create_snapshot_impl(/*force_create=*/ false);
+        return true;
     }
 
-    pub fn force_create_snapshot(
-        &mut self,
-    ) -> Option<JoinHandle<(u64, Option<IcebergSnapshotPayload>)>> {
+    pub fn force_create_snapshot(&mut self) {
         self.create_snapshot_impl(/*force_snapshot=*/ true)
     }
 
@@ -582,32 +596,49 @@ impl MooncakeTable {
     async fn persist_iceberg_snapshot_impl(
         mut iceberg_table_manager: Box<dyn TableManager>,
         snapshot_payload: IcebergSnapshotPayload,
-    ) -> Result<IcebergSnapshotResult> {
+        event_notifier: Arc<Sender<TableCompletionNotification>>,
+    ) {
         let flush_lsn = snapshot_payload.flush_lsn;
         let new_data_files = snapshot_payload.data_files.clone();
         let imported_file_indices = snapshot_payload.file_indices_to_import.clone();
         let removed_file_indices = snapshot_payload.file_indices_to_remove.clone();
-        let puffin_blob_ref = iceberg_table_manager
-            .sync_snapshot(snapshot_payload)
-            .await?;
-        Ok(IcebergSnapshotResult {
+        let puffin_blob_ref = iceberg_table_manager.sync_snapshot(snapshot_payload).await;
+
+        // Notify on event error.
+        if puffin_blob_ref.is_err() {
+            event_notifier
+                .send(TableCompletionNotification::IcebergSnapshot {
+                    iceberg_snapshot_result: Err(puffin_blob_ref.unwrap_err().into()),
+                })
+                .await
+                .unwrap();
+            return;
+        }
+
+        // Notify on event success.
+        let snapshot_result = IcebergSnapshotResult {
             table_manager: iceberg_table_manager,
             flush_lsn,
             new_data_files,
             imported_file_indices,
             removed_file_indices,
-            puffin_blob_ref,
-        })
+            puffin_blob_ref: puffin_blob_ref.unwrap(),
+        };
+        event_notifier
+            .send(TableCompletionNotification::IcebergSnapshot {
+                iceberg_snapshot_result: Ok(snapshot_result),
+            })
+            .await
+            .unwrap();
     }
-    pub(crate) fn persist_iceberg_snapshot(
-        &mut self,
-        snapshot_payload: IcebergSnapshotPayload,
-    ) -> JoinHandle<Result<IcebergSnapshotResult>> {
+    pub(crate) fn persist_iceberg_snapshot(&mut self, snapshot_payload: IcebergSnapshotPayload) {
         let iceberg_table_manager = self.iceberg_table_manager.take().unwrap();
+        // Create a detached task, whose completion will be notified separately.
         tokio::task::spawn(Self::persist_iceberg_snapshot_impl(
             iceberg_table_manager,
             snapshot_payload,
-        ))
+            self.event_completion_notification.as_ref().unwrap().clone(),
+        ));
     }
 
     /// Drop an iceberg table.
@@ -625,12 +656,20 @@ impl MooncakeTable {
         snapshot: Arc<RwLock<SnapshotTableState>>,
         next_snapshot_task: SnapshotTask,
         force_create: bool,
-    ) -> (u64, Option<IcebergSnapshotPayload>) {
-        snapshot
+        event_completion_notifier: Arc<Sender<TableCompletionNotification>>,
+    ) {
+        let (lsn, iceberg_snapshot_payload) = snapshot
             .write()
             .await
             .update_snapshot(next_snapshot_task, force_create)
+            .await;
+        event_completion_notifier
+            .send(TableCompletionNotification::MooncakeTableSnapshot {
+                lsn,
+                iceberg_snapshot_payload,
+            })
             .await
+            .unwrap();
     }
 
     // ================================

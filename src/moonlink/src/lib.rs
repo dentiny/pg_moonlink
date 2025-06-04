@@ -1,3 +1,4 @@
+pub(crate) mod completion_notification;
 pub mod error;
 pub mod row;
 mod storage;
